@@ -4,34 +4,60 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 const loader = new GLTFLoader()
 const cache = new Map()
 
-export async function loadAssetModel(path) {
-  if (cache.has(path)) {
-    return cache.get(path).clone(true)
+function buildCenteredPivotGroup(sourceScene) {
+  const content = sourceScene.clone(true)
+  content.updateMatrixWorld(true)
+
+  const box = new THREE.Box3().setFromObject(content)
+  const center = new THREE.Vector3()
+  const size = new THREE.Vector3()
+
+  box.getCenter(center)
+  box.getSize(size)
+
+  const pivot = new THREE.Group()
+  pivot.name = 'asset-pivot'
+
+  // move content so pivot becomes bottom-center
+  content.position.x -= center.x
+  content.position.y -= box.min.y
+  content.position.z -= center.z
+  content.updateMatrixWorld(true)
+
+  pivot.add(content)
+
+  // useful metadata for snapping later if needed
+  pivot.userData.bounds = {
+    width: size.x,
+    height: size.y,
+    depth: size.z
   }
 
-  const gltf = await loader.loadAsync(path)
-  const root = gltf.scene || gltf.scenes[0]
+  return pivot
+}
 
-  root.traverse((obj) => {
-    if (obj.isMesh) {
-      obj.castShadow = true
-      obj.receiveShadow = true
-    }
-  })
+export async function loadAssetModel(path) {
+  if (!cache.has(path)) {
+    const gltf = await loader.loadAsync(path)
+    const centered = buildCenteredPivotGroup(gltf.scene)
+    cache.set(path, centered)
+  }
 
-  cache.set(path, root)
-  return root.clone(true)
+  return cache.get(path).clone(true)
 }
 
 export function makeGhostMaterial(object) {
-  object.traverse((obj) => {
-    if (obj.isMesh) {
-      obj.material = new THREE.MeshLambertMaterial({
-        color: 0xffffff,
-        transparent: true,
-        opacity: 0.55
-      })
-    }
+  const ghost = object.clone(true)
+
+  ghost.traverse((obj) => {
+    if (!obj.isMesh) return
+
+    obj.material = new THREE.MeshLambertMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.55
+    })
   })
-  return object
+
+  return ghost
 }

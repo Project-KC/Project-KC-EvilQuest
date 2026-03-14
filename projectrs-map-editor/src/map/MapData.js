@@ -2,52 +2,62 @@ export class MapData {
   constructor(width, height) {
     this.width = width
     this.height = height
+
+    this.waterLevel = -1.25
     this.texturePlanes = []
+    this.selectedTexturePlaneId = null
 
-    this.vertexHeights = new Array((width + 1) * (height + 1)).fill(0)
+    this.tiles = []
+    for (let z = 0; z < height; z++) {
+      const row = []
+      for (let x = 0; x < width; x++) {
+        row.push({
+          ground: 'grass',
+          split: 'forward',
+          textureId: null,
+          textureRotation: 0,
+          textureScale: 1,
+          waterPainted: false
+        })
+      }
+      this.tiles.push(row)
+    }
 
-    this.tiles = new Array(width * height).fill(null).map(() => ({
-      ground: 'grass',
-      split: 'forward',
-      textureId: null,
-      textureRotation: 0,
-      textureScale: 1
-    }))
-  }
-
-  getTileIndex(x, z) {
-    if (x < 0 || z < 0 || x >= this.width || z >= this.height) return -1
-    return z * this.width + x
+    this.heights = []
+    for (let z = 0; z <= height; z++) {
+      const row = []
+      for (let x = 0; x <= width; x++) {
+        row.push(0)
+      }
+      this.heights.push(row)
+    }
   }
 
   getTile(x, z) {
-    const i = this.getTileIndex(x, z)
-    return i === -1 ? null : this.tiles[i]
-  }
-
-  getVertexIndex(x, z) {
-    if (x < 0 || z < 0 || x > this.width || z > this.height) return -1
-    return z * (this.width + 1) + x
+    if (x < 0 || z < 0 || x >= this.width || z >= this.height) return null
+    return this.tiles[z][x]
   }
 
   getVertexHeight(x, z) {
-    const i = this.getVertexIndex(x, z)
-    return i === -1 ? 0 : this.vertexHeights[i]
+    if (x < 0 || z < 0 || x > this.width || z > this.height) return 0
+    return this.heights[z][x]
   }
 
   setVertexHeight(x, z, value) {
-    const i = this.getVertexIndex(x, z)
-    if (i === -1) return
-    this.vertexHeights[i] = value
+    if (x < 0 || z < 0 || x > this.width || z > this.height) return
+    this.heights[z][x] = value
   }
 
-  addVertexHeight(x, z, delta) {
-    const i = this.getVertexIndex(x, z)
-    if (i === -1) return
-    this.vertexHeights[i] += delta
+  adjustVertexHeight(x, z, delta) {
+    if (x < 0 || z < 0 || x > this.width || z > this.height) return
+    this.heights[z][x] += delta
   }
 
   getTileCornerHeights(x, z) {
+    if (!this.getTile(x, z)) {
+      return { tl: 0, tr: 0, bl: 0, br: 0 }
+    }
+
     return {
       tl: this.getVertexHeight(x, z),
       tr: this.getVertexHeight(x + 1, z),
@@ -61,21 +71,93 @@ export class MapData {
     return (h.tl + h.tr + h.bl + h.br) / 4
   }
 
-  paintTile(x, z, ground) {
+  getBaseGroundType(x, z) {
+    const tile = this.getTile(x, z)
+    if (!tile) return 'grass'
+    return tile.ground || 'grass'
+  }
+
+  shouldRenderWaterTile(x, z) {
+    const tile = this.getTile(x, z)
+    if (!tile) return false
+
+    if (tile.waterPainted) return true
+
+    const h = this.getTileCornerHeights(x, z)
+    const minH = Math.min(h.tl, h.tr, h.bl, h.br)
+
+    return minH <= this.waterLevel
+  }
+
+  getEffectiveGroundType(x, z) {
+    const tile = this.getTile(x, z)
+    if (!tile) return 'grass'
+    return this.shouldRenderWaterTile(x, z) ? 'water' : tile.ground
+  }
+
+  isWaterTile(x, z) {
+    return this.shouldRenderWaterTile(x, z)
+  }
+
+  raiseTile(x, z, amount = 0.25) {
+    if (!this.getTile(x, z)) return
+    this.adjustVertexHeight(x, z, amount)
+    this.adjustVertexHeight(x + 1, z, amount)
+    this.adjustVertexHeight(x, z + 1, amount)
+    this.adjustVertexHeight(x + 1, z + 1, amount)
+  }
+
+  lowerTile(x, z, amount = 0.25) {
+    if (!this.getTile(x, z)) return
+    this.adjustVertexHeight(x, z, -amount)
+    this.adjustVertexHeight(x + 1, z, -amount)
+    this.adjustVertexHeight(x, z + 1, -amount)
+    this.adjustVertexHeight(x + 1, z + 1, -amount)
+  }
+
+  flattenTile(x, z) {
+    if (!this.getTile(x, z)) return
+
+    const avg = this.getAverageTileHeight(x, z)
+    this.setVertexHeight(x, z, avg)
+    this.setVertexHeight(x + 1, z, avg)
+    this.setVertexHeight(x, z + 1, avg)
+    this.setVertexHeight(x + 1, z + 1, avg)
+  }
+
+  flattenTileToHeight(x, z, height) {
+    if (!this.getTile(x, z)) return
+
+    this.setVertexHeight(x, z, height)
+    this.setVertexHeight(x + 1, z, height)
+    this.setVertexHeight(x, z + 1, height)
+    this.setVertexHeight(x + 1, z + 1, height)
+  }
+
+  paintTile(x, z, groundType) {
     const tile = this.getTile(x, z)
     if (!tile) return
-    tile.ground = ground
+
+    tile.ground = groundType
+    if (groundType !== 'water') tile.waterPainted = false
   }
 
   paintWaterTile(x, z) {
     const tile = this.getTile(x, z)
     if (!tile) return
-    tile.ground = 'water'
+    tile.waterPainted = true
+  }
+
+  clearWaterPaint(x, z) {
+    const tile = this.getTile(x, z)
+    if (!tile) return
+    tile.waterPainted = false
   }
 
   paintTextureTile(x, z, textureId, rotation = 0, scale = 1) {
     const tile = this.getTile(x, z)
     if (!tile) return
+
     tile.textureId = textureId
     tile.textureRotation = rotation
     tile.textureScale = scale
@@ -84,7 +166,10 @@ export class MapData {
   clearTextureTile(x, z) {
     const tile = this.getTile(x, z)
     if (!tile) return
+
     tile.textureId = null
+    tile.textureRotation = 0
+    tile.textureScale = 1
   }
 
   flipTileSplit(x, z) {
@@ -93,126 +178,105 @@ export class MapData {
     tile.split = tile.split === 'forward' ? 'back' : 'forward'
   }
 
-  raiseTile(x, z, amount = 1) {
-    this.addVertexHeight(x, z, amount)
-    this.addVertexHeight(x + 1, z, amount)
-    this.addVertexHeight(x, z + 1, amount)
-    this.addVertexHeight(x + 1, z + 1, amount)
-  }
-
-  lowerTile(x, z, amount = 1) {
-    this.raiseTile(x, z, -amount)
-  }
-
-  flattenTile(x, z) {
-    const h = this.getTileCornerHeights(x, z)
-    const avg = (h.tl + h.tr + h.bl + h.br) / 4
-
-    this.setVertexHeight(x, z, avg)
-    this.setVertexHeight(x + 1, z, avg)
-    this.setVertexHeight(x, z + 1, avg)
-    this.setVertexHeight(x + 1, z + 1, avg)
-  }
-
-  flattenTileToHeight(x, z, height) {
-    this.setVertexHeight(x, z, height)
-    this.setVertexHeight(x + 1, z, height)
-    this.setVertexHeight(x, z + 1, height)
-    this.setVertexHeight(x + 1, z + 1, height)
-  }
-
-  addTexturePlane(textureId, x, y, z, width = 1, height = 2, vertical = true) {
+  addTexturePlane(textureId, x, y, z, width = 1, height = 1, vertical = true) {
     const plane = {
       id: `plane_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
       textureId,
+      width,
+      height,
+      vertical,
+      doubleSided: true,
       position: { x, y, z },
       rotation: vertical
         ? { x: 0, y: 0, z: 0 }
         : { x: -Math.PI / 2, y: 0, z: 0 },
-      scale: { x: 1, y: 1, z: 1 },
-      width,
-      height,
-      vertical,
-      doubleSided: true
+      scale: { x: 1, y: 1, z: 1 }
     }
 
     this.texturePlanes.push(plane)
     return plane
   }
 
+  resize(newWidth, newHeight) {
+    const next = new MapData(newWidth, newHeight)
+    next.waterLevel = this.waterLevel
+    next.texturePlanes = JSON.parse(JSON.stringify(this.texturePlanes))
+    next.selectedTexturePlaneId = this.selectedTexturePlaneId
+
+    for (let z = 0; z < Math.min(this.height, newHeight); z++) {
+      for (let x = 0; x < Math.min(this.width, newWidth); x++) {
+        next.tiles[z][x] = JSON.parse(JSON.stringify(this.tiles[z][x]))
+      }
+    }
+
+    for (let z = 0; z <= Math.min(this.height, newHeight); z++) {
+      for (let x = 0; x <= Math.min(this.width, newWidth); x++) {
+        next.heights[z][x] = this.heights[z][x]
+      }
+    }
+
+    return next
+  }
+
   toJSON() {
     return {
       width: this.width,
       height: this.height,
-      vertexHeights: [...this.vertexHeights],
-      tiles: this.tiles.map((tile) => ({
-        ground: tile.ground,
-        split: tile.split,
-        textureId: tile.textureId,
-        textureRotation: tile.textureRotation,
-        textureScale: tile.textureScale
-      })),
-      texturePlanes: JSON.parse(JSON.stringify(this.texturePlanes || []))
+      waterLevel: this.waterLevel,
+      selectedTexturePlaneId: this.selectedTexturePlaneId,
+      texturePlanes: this.texturePlanes,
+      tiles: this.tiles,
+      heights: this.heights
     }
   }
 
   static fromJSON(data) {
     const map = new MapData(data.width, data.height)
 
-    if (Array.isArray(data.vertexHeights)) {
-      map.vertexHeights = [...data.vertexHeights]
-    }
+    map.waterLevel = typeof data.waterLevel === 'number' ? data.waterLevel : -1.25
+    map.selectedTexturePlaneId = data.selectedTexturePlaneId || null
+    map.texturePlanes = Array.isArray(data.texturePlanes)
+      ? JSON.parse(JSON.stringify(data.texturePlanes))
+      : []
 
     if (Array.isArray(data.tiles)) {
-      map.tiles = data.tiles.map((tile) => ({
-        ground: tile.ground ?? 'grass',
-        split: tile.split ?? 'forward',
-        textureId: tile.textureId ?? null,
-        textureRotation: tile.textureRotation ?? 0,
-        textureScale: tile.textureScale ?? 1
-      }))
+      for (let z = 0; z < map.height; z++) {
+        for (let x = 0; x < map.width; x++) {
+          const src = data.tiles?.[z]?.[x]
+          if (!src) continue
+
+          map.tiles[z][x] = {
+            ground: src.ground || 'grass',
+            split: src.split || 'forward',
+            textureId: src.textureId || null,
+            textureRotation: src.textureRotation || 0,
+            textureScale: src.textureScale || 1,
+            waterPainted: !!src.waterPainted || src.ground === 'water'
+          }
+        }
+      }
     }
 
-    if (Array.isArray(data.texturePlanes)) {
-      map.texturePlanes = JSON.parse(JSON.stringify(data.texturePlanes))
+    if (Array.isArray(data.heights)) {
+      for (let z = 0; z <= map.height; z++) {
+        for (let x = 0; x <= map.width; x++) {
+          map.heights[z][x] = data.heights?.[z]?.[x] ?? 0
+        }
+      }
+    } else {
+      for (let z = 0; z < map.height; z++) {
+        for (let x = 0; x < map.width; x++) {
+          const src = data.tiles?.[z]?.[x]
+          if (!src?.corners) continue
+
+          map.heights[z][x] = src.corners.tl ?? map.heights[z][x]
+          map.heights[z][x + 1] = src.corners.tr ?? map.heights[z][x + 1]
+          map.heights[z + 1][x] = src.corners.bl ?? map.heights[z + 1][x]
+          map.heights[z + 1][x + 1] = src.corners.br ?? map.heights[z + 1][x + 1]
+        }
+      }
     }
 
     return map
-  }
-
-  resize(newWidth, newHeight) {
-    const resized = new MapData(newWidth, newHeight)
-
-    const copyWidth = Math.min(this.width, newWidth)
-    const copyHeight = Math.min(this.height, newHeight)
-
-    for (let z = 0; z <= copyHeight; z++) {
-      for (let x = 0; x <= copyWidth; x++) {
-        const oldIndex = this.getVertexIndex(x, z)
-        const newIndex = resized.getVertexIndex(x, z)
-
-        if (oldIndex !== -1 && newIndex !== -1) {
-          resized.vertexHeights[newIndex] = this.vertexHeights[oldIndex]
-        }
-      }
-    }
-
-    for (let z = 0; z < copyHeight; z++) {
-      for (let x = 0; x < copyWidth; x++) {
-        const oldTile = this.getTile(x, z)
-        const newTile = resized.getTile(x, z)
-
-        if (oldTile && newTile) {
-          newTile.ground = oldTile.ground
-          newTile.split = oldTile.split
-          newTile.textureId = oldTile.textureId
-          newTile.textureRotation = oldTile.textureRotation
-          newTile.textureScale = oldTile.textureScale
-        }
-      }
-    }
-
-    resized.texturePlanes = JSON.parse(JSON.stringify(this.texturePlanes || []))
-    return resized
   }
 }

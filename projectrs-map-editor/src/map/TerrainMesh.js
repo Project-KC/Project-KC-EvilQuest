@@ -4,25 +4,31 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value))
 }
 
+function sampleNoise(x, z, scaleA = 1, scaleB = 1) {
+  return (
+    Math.sin(x * scaleA + z * scaleB) +
+    Math.cos(x * (scaleB * 0.73) - z * (scaleA * 0.81))
+  ) * 0.5
+}
+
 function groundColor(type, shade) {
   if (type === 'dirt') {
-    return new THREE.Color(0.43 * shade, 0.29 * shade, 0.11 * shade)
+    return new THREE.Color(0.45 * shade, 0.31 * shade, 0.14 * shade)
   }
 
   if (type === 'sand') {
-    return new THREE.Color(0.58 * shade, 0.49 * shade, 0.18 * shade)
+    return new THREE.Color(0.61 * shade, 0.51 * shade, 0.22 * shade)
   }
 
   if (type === 'path') {
-    return new THREE.Color(0.46 * shade, 0.43 * shade, 0.36 * shade)
+    return new THREE.Color(0.42 * shade, 0.41 * shade, 0.37 * shade)
   }
 
   if (type === 'water') {
-    return new THREE.Color(0.42 * shade, 0.49 * shade, 0.68 * shade)
+    return new THREE.Color(0.40 * shade, 0.47 * shade, 0.66 * shade)
   }
 
-  // grass
-  return new THREE.Color(0.20 * shade, 0.44 * shade, 0.11 * shade)
+  return new THREE.Color(0.12 * shade, 0.36 * shade, 0.06 * shade)
 }
 
 function pushVertex(vertices, colors, uvs, x, y, z, color, u, v) {
@@ -34,32 +40,21 @@ function pushVertex(vertices, colors, uvs, x, y, z, color, u, v) {
 function getSlopeShade(h) {
   const dx = ((h.tr + h.br) - (h.tl + h.bl)) * 0.5
   const dz = ((h.bl + h.br) - (h.tl + h.tr)) * 0.5
-
   const steepness = Math.abs(dx) + Math.abs(dz)
 
-  // stronger darkening for hills
-  let shade = 1.0 - steepness * 0.18
-
-  // fake directional light from upper-left
+  let shade = 1.0 - steepness * 0.22
   const directional = (-dx * 0.18) + (-dz * 0.12)
   shade += directional
 
-  return clamp(shade, 0.48, 1.10)
+  return clamp(shade, 0.46, 1.04)
 }
 
-function isWaterNearby(map, x, z) {
-  for (let dz = -1; dz <= 1; dz++) {
-    for (let dx = -1; dx <= 1; dx++) {
-      const tile = map.getTile(x + dx, z + dz)
-      if (tile && tile.ground === 'water') return true
-    }
-  }
-  return false
+function getTileAverageHeight(h) {
+  return (h.tl + h.tr + h.bl + h.br) / 4
 }
 
 function countAdjacentGround(map, x, z, groundType) {
   let count = 0
-
   const neighbors = [
     [x - 1, z],
     [x + 1, z],
@@ -68,16 +63,35 @@ function countAdjacentGround(map, x, z, groundType) {
   ]
 
   for (const [nx, nz] of neighbors) {
-    const tile = map.getTile(nx, nz)
-    if (tile && tile.ground === groundType) count++
+    if (map.getBaseGroundType(nx, nz) === groundType) count++
   }
 
   return count
 }
 
+function shouldRenderWater(map, x, z) {
+  if (typeof map.shouldRenderWaterTile === 'function') {
+    return map.shouldRenderWaterTile(x, z)
+  }
+  return map.isWaterTile(x, z)
+}
+
+function isWaterNearby(map, x, z) {
+  for (let dz = -1; dz <= 1; dz++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (shouldRenderWater(map, x + dx, z + dz)) return true
+    }
+  }
+  return false
+}
+
+function getWaterDistanceToLevel(map, x, z) {
+  return map.getAverageTileHeight(x, z) - map.waterLevel
+}
+
 function isPathEdge(map, x, z) {
   const tile = map.getTile(x, z)
-  if (!tile || tile.ground !== 'path') return false
+  if (!tile || map.getBaseGroundType(x, z) !== 'path') return false
   return countAdjacentGround(map, x, z, 'path') < 4
 }
 
@@ -86,11 +100,9 @@ function isCliffNearby(map, x, z) {
   const minH = Math.min(h.tl, h.tr, h.bl, h.br)
   const maxH = Math.max(h.tl, h.tr, h.bl, h.br)
 
-  // strong slope inside this tile
-  if ((maxH - minH) > 1.5) return true
+  if ((maxH - minH) > 1.1) return true
 
-  const centerAvg = (h.tl + h.tr + h.bl + h.br) / 4
-
+  const centerAvg = getTileAverageHeight(h)
   const neighbors = [
     [x - 1, z],
     [x + 1, z],
@@ -103,94 +115,95 @@ function isCliffNearby(map, x, z) {
     if (!n) continue
 
     const nh = map.getTileCornerHeights(nx, nz)
-    const nAvg = (nh.tl + nh.tr + nh.bl + nh.br) / 4
+    const nAvg = getTileAverageHeight(nh)
 
-    if (Math.abs(centerAvg - nAvg) > 1.2) {
-      return true
-    }
+    if (Math.abs(centerAvg - nAvg) > 0.9) return true
   }
 
   return false
 }
 
-function addTileGeometry(vertices, colors, uvs, indices, base, tile, h, x, z, map) {
+function vertexTint(type, vx, vz, shade) {
+  let s = shade
+
+  if (type === 'grass') {
+const bigPatch = sampleNoise(vx * 0.18, vz * 0.18, 1.0, 1.2) * 0.05
+const midPatch = sampleNoise(vx * 0.42, vz * 0.42, 0.8, 1.0) * 0.012
+const tinyDither = sampleNoise(vx * 2.4, vz * 2.4, 1.5, 1.9) * 0.004
+s += bigPatch + midPatch + tinyDither
+  } else if (type === 'path') {
+    s += sampleNoise(vx * 0.45, vz * 0.45, 1.2, 0.8) * 0.02
+  } else if (type === 'dirt' || type === 'sand') {
+    s += sampleNoise(vx * 0.5, vz * 0.5, 0.8, 1.1) * 0.02
+  }
+
+  return groundColor(type, s)
+}
+
+function addTileGeometry(vertices, colors, uvs, indices, base, tileType, h, x, z, map) {
   const slopeShade = getSlopeShade(h)
 
-  // subtle variation, not checkerboard
-  const variation = (((x * 17 + z * 31) % 9) - 4) * 0.01
-
-  const shadeTL = slopeShade + variation + 0.05
-  const shadeTR = slopeShade + variation + 0.01
-  const shadeBL = slopeShade + variation - 0.05
-  const shadeBR = slopeShade + variation - 0.02
-
-  const cTL = groundColor(tile.ground, shadeTL)
-  const cTR = groundColor(tile.ground, shadeTR)
-  const cBL = groundColor(tile.ground, shadeBL)
-  const cBR = groundColor(tile.ground, shadeBR)
+  const cTL = vertexTint(tileType, x, z, slopeShade + 0.015)
+  const cTR = vertexTint(tileType, x + 1, z, slopeShade + 0.004)
+  const cBL = vertexTint(tileType, x, z + 1, slopeShade - 0.015)
+  const cBR = vertexTint(tileType, x + 1, z + 1, slopeShade - 0.004)
 
   const nearWater = isWaterNearby(map, x, z)
   const nearCliff = isCliffNearby(map, x, z)
   const pathEdge = isPathEdge(map, x, z)
+  const waterDistance = getWaterDistanceToLevel(map, x, z)
 
-  // muddier banks near water
-  if (tile.ground !== 'water' && nearWater) {
+  if (tileType !== 'water' && nearWater) {
     for (const c of [cTL, cTR, cBL, cBR]) {
       c.r *= 1.05
-      c.g *= 0.96
-      c.b *= 0.90
-    }
-  }
-
-  // warmer, dirtier land near cliffs
-  if (tile.ground !== 'water' && nearCliff) {
-    for (const c of [cTL, cTR, cBL, cBR]) {
-      c.r *= 1.06
-      c.g *= 0.92
-      c.b *= 0.82
-    }
-  }
-
-  // soften path edges
-  if (tile.ground === 'path' && pathEdge) {
-    for (const c of [cTL, cTR, cBL, cBR]) {
-      c.r *= 0.94
       c.g *= 0.95
-      c.b *= 0.92
+      c.b *= 0.86
     }
-
-    cBL.r *= 1.04
-    cBL.g *= 0.98
-    cBR.r *= 1.03
-    cBR.g *= 0.99
   }
 
-  // dirty grass near paths
-  if (tile.ground === 'grass') {
+  if (tileType !== 'water' && waterDistance > 0 && waterDistance < 1.15) {
+    const t = 1 - clamp(waterDistance / 1.15, 0, 1)
+    for (const c of [cTL, cTR, cBL, cBR]) {
+      c.r *= 1 + t * 0.06
+      c.g *= 1 - t * 0.08
+      c.b *= 1 - t * 0.14
+    }
+  }
+
+  if (tileType !== 'water' && nearCliff) {
+    for (const c of [cTL, cTR, cBL, cBR]) {
+      c.r *= 1.04
+      c.g *= 0.92
+      c.b *= 0.84
+    }
+  }
+
+  if (tileType === 'path' && pathEdge) {
+    for (const c of [cTL, cTR, cBL, cBR]) {
+      c.r *= 0.95
+      c.g *= 0.96
+      c.b *= 0.93
+    }
+  }
+
+  if (tileType === 'grass') {
     const adjacentPaths = countAdjacentGround(map, x, z, 'path')
     if (adjacentPaths > 0) {
       const pathInfluence = 1 + adjacentPaths * 0.02
-
       for (const c of [cTL, cTR, cBL, cBR]) {
-        c.r *= 1.02 * pathInfluence
-        c.g *= 0.96
-        c.b *= 0.88
+        c.r *= 1.03 * pathInfluence
+        c.g *= 0.94
+        c.b *= 0.84
       }
     }
   }
-
-  // warm lower corners a bit for old-school painted feel
-  cBL.r *= 1.03
-  cBL.g *= 0.98
-  cBR.r *= 1.02
-  cBR.g *= 0.99
 
   pushVertex(vertices, colors, uvs, x,     h.tl, z,     cTL, 0, 0)
   pushVertex(vertices, colors, uvs, x + 1, h.tr, z,     cTR, 1, 0)
   pushVertex(vertices, colors, uvs, x,     h.bl, z + 1, cBL, 0, 1)
   pushVertex(vertices, colors, uvs, x + 1, h.br, z + 1, cBR, 1, 1)
 
-  if (tile.split === 'forward') {
+  if (map.getTile(x, z)?.split === 'forward') {
     indices.push(
       base + 0, base + 2, base + 1,
       base + 2, base + 3, base + 1
@@ -219,37 +232,43 @@ export function buildTerrainMeshes(map, waterTexture) {
 
   for (let z = 0; z < map.height; z++) {
     for (let x = 0; x < map.width; x++) {
-      const tile = map.getTile(x, z)
       const h = map.getTileCornerHeights(x, z)
+      const landType = map.getBaseGroundType(x, z)
+      const waterY = map.waterLevel + 0.02
 
-      if (tile.ground === 'water') {
+      addTileGeometry(
+        landVertices,
+        landColors,
+        landUVs,
+        landIndices,
+        landBase,
+        landType,
+        h,
+        x,
+        z,
+        map
+      )
+      landBase += 4
+
+      if (shouldRenderWater(map, x, z)) {
         addTileGeometry(
           waterVertices,
           waterColors,
           waterUVs,
           waterIndices,
           waterBase,
-          tile,
-          h,
+          'water',
+          {
+            tl: waterY,
+            tr: waterY,
+            bl: waterY,
+            br: waterY
+          },
           x,
           z,
           map
         )
         waterBase += 4
-      } else {
-        addTileGeometry(
-          landVertices,
-          landColors,
-          landUVs,
-          landIndices,
-          landBase,
-          tile,
-          h,
-          x,
-          z,
-          map
-        )
-        landBase += 4
       }
     }
   }
@@ -267,7 +286,8 @@ export function buildTerrainMeshes(map, waterTexture) {
 
     const landMaterial = new THREE.MeshLambertMaterial({
       vertexColors: true,
-      flatShading: true
+      flatShading: true,
+      side: THREE.DoubleSide
     })
 
     const landMesh = new THREE.Mesh(landGeometry, landMaterial)
@@ -293,13 +313,20 @@ export function buildTerrainMeshes(map, waterTexture) {
 
     const waterMaterial = new THREE.MeshLambertMaterial({
       map: waterTexture || null,
-      color: waterTexture ? 0xd6e4ff : 0x6e86b6,
-      flatShading: true
+      color: waterTexture ? 0xc9d9ff : 0x6b84b4,
+      flatShading: true,
+      side: THREE.DoubleSide,
+      transparent: true,
+      alphaTest: 0.02,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1
     })
 
     const waterMesh = new THREE.Mesh(waterGeometry, waterMaterial)
     waterMesh.name = 'terrain-water'
     waterMesh.receiveShadow = true
+    waterMesh.renderOrder = 2
     group.add(waterMesh)
   }
 
@@ -309,15 +336,48 @@ export function buildTerrainMeshes(map, waterTexture) {
 export function buildCliffMeshes(map) {
   const vertices = []
   const indices = []
+  const colors = []
   let base = 0
 
-  function addQuad(a, b, c, d) {
+  function cliffColor(topY, bottomY) {
+    const drop = Math.max(0, topY - bottomY)
+    const shade = clamp(0.92 - drop * 0.12, 0.42, 0.92)
+    return new THREE.Color(0.10 * shade, 0.38 * shade, 0.05 * shade)
+  }
+
+  function pushColoredQuad(a, b, c, d, color) {
     vertices.push(...a, ...b, ...c, ...d)
+    for (let i = 0; i < 4; i++) {
+      colors.push(color.r, color.g, color.b)
+    }
     indices.push(
       base + 0, base + 2, base + 1,
       base + 2, base + 3, base + 1
     )
     base += 4
+  }
+
+  function addVerticalFace(x1, z1, top1, top2, bottom1, bottom2, isXAxisFace) {
+    const eps = 0.01
+    const color = cliffColor((top1 + top2) * 0.5, (bottom1 + bottom2) * 0.5)
+
+    if (isXAxisFace) {
+      pushColoredQuad(
+        [x1, top1, z1],
+        [x1, top2, z1 + 1],
+        [x1, bottom1 + eps, z1],
+        [x1, bottom2 + eps, z1 + 1],
+        color
+      )
+    } else {
+      pushColoredQuad(
+        [x1, top1, z1],
+        [x1 + 1, top2, z1],
+        [x1, bottom1 + eps, z1],
+        [x1 + 1, bottom2 + eps, z1],
+        color
+      )
+    }
   }
 
   for (let z = 0; z < map.height; z++) {
@@ -328,18 +388,20 @@ export function buildCliffMeshes(map) {
       if (rightTile) {
         const rh = map.getTileCornerHeights(x + 1, z)
 
-        const topA = h.tr
-        const bottomA = h.br
-        const topB = rh.tl
-        const bottomB = rh.bl
+        const aTop1 = h.tr
+        const aTop2 = h.br
+        const bTop1 = rh.tl
+        const bTop2 = rh.bl
 
-        if ((topA - topB) > 0.01 || (bottomA - bottomB) > 0.01) {
-          addQuad(
-            [x + 1, topA, z],
-            [x + 1, bottomA, z + 1],
-            [x + 1, topB + 0.01, z],
-            [x + 1, bottomB + 0.01, z + 1]
-          )
+        const avgA = (aTop1 + aTop2) * 0.5
+        const avgB = (bTop1 + bTop2) * 0.5
+
+        if (Math.abs(avgA - avgB) > 0.01) {
+          if (avgA > avgB) {
+            addVerticalFace(x + 1, z, aTop1, aTop2, bTop1, bTop2, true)
+          } else {
+            addVerticalFace(x + 1, z, bTop1, bTop2, aTop1, aTop2, true)
+          }
         }
       }
 
@@ -347,18 +409,20 @@ export function buildCliffMeshes(map) {
       if (downTile) {
         const dh = map.getTileCornerHeights(x, z + 1)
 
-        const leftA = h.bl
-        const rightA = h.br
-        const leftB = dh.tl
-        const rightB = dh.tr
+        const aTop1 = h.bl
+        const aTop2 = h.br
+        const bTop1 = dh.tl
+        const bTop2 = dh.tr
 
-        if ((leftA - leftB) > 0.01 || (rightA - rightB) > 0.01) {
-          addQuad(
-            [x, leftA, z + 1],
-            [x + 1, rightA, z + 1],
-            [x, leftB + 0.01, z + 1],
-            [x + 1, rightB + 0.01, z + 1]
-          )
+        const avgA = (aTop1 + aTop2) * 0.5
+        const avgB = (bTop1 + bTop2) * 0.5
+
+        if (Math.abs(avgA - avgB) > 0.01) {
+          if (avgA > avgB) {
+            addVerticalFace(x, z + 1, aTop1, aTop2, bTop1, bTop2, false)
+          } else {
+            addVerticalFace(x, z + 1, bTop1, bTop2, aTop1, aTop2, false)
+          }
         }
       }
     }
@@ -366,12 +430,14 @@ export function buildCliffMeshes(map) {
 
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3))
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
   geometry.setIndex(indices)
   geometry.computeVertexNormals()
 
   const material = new THREE.MeshLambertMaterial({
-    color: 0x6a5320,
-    flatShading: true
+    vertexColors: true,
+    flatShading: true,
+    side: THREE.DoubleSide
   })
 
   const mesh = new THREE.Mesh(geometry, material)
@@ -483,27 +549,46 @@ export function buildTexturePlanes(map, textureRegistry, textureCache) {
     const texture = textureCache.get(textureInfo.id)
     if (!texture) continue
 
-    texture.wrapS = THREE.RepeatWrapping
-    texture.wrapT = THREE.RepeatWrapping
+    texture.wrapS = THREE.ClampToEdgeWrapping
+    texture.wrapT = THREE.ClampToEdgeWrapping
     texture.colorSpace = THREE.SRGBColorSpace
+    texture.needsUpdate = true
 
-    const geometry = new THREE.PlaneGeometry(plane.width, plane.height)
+    const width = Math.max(0.01, plane.width || 1)
+    const height = Math.max(0.01, plane.height || 1)
+
+    const geometry = new THREE.PlaneGeometry(width, height)
     const isSelected = map.selectedTexturePlaneId === plane.id
 
     const material = new THREE.MeshLambertMaterial({
       map: texture,
       transparent: true,
-      side: plane.doubleSided ? THREE.DoubleSide : THREE.FrontSide,
+      alphaTest: 0.05,
+      side: THREE.DoubleSide,
       polygonOffset: true,
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1,
-      color: isSelected ? 0xd8ecff : 0xffffff
+      color: isSelected ? 0xeaf4ff : 0xffffff
     })
 
     const mesh = new THREE.Mesh(geometry, material)
-    mesh.position.set(plane.position.x, plane.position.y, plane.position.z)
-    mesh.rotation.set(plane.rotation.x, plane.rotation.y, plane.rotation.z)
-    mesh.scale.set(plane.scale.x, plane.scale.y, plane.scale.z)
+
+    const px = plane.position?.x ?? 0
+    const py = plane.position?.y ?? 0
+    const pz = plane.position?.z ?? 0
+
+    const rx = plane.rotation?.x ?? 0
+    const ry = plane.rotation?.y ?? 0
+    const rz = plane.rotation?.z ?? 0
+
+    const sx = plane.scale?.x ?? 1
+    const sy = plane.scale?.y ?? 1
+    const sz = plane.scale?.z ?? 1
+
+    mesh.position.set(px, py, pz)
+    mesh.rotation.set(rx, ry, rz)
+    mesh.scale.set(sx, sy, sz)
+    mesh.renderOrder = 10
     mesh.userData.texturePlane = plane
 
     group.add(mesh)
