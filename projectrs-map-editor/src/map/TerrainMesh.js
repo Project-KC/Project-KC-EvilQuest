@@ -21,7 +21,7 @@ function groundColor(type, shade) {
   }
 
   if (type === 'path') {
-    return new THREE.Color(0.44 * shade, 0.38 * shade, 0.28 * shade)
+    return new THREE.Color(0.42 * shade, 0.30 * shade, 0.13 * shade)
   }
 
   if (type === 'road') {
@@ -93,11 +93,6 @@ function getWaterDistanceToLevel(map, x, z) {
   return map.getAverageTileHeight(x, z) - map.waterLevel
 }
 
-function isPathEdge(map, x, z) {
-  const tile = map.getTile(x, z)
-  if (!tile || map.getBaseGroundType(x, z) !== 'path') return false
-  return countAdjacentGround(map, x, z, 'path') < 4
-}
 
 function isCliffNearby(map, x, z) {
   const h = map.getTileCornerHeights(x, z)
@@ -129,9 +124,9 @@ function isCliffNearby(map, x, z) {
 
 function getNoiseExtra(type, vx, vz) {
   if (type === 'grass') {
-    const bigPatch = sampleNoise(vx * 0.18, vz * 0.18, 1.0, 1.2) * 0.05
-    const midPatch = sampleNoise(vx * 0.42, vz * 0.42, 0.8, 1.0) * 0.012
-    const tinyDither = sampleNoise(vx * 2.4, vz * 2.4, 1.5, 1.9) * 0.004
+    const bigPatch = sampleNoise(vx * 0.18, vz * 0.18, 1.0, 1.2) * 0.10
+    const midPatch = sampleNoise(vx * 0.42, vz * 0.42, 0.8, 1.0) * 0.038
+    const tinyDither = sampleNoise(vx * 2.4, vz * 2.4, 1.5, 1.9) * 0.014
     return bigPatch + midPatch + tinyDither
   } else if (type === 'path') {
     return sampleNoise(vx * 0.45, vz * 0.45, 1.2, 0.8) * 0.02
@@ -145,8 +140,45 @@ function getNoiseExtra(type, vx, vz) {
   return 0
 }
 
-function getCornerBlendedColor(map, cornerX, cornerZ, shade, noiseExtra) {
-  // Average the ground colors of all tiles sharing this corner
+// Average the slope shades of all tiles sharing this vertex for smooth lighting transitions
+function getVertexSlopeShade(map, vx, vz) {
+  const sharingTiles = [
+    [vx - 1, vz - 1],
+    [vx,     vz - 1],
+    [vx - 1, vz    ],
+    [vx,     vz    ]
+  ]
+
+  let total = 0
+  let count = 0
+  for (const [tx, tz] of sharingTiles) {
+    if (!map.getTile(tx, tz)) continue
+    total += getSlopeShade(map.getTileCornerHeights(tx, tz))
+    count++
+  }
+
+  return count > 0 ? total / count : 1.0
+}
+
+// Darken vertices that sit lower than their neighbours (valley ambient occlusion)
+function getVertexAO(map, vx, vz) {
+  const h = map.getVertexHeight(vx, vz)
+  let sum = 0, count = 0
+  for (const [dx, dz] of [[-1,0],[1,0],[0,-1],[0,1]]) {
+    const nx = vx + dx, nz = vz + dz
+    if (nx < 0 || nx > map.width || nz < 0 || nz > map.height) continue
+    sum += map.getVertexHeight(nx, nz)
+    count++
+  }
+  if (count === 0) return 1.0
+  const depression = (sum / count) - h  // positive = vertex is lower than neighbours
+  return 1.0 - clamp(depression * 0.16, 0, 0.40)
+}
+
+function getCornerBlendedColor(map, cornerX, cornerZ, shade) {
+  // Average the ground colors of all tiles sharing this corner.
+  // Noise is also blended here using the same weights so that both tiles
+  // sharing a vertex always produce the same output color — no seams.
   const sharingTiles = [
     [cornerX - 1, cornerZ - 1],
     [cornerX,     cornerZ - 1],
@@ -154,17 +186,20 @@ function getCornerBlendedColor(map, cornerX, cornerZ, shade, noiseExtra) {
     [cornerX,     cornerZ    ]
   ]
 
-  let r = 0, g = 0, b = 0, totalWeight = 0
+  let r = 0, g = 0, b = 0, noise = 0, totalWeight = 0
   for (const [nx, nz] of sharingTiles) {
     if (!map.getTile(nx, nz)) continue
     const type = map.getBaseGroundType(nx, nz)
     if (type === 'road') continue  // road doesn't bleed into neighbours
+    const w = type === 'path' ? 0.6 : 1.0
     const c = groundColor(type, 1.0)
-    r += c.r; g += c.g; b += c.b; totalWeight += 1
+    r += c.r * w; g += c.g * w; b += c.b * w
+    noise += getNoiseExtra(type, cornerX, cornerZ) * w
+    totalWeight += w
   }
 
-  if (totalWeight === 0) return groundColor('grass', shade + noiseExtra)
-  const s = shade + noiseExtra
+  if (totalWeight === 0) return groundColor('grass', shade)
+  const s = shade + noise / totalWeight
   return new THREE.Color((r / totalWeight) * s, (g / totalWeight) * s, (b / totalWeight) * s)
 }
 
@@ -172,8 +207,13 @@ function avgColor(a, b, c) {
   return new THREE.Color((a.r + b.r + c.r) / 3, (a.g + b.g + c.g) / 3, (a.b + b.b + c.b) / 3)
 }
 
-function addTileGeometry(vertices, colors, uvs, indices, base, tileType, h, x, z, map) {
-  const slopeShade = getSlopeShade(h)
+function addTileGeometry(vertices, colors, uvs, indices, base, tileType, h, x, z, map, shadowInf) {
+  const shadeTL = getVertexSlopeShade(map, x,     z    )
+  const shadeTR = getVertexSlopeShade(map, x + 1, z    )
+  const shadeBL = getVertexSlopeShade(map, x,     z + 1)
+  const shadeBR = getVertexSlopeShade(map, x + 1, z + 1)
+  const slopeShade = (shadeTL + shadeTR + shadeBL + shadeBR) / 4
+
   const tile = map.getTile(x, z)
   const groundBType = tile?.groundB || null
   const splitDir = tile?.split || 'forward'
@@ -181,18 +221,19 @@ function addTileGeometry(vertices, colors, uvs, indices, base, tileType, h, x, z
   let cTL, cTR, cBL, cBR
   if (tileType === 'road') {
     const noise = getNoiseExtra('road', x + 0.5, z + 0.5)
-    const flat = groundColor('road', Math.max(slopeShade + noise, 0.5))
-    cTL = flat.clone(); cTR = flat.clone(); cBL = flat.clone(); cBR = flat.clone()
+    cTL = groundColor('road', Math.max(shadeTL + noise, 0.5))
+    cTR = groundColor('road', Math.max(shadeTR + noise, 0.5))
+    cBL = groundColor('road', Math.max(shadeBL + noise, 0.5))
+    cBR = groundColor('road', Math.max(shadeBR + noise, 0.5))
   } else {
-    cTL = getCornerBlendedColor(map, x,     z,     slopeShade + 0.015, getNoiseExtra(tileType, x,     z    ))
-    cTR = getCornerBlendedColor(map, x + 1, z,     slopeShade + 0.004, getNoiseExtra(tileType, x + 1, z    ))
-    cBL = getCornerBlendedColor(map, x,     z + 1, slopeShade - 0.015, getNoiseExtra(tileType, x,     z + 1))
-    cBR = getCornerBlendedColor(map, x + 1, z + 1, slopeShade - 0.004, getNoiseExtra(tileType, x + 1, z + 1))
+    cTL = getCornerBlendedColor(map, x,     z,     shadeTL)
+    cTR = getCornerBlendedColor(map, x + 1, z,     shadeTR)
+    cBL = getCornerBlendedColor(map, x,     z + 1, shadeBL)
+    cBR = getCornerBlendedColor(map, x + 1, z + 1, shadeBR)
   }
 
   const nearWater = isWaterNearby(map, x, z)
   const nearCliff = isCliffNearby(map, x, z)
-  const pathEdge = isPathEdge(map, x, z)
   const waterDistance = getWaterDistanceToLevel(map, x, z)
 
   if (tileType !== 'water' && nearWater) {
@@ -220,14 +261,6 @@ function addTileGeometry(vertices, colors, uvs, indices, base, tileType, h, x, z
     }
   }
 
-  if (tileType === 'path' && pathEdge) {
-    for (const c of [cTL, cTR, cBL, cBR]) {
-      c.r *= 0.95
-      c.g *= 0.96
-      c.b *= 0.93
-    }
-  }
-
   if (tileType === 'grass') {
     const adjacentPaths = countAdjacentGround(map, x, z, 'path')
     if (adjacentPaths > 0) {
@@ -240,12 +273,37 @@ function addTileGeometry(vertices, colors, uvs, indices, base, tileType, h, x, z
     }
   }
 
+  // Valley ambient occlusion — darken vertices lower than their surroundings
+  if (tileType !== 'water') {
+    cTL.multiplyScalar(getVertexAO(map, x,     z    ))
+    cTR.multiplyScalar(getVertexAO(map, x + 1, z    ))
+    cBL.multiplyScalar(getVertexAO(map, x,     z + 1))
+    cBR.multiplyScalar(getVertexAO(map, x + 1, z + 1))
+  }
+
+  // Object proximity shadow — darken terrain near placed assets (RS2 style)
+  const shadowableType = tileType === 'grass' || tileType === 'dirt' || tileType === 'path'
+  if (shadowableType && shadowInf) {
+    cTL.multiplyScalar(shadowInf[z    ][x    ])
+    cTR.multiplyScalar(shadowInf[z    ][x + 1])
+    cBL.multiplyScalar(shadowInf[z + 1][x    ])
+    cBR.multiplyScalar(shadowInf[z + 1][x + 1])
+  }
+
   if (groundBType && groundBType !== tileType) {
     // Split tile: flat solid color per triangle, no corner blending
     const noiseA = getNoiseExtra(tileType, x + 0.25, z + 0.25)
     const noiseB = getNoiseExtra(groundBType, x + 0.75, z + 0.75)
     const cA = groundColor(tileType, Math.max(slopeShade + noiseA, 0.5))
     const cB = groundColor(groundBType, Math.max(slopeShade + noiseB, 0.5))
+    const avgAO = (getVertexAO(map, x, z) + getVertexAO(map, x+1, z) + getVertexAO(map, x, z+1) + getVertexAO(map, x+1, z+1)) / 4
+    const shadowableA = tileType === 'grass' || tileType === 'dirt' || tileType === 'path'
+    const shadowableB = groundBType === 'grass' || groundBType === 'dirt' || groundBType === 'path'
+    const avgShadow = shadowInf
+      ? (shadowInf[z][x] + shadowInf[z][x+1] + shadowInf[z+1][x] + shadowInf[z+1][x+1]) / 4
+      : 1.0
+    cA.multiplyScalar(avgAO * (shadowableA && shadowInf ? avgShadow : 1.0))
+    cB.multiplyScalar(avgAO * (shadowableB && shadowInf ? avgShadow : 1.0))
 
     if (splitDir === 'forward') {
       // Triangle A (tileType): TL, BL, TR
@@ -284,7 +342,7 @@ function addTileGeometry(vertices, colors, uvs, indices, base, tileType, h, x, z
   return 4
 }
 
-export function buildTerrainMeshes(map, waterTexture) {
+export function buildTerrainMeshes(map, waterTexture, shadowInf = null) {
   const landVertices = []
   const landColors = []
   const landUVs = []
@@ -314,7 +372,8 @@ export function buildTerrainMeshes(map, waterTexture) {
         h,
         x,
         z,
-        map
+        map,
+        shadowInf
       )
 
       if (shouldRenderWater(map, x, z)) {
@@ -353,7 +412,6 @@ export function buildTerrainMeshes(map, waterTexture) {
 
     const landMaterial = new THREE.MeshLambertMaterial({
       vertexColors: true,
-      flatShading: true,
       side: THREE.DoubleSide
     })
 

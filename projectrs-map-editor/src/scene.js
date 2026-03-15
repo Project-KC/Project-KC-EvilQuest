@@ -81,6 +81,8 @@ function tuneModelLighting(model) {
 
   const textureLoader = new THREE.TextureLoader()
   const waterTexture = textureLoader.load('/assets/textures/1.png')
+  waterTexture.wrapS = THREE.RepeatWrapping
+  waterTexture.wrapT = THREE.RepeatWrapping
 
   let map = new MapData(24, 24)
   const placedGroup = new THREE.Group()
@@ -141,6 +143,8 @@ const state = {
   terrainEditInterval: 110
 }
 
+let brushRadius = 3.2
+
   for (let z = 8; z < 16; z++) {
     for (let x = 8; x < 16; x++) {
       map.raiseTile(x, z, 1)
@@ -176,6 +180,7 @@ const state = {
     <span class="top-sep"></span>
     <button id="saveMapBtn">Save</button>
     <label class="file-label">Load <input id="loadMapInput" type="file" accept=".json" /></label>
+    <button id="restoreAutoSaveBtn">Restore Auto-Save</button>
     <span class="top-sep"></span>
     <span class="top-label">W</span>
     <input id="mapWidthInput" type="number" min="4" value="24" />
@@ -202,8 +207,17 @@ const state = {
     <div class="ctx-divider"></div>
 
     <div class="ctx-panel" id="ctx-terrain">
-      <button id="toggleLevelMode">Level Mode: Off</button>
-      <div class="hint">Left drag raise · Shift lower · Ctrl flatten<br>Q/E raise/lower hovered tile · L toggle level mode</div>
+      <label style="margin-top:0;font-size:11px;color:rgba(255,255,255,0.45);">Brush Size <span id="brushSizeLabel">3.2</span></label>
+      <input id="brushSizeSlider" type="range" min="0.8" max="7" step="0.2" value="3.2" style="margin-top:3px;" />
+      <button id="toggleLevelMode" style="margin-top:8px;">Level Mode: Off</button>
+      <div id="levelHeightRow" style="display:none;margin-top:6px;">
+        <div style="display:flex;gap:5px;align-items:center;">
+          <input id="levelHeightInput" type="number" step="0.25" placeholder="Height" style="flex:1;margin-top:0;" />
+          <button id="clearLevelHeight" style="width:auto;padding:7px 8px;margin-top:0;flex-shrink:0;">Clear</button>
+        </div>
+        <div class="hint" style="margin-top:4px;">Click a tile to sample · or type any value</div>
+      </div>
+      <div class="hint">Left drag raise · Shift lower · Ctrl smooth<br>Q/E raise/lower hovered · L level mode</div>
     </div>
 
     <div class="ctx-panel" id="ctx-paint" style="display:none">
@@ -254,7 +268,7 @@ const state = {
   // Status bar
   const statusBar = document.createElement('div')
   statusBar.id = 'statusBar'
-  statusBar.innerHTML = `<span id="statusText">Terrain Tool</span>`
+  statusBar.innerHTML = `<span id="statusText">Terrain Tool</span><span id="hoverText" style="margin-left:auto;opacity:0.55;"></span>`
   uiRoot.appendChild(statusBar)
 
   // Keybinds overlay
@@ -300,6 +314,7 @@ const state = {
   const mapHeightInput = topBar.querySelector('#mapHeightInput')
   const resizeMapBtn = topBar.querySelector('#resizeMapBtn')
   const statusText = statusBar.querySelector('#statusText')
+  const hoverText = statusBar.querySelector('#hoverText')
 
   const assetSectionSelect = sidebar.querySelector('#assetSectionSelect')
   const assetGroupSelect = sidebar.querySelector('#assetGroupSelect')
@@ -383,6 +398,11 @@ const state = {
 
     levelModeBtn.textContent = `Level Mode: ${state.levelMode ? 'On' : 'Off'}`
     levelModeBtn.classList.toggle('active-tool', state.levelMode)
+
+    levelHeightRow.style.display = state.levelMode ? 'block' : 'none'
+    if (state.levelMode && state.levelHeight !== null && document.activeElement !== levelHeightInput) {
+      levelHeightInput.value = state.levelHeight.toFixed(2)
+    }
 
     useTexturePaintBtn.classList.toggle('active-tool', state.tool === ToolMode.TEXTURE)
     useTexturePlaneBtn.classList.toggle('active-tool', state.tool === ToolMode.TEXTURE_PLANE)
@@ -500,6 +520,19 @@ const state = {
     }
   }
 
+  function autoSave() {
+    try {
+      localStorage.setItem('projectrs-autosave', JSON.stringify(buildSaveData()))
+      const prev = statusText.textContent
+      statusText.textContent = 'Auto-saved'
+      setTimeout(() => { statusText.textContent = prev }, 2000)
+    } catch (e) {
+      console.warn('Auto-save failed:', e)
+    }
+  }
+
+  setInterval(autoSave, 15 * 60 * 1000)
+
   function downloadJSON(filename, data) {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -534,7 +567,7 @@ const state = {
 
   function captureSnapshot() {
     return {
-      map: map.toJSON(),
+      map: JSON.parse(JSON.stringify(map.toJSON())),
       placedObjects: serializePlacedObjects()
     }
   }
@@ -612,6 +645,52 @@ const state = {
     return lines
   }
 
+  function buildObjectShadowInfluences() {
+    // Per-vertex darkening [0..1] driven by proximity to placed objects
+    const rows = map.height + 1
+    const cols = map.width + 1
+    const inf = []
+    for (let i = 0; i < rows; i++) inf.push(new Float32Array(cols).fill(1.0))
+
+    const _box  = new THREE.Box3()
+    const _size = new THREE.Vector3()
+
+    for (const obj of placedGroup.children) {
+      // Ensure world matrices are current before computing bounds
+      obj.updateMatrixWorld(true)
+      _box.setFromObject(obj)
+      if (_box.isEmpty()) continue
+      _box.getSize(_size)
+
+      const footprint = Math.max(_size.x, _size.z) * 0.5
+      const shadowR   = footprint + 1.6   // extend dark halo beyond the footprint
+
+      const cx = obj.position.x
+      const cz = obj.position.z
+
+      const x0 = Math.max(0,        Math.floor(cx - shadowR))
+      const x1 = Math.min(cols - 1, Math.ceil (cx + shadowR))
+      const z0 = Math.max(0,        Math.floor(cz - shadowR))
+      const z1 = Math.min(rows - 1, Math.ceil (cz + shadowR))
+
+      for (let vz = z0; vz <= z1; vz++) {
+        for (let vx = x0; vx <= x1; vx++) {
+          const dx   = vx - cx
+          const dz   = vz - cz
+          const dist = Math.sqrt(dx * dx + dz * dz)
+          if (dist >= shadowR) continue
+
+          const t      = 1.0 - dist / shadowR   // 1 at centre, 0 at edge
+          const dark   = t * t * 0.45            // quadratic falloff, max 45% darker
+          const factor = 1.0 - dark
+          if (factor < inf[vz][vx]) inf[vz][vx] = factor
+        }
+      }
+    }
+
+    return inf
+  }
+
   function rebuildTerrain() {
     if (terrainGroup) scene.remove(terrainGroup)
     if (cliffs) scene.remove(cliffs)
@@ -621,7 +700,8 @@ const state = {
 
     map.selectedTexturePlaneId = selectedTexturePlane ? selectedTexturePlane.id : null
 
-    terrainGroup = buildTerrainMeshes(map, waterTexture)
+    const shadowInf = buildObjectShadowInfluences()
+    terrainGroup = buildTerrainMeshes(map, waterTexture, shadowInf)
     cliffs = buildCliffMeshes(map)
     splitLines = buildSplitLines()
     textureOverlayGroup = buildTextureOverlays(map, textureRegistry, textureCache)
@@ -892,50 +972,64 @@ const state = {
     }
   }
 
-function applyTerrainDelta(nx, nz, delta) {
-  if (!map.getTile(nx, nz)) return
+// Gaussian vertex brush — operates on individual height vertices for smooth hills
+function applyGaussianBrush(centerX, centerZ, delta, radius, sigma) {
+  radius = radius ?? brushRadius
+  sigma = sigma ?? radius * 0.47
 
-  if (delta > 0) {
-    map.raiseTile(nx, nz, delta)
-  } else if (delta < 0) {
-    map.lowerTile(nx, nz, Math.abs(delta))
+  const minX = Math.max(0, Math.floor(centerX - radius))
+  const maxX = Math.min(map.width, Math.ceil(centerX + radius))
+  const minZ = Math.max(0, Math.floor(centerZ - radius))
+  const maxZ = Math.min(map.height, Math.ceil(centerZ + radius))
+
+  for (let vz = minZ; vz <= maxZ; vz++) {
+    for (let vx = minX; vx <= maxX; vx++) {
+      const dx = vx - centerX
+      const dz = vz - centerZ
+      const weight = Math.exp(-(dx * dx + dz * dz) / (2 * sigma * sigma))
+      if (weight > 0.005) {
+        map.adjustVertexHeight(vx, vz, delta * weight)
+      }
+    }
   }
 }
 
-function applyFeatheredTerrainBrush(x, z, delta) {
-  const weights = [
-    [0, 0, 1.0],
+// Laplacian smooth — blends each vertex toward the average of its neighbours
+function applySmoothBrush(centerX, centerZ) {
+  const radius = brushRadius
+  const sigma = radius * 0.47
 
-    [-1, 0, 0.38],
-    [1, 0, 0.38],
-    [0, -1, 0.38],
-    [0, 1, 0.38],
+  const minX = Math.max(0, Math.floor(centerX - radius))
+  const maxX = Math.min(map.width, Math.ceil(centerX + radius))
+  const minZ = Math.max(0, Math.floor(centerZ - radius))
+  const maxZ = Math.min(map.height, Math.ceil(centerZ + radius))
 
-    [-1, -1, 0.16],
-    [1, -1, 0.16],
-    [-1, 1, 0.16],
-    [1, 1, 0.16]
-  ]
-
-  for (const [dx, dz, weight] of weights) {
-    applyTerrainDelta(x + dx, z + dz, delta * weight)
+  // First pass: compute Laplacian target for each vertex in range
+  const targets = new Map()
+  for (let vz = minZ; vz <= maxZ; vz++) {
+    for (let vx = minX; vx <= maxX; vx++) {
+      let sum = 0, count = 0
+      for (const [dx, dz] of [[-1,0],[1,0],[0,-1],[0,1]]) {
+        const nx = vx + dx, nz = vz + dz
+        if (nx < 0 || nx > map.width || nz < 0 || nz > map.height) continue
+        sum += map.getVertexHeight(nx, nz)
+        count++
+      }
+      targets.set(`${vx},${vz}`, count > 0 ? sum / count : map.getVertexHeight(vx, vz))
+    }
   }
-}
 
-function moveTileTowardHeight(x, z, targetHeight, maxStep = 0.10) {
-  if (!map.getTile(x, z)) return
-
-  const current = map.getAverageTileHeight(x, z)
-  const delta = targetHeight - current
-
-  if (Math.abs(delta) < 0.001) return
-
-  const step = Math.min(Math.abs(delta), maxStep)
-
-  if (delta > 0) {
-    map.raiseTile(x, z, step)
-  } else {
-    map.lowerTile(x, z, step)
+  // Second pass: blend toward target weighted by Gaussian distance from center
+  for (let vz = minZ; vz <= maxZ; vz++) {
+    for (let vx = minX; vx <= maxX; vx++) {
+      const dx = vx - centerX
+      const dz = vz - centerZ
+      const weight = Math.exp(-(dx * dx + dz * dz) / (2 * sigma * sigma))
+      if (weight < 0.005) continue
+      const current = map.getVertexHeight(vx, vz)
+      const target = targets.get(`${vx},${vz}`)
+      map.setVertexHeight(vx, vz, current + (target - current) * weight * 0.55)
+    }
   }
 }
 
@@ -946,25 +1040,6 @@ function captureStrokeHistoryOnce() {
   }
 }
 
-function applySoftLevelBrush(x, z, targetHeight, centerStep = 0.07) {
-  const weights = [
-    [0, 0, 1.0],
-
-    [-1, 0, 0.40],
-    [1, 0, 0.40],
-    [0, -1, 0.40],
-    [0, 1, 0.40],
-
-    [-1, -1, 0.18],
-    [1, -1, 0.18],
-    [-1, 1, 0.18],
-    [1, 1, 0.18]
-  ]
-
-  for (const [dx, dz, weight] of weights) {
-    moveTileTowardHeight(x + dx, z + dz, targetHeight, centerStep * weight)
-  }
-}
 
 function applyToolAtTile(tile, eventLike = null) {
   if (!tile) return
@@ -975,19 +1050,20 @@ function applyToolAtTile(tile, eventLike = null) {
     if (state.levelMode) {
       if (state.levelHeight === null) {
         state.levelHeight = map.getAverageTileHeight(tile.x, tile.z)
+        updateToolUI()
       }
 
-      applySoftLevelBrush(tile.x, tile.z, state.levelHeight, 0.07)
+      map.flattenTileToHeight(tile.x, tile.z, state.levelHeight)
       rebuildTerrain()
       return
     }
 
     if (eventLike?.ctrlKey) {
-      map.flattenTile(tile.x, tile.z)
+      applySmoothBrush(tile.x + 0.5, tile.z + 0.5)
     } else if (eventLike?.shiftKey) {
-      applyFeatheredTerrainBrush(tile.x, tile.z, -0.12)
+      applyGaussianBrush(tile.x + 0.5, tile.z + 0.5, -0.20)
     } else {
-      applyFeatheredTerrainBrush(tile.x, tile.z, 0.12)
+      applyGaussianBrush(tile.x + 0.5, tile.z + 0.5, 0.20)
     }
 
     rebuildTerrain()
@@ -1072,6 +1148,7 @@ function applyToolAtTile(tile, eventLike = null) {
     model.userData.assetId = asset.id
     model.userData.type = 'asset'
     placedGroup.add(model)
+    rebuildTerrain()
   }
 
   async function duplicateSelected(mode = 'right') {
@@ -1133,6 +1210,7 @@ function applyToolAtTile(tile, eventLike = null) {
 
       selectedPlacedObject = model
       selectedTexturePlane = null
+      rebuildTerrain()
       updateSelectionHelper()
       updateToolUI()
     }
@@ -1428,8 +1506,36 @@ function applyToolAtTile(tile, eventLike = null) {
     updateToolUI()
   })
 
+  const brushSizeSlider = sidebar.querySelector('#brushSizeSlider')
+  const brushSizeLabel = sidebar.querySelector('#brushSizeLabel')
+
+  brushSizeSlider.addEventListener('input', (e) => {
+    brushRadius = parseFloat(e.target.value)
+    brushSizeLabel.textContent = brushRadius.toFixed(1)
+  })
+
+  const levelHeightRow = sidebar.querySelector('#levelHeightRow')
+  const levelHeightInput = sidebar.querySelector('#levelHeightInput')
+
+  levelHeightInput.addEventListener('change', (e) => {
+    const val = parseFloat(e.target.value)
+    if (Number.isFinite(val)) state.levelHeight = val
+  })
+
+  sidebar.querySelector('#clearLevelHeight').addEventListener('click', () => {
+    state.levelHeight = null
+    levelHeightInput.value = ''
+  })
+
   saveMapBtn.addEventListener('click', () => {
     downloadJSON('projectrs-map.json', buildSaveData())
+  })
+
+  const restoreAutoSaveBtn = topBar.querySelector('#restoreAutoSaveBtn')
+  restoreAutoSaveBtn.addEventListener('click', async () => {
+    const raw = localStorage.getItem('projectrs-autosave')
+    if (!raw) { alert('No auto-save found.'); return }
+    await loadSaveData(JSON.parse(raw))
   })
 
   loadMapInput.addEventListener('change', async (event) => {
@@ -1502,6 +1608,7 @@ function applyToolAtTile(tile, eventLike = null) {
 
     const y = map.getAverageTileHeight(tile.x, tile.z) + 0.04
     highlight.position.set(tile.x + 0.5, y, tile.z + 0.5)
+    hoverText.textContent = `tile (${tile.x}, ${tile.z})  elev ${y.toFixed(2)}`
 
     if (previewObject) {
       const pos = tileWorldPosition(tile.x, tile.z)
@@ -1838,6 +1945,9 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
   })
 
   window.addEventListener('keydown', async (event) => {
+    const tag = document.activeElement?.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+
     const key = event.key.toLowerCase()
     const { x, z } = state.hovered
 
@@ -1868,6 +1978,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
         pushUndoState()
         placedGroup.remove(selectedPlacedObject)
         selectedPlacedObject = null
+        rebuildTerrain()
         updateSelectionHelper()
         updateToolUI()
         return
@@ -1899,15 +2010,14 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
 
 if (key === 'q') {
   pushUndoState()
-  applyFeatheredTerrainBrush(x, z, 0.10)
+  applyGaussianBrush(x + 0.5, z + 0.5, 0.18)
   rebuildTerrain()
   return
 }
 
-
- if (key === 'e') {
+if (key === 'e') {
   pushUndoState()
-  applyFeatheredTerrainBrush(x, z, -0.10)
+  applyGaussianBrush(x + 0.5, z + 0.5, -0.18)
   rebuildTerrain()
   return
 }
@@ -2094,6 +2204,8 @@ if (key === 'q') {
   function animate() {
     requestAnimationFrame(animate)
     if (selectionHelper) selectionHelper.update()
+    const t = performance.now() * 0.0003
+    waterTexture.offset.set(t * 0.18, t * 0.09)
     renderer.render(scene, camera)
   }
 
