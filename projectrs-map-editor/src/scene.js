@@ -14,18 +14,17 @@ import {
 export function createEditorScene(container) {
   const scene = new THREE.Scene()
 
-scene.background = new THREE.Color(0x000000)
-scene.fog = new THREE.Fog(0x000000, 22, 72)
+scene.background = new THREE.Color(0x0a1205)
+scene.fog = new THREE.Fog(0x0a1205, 22, 72)
 
-const sun = new THREE.DirectionalLight(0xffd78a, 1.0)
+const sun = new THREE.DirectionalLight(0xffd78a, 1.1)
 sun.position.set(16, 30, 16)
 scene.add(sun)
 
-scene.add(new THREE.AmbientLight(0x8a8a8a, 0.28))
-
+scene.add(new THREE.AmbientLight(0x8a8a8a, 0.5))
 
 scene.add(new THREE.AmbientLight(0x5c6448, 0.08))
-scene.add(new THREE.HemisphereLight(0x181818, 0x2f2410, 0.03))
+scene.add(new THREE.HemisphereLight(0x181818, 0x2f2410, 0.12))
 
 function tuneModelLighting(model) {
   model.traverse((child) => {
@@ -42,9 +41,12 @@ function tuneModelLighting(model) {
 
       const mat = new THREE.MeshPhongMaterial({
         map,
-        color: 0xffffff,
+        color: sourceMat.color ? sourceMat.color.clone() : 0xffffff,
+        emissive: sourceMat.emissive ? sourceMat.emissive.clone() : 0x000000,
+        emissiveMap: sourceMat.emissiveMap || null,
         shininess: 0,
-        specular: 0x000000
+        specular: 0x000000,
+        side: THREE.DoubleSide
       })
 
       mat.lightMap = sourceMat.lightMap || null
@@ -127,6 +129,7 @@ function tuneModelLighting(model) {
 const state = {
   tool: ToolMode.TERRAIN,
   paintType: 'grass',
+  halfPaint: false,
   hovered: { x: 0, z: 0 },
   showSplitLines: false,
   isPainting: false,
@@ -165,141 +168,122 @@ const state = {
   uiRoot.style.zIndex = '20'
   container.appendChild(uiRoot)
 
-  const toolDock = document.createElement('div')
-  toolDock.className = 'ui'
-  toolDock.style.position = 'absolute'
-  toolDock.style.left = '8px'
-  toolDock.style.top = '8px'
-  toolDock.style.width = '320px'
-  toolDock.style.maxHeight = '46vh'
-  toolDock.style.overflow = 'auto'
-  toolDock.style.pointerEvents = 'auto'
-  toolDock.innerHTML = `
-    <h3>ProjectRS Map Editor</h3>
-
-    <button id="toolTerrain">Terrain Tool</button>
-    <button id="toggleLevelMode">Level Mode: Off</button>
-    <button id="toolPaint">Paint Tool</button>
-    <button id="toolPlace">Place Asset</button>
-    <button id="toolSelect">Select</button>
-    <button id="toolTexture">Texture Paint</button>
-    <button id="toolTexturePlane">Texture Plane</button>
-
-    <div class="row" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-      <button id="saveMapBtn">Save Map</button>
-      <button id="focusLibraryBtn">Focus Browser</button>
-    </div>
-
-    <div class="row">
-      <input id="loadMapInput" type="file" accept=".json" style="width:100%;" />
-    </div>
-
-    <div class="row" style="display:flex; gap:8px;">
-      <input id="mapWidthInput" type="number" min="4" value="24" style="width:50%;" />
-      <input id="mapHeightInput" type="number" min="4" value="24" style="width:50%;" />
-    </div>
-
-    <div class="row">
-      <button id="resizeMapBtn">Resize / Extend Map</button>
-    </div>
-
-    <div class="row">
-      <select id="groundType">
-        <option value="grass">Grass</option>
-        <option value="dirt">Dirt</option>
-        <option value="sand">Sand</option>
-        <option value="path">Path</option>
-        <option value="water">Water</option>
-      </select>
-    </div>
-
-    <div class="row">
-      <label style="display:flex; gap:8px; align-items:center;">
-        <input id="toggleSplitLines" type="checkbox" />
-        Show split lines
-      </label>
-    </div>
-
-    <div id="toolStatus" class="status"></div>
-
-    <div class="small">
-      1 Terrain / 2 Paint / 3 Place / 4 Select / 5 Texture Paint / 6 Texture Plane<br>
-      Ctrl+Z undo / Ctrl+Shift+Z redo<br>
-      G move / R rotate / S scale / X Y Z axis / click confirm / Esc cancel<br>
-      Q/E while moving = raise/lower selected thing<br>
-      Shift+D duplicate right / Alt+D duplicate forward / Shift+A stack upward<br>
-      K snap selected to grid / V toggles new texture plane vertical-horizontal
-    </div>
+  // Top bar
+  const topBar = document.createElement('div')
+  topBar.id = 'topBar'
+  topBar.innerHTML = `
+    <span class="app-title">ProjectRS</span>
+    <span class="top-sep"></span>
+    <button id="saveMapBtn">Save</button>
+    <label class="file-label">Load <input id="loadMapInput" type="file" accept=".json" /></label>
+    <span class="top-sep"></span>
+    <span class="top-label">W</span>
+    <input id="mapWidthInput" type="number" min="4" value="24" />
+    <span class="top-label">H</span>
+    <input id="mapHeightInput" type="number" min="4" value="24" />
+    <button id="resizeMapBtn">Resize</button>
+    <span class="top-sep"></span>
+    <button id="helpBtn" title="Keyboard shortcuts">?</button>
   `
-  uiRoot.appendChild(toolDock)
+  uiRoot.appendChild(topBar)
 
-  const libraryPanel = document.createElement('div')
-  libraryPanel.className = 'ui'
-  libraryPanel.style.position = 'absolute'
-  libraryPanel.style.left = '8px'
-  libraryPanel.style.top = 'calc(46vh + 20px)'
-  libraryPanel.style.bottom = '8px'
-  libraryPanel.style.width = '320px'
-  libraryPanel.style.overflow = 'auto'
-  libraryPanel.style.pointerEvents = 'auto'
-  libraryPanel.innerHTML = `
-    <h3 style="margin-top:0;">Browser</h3>
+  // Sidebar
+  const sidebar = document.createElement('div')
+  sidebar.id = 'sidebar'
+  sidebar.innerHTML = `
+    <div class="tool-row">
+      <button id="toolTerrain" class="tool-btn" title="Terrain Tool (1)">Terrain</button>
+      <button id="toolPaint" class="tool-btn" title="Paint Tool (2)">Paint</button>
+      <button id="toolPlace" class="tool-btn" title="Place Asset (3)">Place</button>
+      <button id="toolSelect" class="tool-btn" title="Select (4)">Select</button>
+      <button id="toolTexture" class="tool-btn" title="Texture Paint (5)">Texture</button>
+      <button id="toolTexturePlane" class="tool-btn" title="Texture Plane (6)">T.Plane</button>
+    </div>
+    <div class="ctx-divider"></div>
 
-    <div class="row">
-      <label style="font-size:12px;opacity:0.8;">Asset Section</label>
+    <div class="ctx-panel" id="ctx-terrain">
+      <button id="toggleLevelMode">Level Mode: Off</button>
+      <div class="hint">Left drag raise · Shift lower · Ctrl flatten<br>Q/E raise/lower hovered tile · L toggle level mode</div>
+    </div>
+
+    <div class="ctx-panel" id="ctx-paint" style="display:none">
+      <div class="ground-swatches" id="groundSwatches"></div>
+      <div class="row">
+        <label><input id="toggleHalfPaint" type="checkbox" /> Half Tile Paint</label>
+        <label><input id="toggleSplitLines" type="checkbox" /> Show Split Lines</label>
+      </div>
+    </div>
+
+    <div class="ctx-panel" id="ctx-place" style="display:none">
       <select id="assetSectionSelect"></select>
-    </div>
-
-    <div class="row">
-      <label style="font-size:12px;opacity:0.8;">Asset Group</label>
       <select id="assetGroupSelect"></select>
+      <input id="assetSearch" type="text" placeholder="Search assets..." />
+      <select id="assetSelect" size="9" style="width:100%;margin-top:5px;font-size:12px;background:rgba(0,0,0,0.35);color:#fff;border:1px solid rgba(255,255,255,0.14);border-radius:4px;"></select>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:5px;">
+        <button id="switchPlaceBtn">Use in Place</button>
+        <button id="refreshPreviewBtn">Refresh</button>
+      </div>
     </div>
 
-    <div class="row">
-      <input id="assetSearch" type="text" placeholder="Search assets..." style="width:100%;" />
+    <div class="ctx-panel" id="ctx-select" style="display:none">
+      <div class="hint">
+        G move · R rotate · S scale<br>
+        X Y Z axis lock · click confirm · Esc cancel<br>
+        Q/E raise/lower while moving · Shift snap<br>
+        Shift+D duplicate right · Alt+D forward<br>
+        Shift+A stack upward · K snap to grid<br>
+        Delete / Backspace remove selected
+      </div>
     </div>
 
-    <div class="row">
-      <select id="assetSelect" size="10" style="width:100%;"></select>
-    </div>
-
-    <div class="row" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-      <button id="switchPlaceBtn">Use in Place Mode</button>
-      <button id="refreshPreviewBtn">Refresh Preview</button>
-    </div>
-
-    <div class="row" style="margin-top:14px;">
-      <label style="font-size:12px;opacity:0.8;">Search Textures</label>
-      <input id="textureSearch" type="text" placeholder="Search textures..." style="width:100%;" />
-    </div>
-
-    <div class="row">
-      <div id="texturePalette" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;max-height:260px;overflow:auto;"></div>
-    </div>
-
-    <div class="row" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-      <button id="useTexturePaintBtn">Use Selected Texture for Paint</button>
-      <button id="useTexturePlaneBtn">Use Selected Texture for Plane</button>
-    </div>
-
-    <div class="row">
-      <button id="rotateTextureBtn">Rotate Paint Texture</button>
-    </div>
-
-    <div class="row">
-      <label>Texture Scale</label>
-      <input id="textureScale" type="range" min="1" max="8" step="1" value="1" style="width:100%;" />
+    <div class="ctx-panel" id="ctx-texture" style="display:none">
+      <input id="textureSearch" type="text" placeholder="Search textures..." />
+      <div id="texturePalette" style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;max-height:200px;overflow:auto;margin-top:7px;"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:5px;">
+        <button id="useTexturePaintBtn">Paint Mode</button>
+        <button id="useTexturePlaneBtn">Plane Mode</button>
+      </div>
+      <button id="rotateTextureBtn">Rotate Texture (R)</button>
+      <label style="margin-top:6px;font-size:11px;color:rgba(255,255,255,0.45);">Scale</label>
+      <input id="textureScale" type="range" min="1" max="8" step="1" value="1" />
+      <label style="margin-top:5px;"><input id="toggleTexturePlaneV" type="checkbox" checked /> Vertical plane (V)</label>
     </div>
   `
-  uiRoot.appendChild(libraryPanel)
+  uiRoot.appendChild(sidebar)
+
+  // Status bar
+  const statusBar = document.createElement('div')
+  statusBar.id = 'statusBar'
+  statusBar.innerHTML = `<span id="statusText">Terrain Tool</span>`
+  uiRoot.appendChild(statusBar)
+
+  // Keybinds overlay
+  const keybindsPanel = document.createElement('div')
+  keybindsPanel.id = 'keybindsPanel'
+  keybindsPanel.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <strong>Keyboard Shortcuts</strong>
+      <button id="closeKeybinds">✕</button>
+    </div>
+    <div>
+      <b>Tools:</b> 1 Terrain · 2 Paint · 3 Place · 4 Select · 5 Texture · 6 Texture Plane<br>
+      <b>History:</b> Ctrl+Z undo · Ctrl+Shift+Z / Ctrl+Y redo<br>
+      <b>Transform:</b> G move · R rotate · S scale · X/Y/Z axis · click confirm · Esc cancel<br>
+      <b>While moving:</b> Q raise · E lower · Shift snap to grid<br>
+      <b>Terrain:</b> Q/E raise/lower hovered · L level mode · F flip tile split<br>
+      <b>Duplicate:</b> Shift+D right · Alt+D forward · Shift+A stack up<br>
+      <b>Other:</b> K snap to grid · V toggle plane vertical/horizontal · Del remove selected
+    </div>
+  `
+  uiRoot.appendChild(keybindsPanel)
 
   const toolButtons = {
-    [ToolMode.TERRAIN]: toolDock.querySelector('#toolTerrain'),
-    [ToolMode.PAINT]: toolDock.querySelector('#toolPaint'),
-    [ToolMode.PLACE]: toolDock.querySelector('#toolPlace'),
-    [ToolMode.SELECT]: toolDock.querySelector('#toolSelect'),
-    [ToolMode.TEXTURE]: toolDock.querySelector('#toolTexture'),
-    [ToolMode.TEXTURE_PLANE]: toolDock.querySelector('#toolTexturePlane')
+    [ToolMode.TERRAIN]: sidebar.querySelector('#toolTerrain'),
+    [ToolMode.PAINT]: sidebar.querySelector('#toolPaint'),
+    [ToolMode.PLACE]: sidebar.querySelector('#toolPlace'),
+    [ToolMode.SELECT]: sidebar.querySelector('#toolSelect'),
+    [ToolMode.TEXTURE]: sidebar.querySelector('#toolTexture'),
+    [ToolMode.TEXTURE_PLANE]: sidebar.querySelector('#toolTexturePlane')
   }
 
   toolButtons[ToolMode.TERRAIN]?.addEventListener('click', () => setTool(ToolMode.TERRAIN))
@@ -309,69 +293,132 @@ const state = {
   toolButtons[ToolMode.TEXTURE]?.addEventListener('click', () => setTool(ToolMode.TEXTURE))
   toolButtons[ToolMode.TEXTURE_PLANE]?.addEventListener('click', () => setTool(ToolMode.TEXTURE_PLANE))
 
-  const groundTypeSelect = toolDock.querySelector('#groundType')
-  const toolStatus = toolDock.querySelector('#toolStatus')
-  const levelModeBtn = toolDock.querySelector('#toggleLevelMode')
-  const saveMapBtn = toolDock.querySelector('#saveMapBtn')
-  const loadMapInput = toolDock.querySelector('#loadMapInput')
-  const mapWidthInput = toolDock.querySelector('#mapWidthInput')
-  const mapHeightInput = toolDock.querySelector('#mapHeightInput')
-  const resizeMapBtn = toolDock.querySelector('#resizeMapBtn')
-  const focusLibraryBtn = toolDock.querySelector('#focusLibraryBtn')
+  const levelModeBtn = sidebar.querySelector('#toggleLevelMode')
+  const saveMapBtn = topBar.querySelector('#saveMapBtn')
+  const loadMapInput = topBar.querySelector('#loadMapInput')
+  const mapWidthInput = topBar.querySelector('#mapWidthInput')
+  const mapHeightInput = topBar.querySelector('#mapHeightInput')
+  const resizeMapBtn = topBar.querySelector('#resizeMapBtn')
+  const statusText = statusBar.querySelector('#statusText')
 
-  const assetSectionSelect = libraryPanel.querySelector('#assetSectionSelect')
-  const assetGroupSelect = libraryPanel.querySelector('#assetGroupSelect')
-  const assetSearch = libraryPanel.querySelector('#assetSearch')
-  const assetSelect = libraryPanel.querySelector('#assetSelect')
-  const switchPlaceBtn = libraryPanel.querySelector('#switchPlaceBtn')
-  const refreshPreviewBtn = libraryPanel.querySelector('#refreshPreviewBtn')
+  const assetSectionSelect = sidebar.querySelector('#assetSectionSelect')
+  const assetGroupSelect = sidebar.querySelector('#assetGroupSelect')
+  const assetSearch = sidebar.querySelector('#assetSearch')
+  const assetSelect = sidebar.querySelector('#assetSelect')
+  const switchPlaceBtn = sidebar.querySelector('#switchPlaceBtn')
+  const refreshPreviewBtn = sidebar.querySelector('#refreshPreviewBtn')
 
-  const textureSearch = libraryPanel.querySelector('#textureSearch')
-  const texturePalette = libraryPanel.querySelector('#texturePalette')
-  const useTexturePaintBtn = libraryPanel.querySelector('#useTexturePaintBtn')
-  const useTexturePlaneBtn = libraryPanel.querySelector('#useTexturePlaneBtn')
-  const textureScaleSlider = libraryPanel.querySelector('#textureScale')
-  const rotateTextureBtn = libraryPanel.querySelector('#rotateTextureBtn')
+  const textureSearch = sidebar.querySelector('#textureSearch')
+  const texturePalette = sidebar.querySelector('#texturePalette')
+  const useTexturePaintBtn = sidebar.querySelector('#useTexturePaintBtn')
+  const useTexturePlaneBtn = sidebar.querySelector('#useTexturePlaneBtn')
+  const textureScaleSlider = sidebar.querySelector('#textureScale')
+  const rotateTextureBtn = sidebar.querySelector('#rotateTextureBtn')
 
   mapWidthInput.value = map.width
   mapHeightInput.value = map.height
 
  
 
+  const GROUND_TYPES = [
+    { id: 'grass', label: 'Grass', color: '#3d8a20' },
+    { id: 'dirt',  label: 'Dirt',  color: '#7a5030' },
+    { id: 'sand',  label: 'Sand',  color: '#c4a245' },
+    { id: 'path',  label: 'Path',  color: '#8a7860' },
+    { id: 'road',  label: 'Road',  color: '#7a7870' },
+    { id: 'water', label: 'Water', color: '#4a6aaa' },
+  ]
+
+  function buildGroundSwatches() {
+    const container = sidebar.querySelector('#groundSwatches')
+    if (!container) return
+    container.innerHTML = ''
+    for (const gt of GROUND_TYPES) {
+      const div = document.createElement('div')
+      div.className = 'ground-swatch'
+      div.dataset.type = gt.id
+      div.innerHTML = `
+        <div class="swatch-color" style="background:${gt.color}"></div>
+        <div class="swatch-label">${gt.label}</div>
+      `
+      div.addEventListener('click', () => {
+        state.paintType = gt.id
+        setTool(ToolMode.PAINT)
+      })
+      container.appendChild(div)
+    }
+  }
+
+  function updateSwatches() {
+    for (const el of sidebar.querySelectorAll('.ground-swatch')) {
+      el.classList.toggle('active', el.dataset.type === state.paintType)
+    }
+  }
+
   function updateToolUI() {
     for (const [mode, button] of Object.entries(toolButtons)) {
       if (button) button.classList.toggle('active-tool', state.tool === mode)
     }
 
-    let extra = ''
-    if (state.tool === ToolMode.PAINT) extra += ` | Paint: ${state.paintType}`
-    if (state.tool === ToolMode.PLACE) extra += ` | Asset: ${selectedAssetId || 'none'}`
-    if (state.tool === ToolMode.TEXTURE) extra += ` | Texture: ${selectedTextureId || 'none'}`
+    // Show only the active context panel
+    const ctxMap = {
+      [ToolMode.TERRAIN]: 'ctx-terrain',
+      [ToolMode.PAINT]: 'ctx-paint',
+      [ToolMode.PLACE]: 'ctx-place',
+      [ToolMode.SELECT]: 'ctx-select',
+      [ToolMode.TEXTURE]: 'ctx-texture',
+      [ToolMode.TEXTURE_PLANE]: 'ctx-texture',
+    }
+    for (const id of ['ctx-terrain', 'ctx-paint', 'ctx-place', 'ctx-select', 'ctx-texture']) {
+      const el = sidebar.querySelector(`#${id}`)
+      if (el) el.style.display = 'none'
+    }
+    const activeCtx = ctxMap[state.tool]
+    if (activeCtx) {
+      const el = sidebar.querySelector(`#${activeCtx}`)
+      if (el) el.style.display = 'block'
+    }
+
+    updateSwatches()
+
+    levelModeBtn.textContent = `Level Mode: ${state.levelMode ? 'On' : 'Off'}`
+    levelModeBtn.classList.toggle('active-tool', state.levelMode)
+
+    useTexturePaintBtn.classList.toggle('active-tool', state.tool === ToolMode.TEXTURE)
+    useTexturePlaneBtn.classList.toggle('active-tool', state.tool === ToolMode.TEXTURE_PLANE)
+    switchPlaceBtn.classList.toggle('active-tool', state.tool === ToolMode.PLACE)
+
+    const vpCheckbox = sidebar.querySelector('#toggleTexturePlaneV')
+    if (vpCheckbox) vpCheckbox.checked = texturePlaneVertical
+
+    // Status bar
+    let status = toolLabel(state.tool)
+    if (state.tool === ToolMode.PAINT) status += ` · ${state.paintType}`
+    if (state.tool === ToolMode.PLACE && selectedAssetId) {
+      const asset = assetRegistry.find((a) => a.id === selectedAssetId)
+      status += ` · ${asset?.name || selectedAssetId}`
+    }
+    if (state.tool === ToolMode.TEXTURE || state.tool === ToolMode.TEXTURE_PLANE) {
+      status += ` · ${selectedTextureId || 'no texture'}`
+    }
     if (state.tool === ToolMode.TEXTURE_PLANE) {
-      extra += ` | Plane texture: ${selectedTextureId || 'none'}`
-      extra += ` | ${texturePlaneVertical ? 'vertical' : 'horizontal'}`
+      status += ` · ${texturePlaneVertical ? 'vertical' : 'horizontal'}`
     }
     if (state.tool === ToolMode.TERRAIN && state.levelMode) {
-      extra += ' | Level Mode'
-      if (state.levelHeight !== null) extra += ` @ ${state.levelHeight.toFixed(2)}`
+      status += ' · Level Mode'
+      if (state.levelHeight !== null) status += ` @ ${state.levelHeight.toFixed(2)}`
     }
-    if (selectedTexturePlane) extra += ` | Selected plane: ${selectedTexturePlane.textureId}`
-    if (selectedPlacedObject) extra += ` | Selected object`
+    if (selectedTexturePlane) status += ` · Plane: ${selectedTexturePlane.textureId}`
+    if (selectedPlacedObject) status += ' · Object selected'
     if (transformMode) {
       let axisLabel = 'ALL'
       if (transformAxis === 'x') axisLabel = 'X'
       else if (transformAxis === 'ground-z') axisLabel = 'Y'
       else if (transformAxis === 'height') axisLabel = 'Z'
       else if (transformAxis !== 'all') axisLabel = transformAxis.toUpperCase()
-      extra += ` | Transform: ${transformMode.toUpperCase()} (${axisLabel})`
+      status += ` · ${transformMode.toUpperCase()} (${axisLabel})`
     }
-
-    levelModeBtn.textContent = `Level Mode: ${state.levelMode ? 'On' : 'Off'}`
-    toolStatus.textContent = `Mode: ${toolLabel(state.tool)}${extra}`
-
-    useTexturePaintBtn.classList.toggle('active-tool', state.tool === ToolMode.TEXTURE)
-    useTexturePlaneBtn.classList.toggle('active-tool', state.tool === ToolMode.TEXTURE_PLANE)
-    switchPlaceBtn.classList.toggle('active-tool', state.tool === ToolMode.PLACE)
+    statusText.textContent = status
   }
 
   function setTool(mode) {
@@ -622,7 +669,7 @@ const state = {
     const z = Math.floor(p.z)
 
     if (x < 0 || z < 0 || x >= map.width || z >= map.height) return null
-    return { x, z }
+    return { x, z, u: p.x - x, v: p.z - z }
   }
 
   function pickPlacedObject(event) {
@@ -950,8 +997,19 @@ function applyToolAtTile(tile, eventLike = null) {
   if (state.tool === ToolMode.PAINT) {
     captureStrokeHistoryOnce()
 
-    if (state.paintType === 'water') map.paintWaterTile(tile.x, tile.z)
-    else map.paintTile(tile.x, tile.z, state.paintType)
+    if (state.paintType === 'water') {
+      map.paintWaterTile(tile.x, tile.z)
+    } else if (state.halfPaint) {
+      const tileData = map.getTile(tile.x, tile.z)
+      const splitDir = tileData?.split || 'forward'
+      const u = tile.u ?? 0.5
+      const v = tile.v ?? 0.5
+      const isFirst = splitDir === 'forward' ? (u + v < 1) : (v >= u)
+      if (isFirst) map.paintTileFirst(tile.x, tile.z, state.paintType)
+      else map.paintTileSecond(tile.x, tile.z, state.paintType)
+    } else {
+      map.paintTile(tile.x, tile.z, state.paintType)
+    }
 
     rebuildTerrain()
     return
@@ -1324,11 +1382,6 @@ function applyToolAtTile(tile, eventLike = null) {
     }
   }
 
-  groundTypeSelect.addEventListener('change', (e) => {
-    state.paintType = e.target.value
-    updateToolUI()
-  })
-
   assetSectionSelect.addEventListener('change', async (e) => {
     assetSectionFilter = e.target.value
     refreshAssetGroupOptions()
@@ -1379,11 +1432,6 @@ function applyToolAtTile(tile, eventLike = null) {
     downloadJSON('projectrs-map.json', buildSaveData())
   })
 
-  focusLibraryBtn.addEventListener('click', () => {
-    libraryPanel.scrollTo({ top: 0, behavior: 'smooth' })
-    assetSearch.focus()
-  })
-
   loadMapInput.addEventListener('change', async (event) => {
     const file = event.target.files?.[0]
     if (!file) return
@@ -1414,9 +1462,26 @@ function applyToolAtTile(tile, eventLike = null) {
     updateToolUI()
   })
 
-  toolDock.querySelector('#toggleSplitLines').addEventListener('change', (e) => {
+  sidebar.querySelector('#toggleSplitLines').addEventListener('change', (e) => {
     state.showSplitLines = e.target.checked
     if (splitLines) splitLines.visible = state.showSplitLines
+  })
+
+  sidebar.querySelector('#toggleHalfPaint').addEventListener('change', (e) => {
+    state.halfPaint = e.target.checked
+  })
+
+  sidebar.querySelector('#toggleTexturePlaneV').addEventListener('change', (e) => {
+    texturePlaneVertical = e.target.checked
+    updateToolUI()
+  })
+
+  topBar.querySelector('#helpBtn').addEventListener('click', () => {
+    keybindsPanel.classList.toggle('visible')
+  })
+
+  keybindsPanel.querySelector('#closeKeybinds').addEventListener('click', () => {
+    keybindsPanel.classList.remove('visible')
   })
 
   rotateTextureBtn.addEventListener('click', () => {
@@ -1770,9 +1835,6 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
     camera.aspect = window.innerWidth / window.innerHeight
     camera.updateProjectionMatrix()
     renderer.setSize(window.innerWidth, window.innerHeight)
-
-    toolDock.style.maxHeight = '46vh'
-    libraryPanel.style.top = 'calc(46vh + 20px)'
   })
 
   window.addEventListener('keydown', async (event) => {
@@ -1889,6 +1951,33 @@ if (key === 'q') {
     }
 
     if (key === 'g') {
+      // If nothing is selected, try to pick whatever is under the cursor
+      if (!selectedTexturePlane && !selectedPlacedObject) {
+        raycaster.setFromCamera(mouse, camera)
+
+        if (texturePlaneGroup) {
+          const hits = raycaster.intersectObjects(texturePlaneGroup.children, true)
+          if (hits.length && hits[0].object?.userData?.texturePlane) {
+            selectedTexturePlane = hits[0].object.userData.texturePlane
+            selectedPlacedObject = null
+            setTool(ToolMode.SELECT)
+            updateSelectionHelper()
+          }
+        }
+
+        if (!selectedTexturePlane) {
+          const hits = raycaster.intersectObjects(placedGroup.children, true)
+          if (hits.length) {
+            let obj = hits[0].object
+            while (obj.parent && obj.parent !== placedGroup) obj = obj.parent
+            selectedPlacedObject = obj
+            selectedTexturePlane = null
+            setTool(ToolMode.SELECT)
+            updateSelectionHelper()
+          }
+        }
+      }
+
       transformAxis = 'all'
       beginTransform('move')
       return
@@ -1996,6 +2085,7 @@ if (key === 'q') {
   }
 
   rebuildTerrain()
+  buildGroundSwatches()
   updateToolUI()
   initAssets()
   initTextures()

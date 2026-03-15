@@ -13,6 +13,7 @@ export class MapData {
       for (let x = 0; x < width; x++) {
         row.push({
           ground: 'grass',
+          groundB: null,
           split: 'forward',
           textureId: null,
           textureRotation: 0,
@@ -139,7 +140,22 @@ export class MapData {
     if (!tile) return
 
     tile.ground = groundType
+    tile.groundB = null
     if (groundType !== 'water') tile.waterPainted = false
+  }
+
+  paintTileFirst(x, z, groundType) {
+    const tile = this.getTile(x, z)
+    if (!tile) return
+    if (tile.groundB === null) tile.groundB = tile.ground
+    tile.ground = groundType
+    if (groundType !== 'water') tile.waterPainted = false
+  }
+
+  paintTileSecond(x, z, groundType) {
+    const tile = this.getTile(x, z)
+    if (!tile) return
+    tile.groundB = groundType
   }
 
   paintWaterTile(x, z) {
@@ -247,6 +263,7 @@ export class MapData {
 
           map.tiles[z][x] = {
             ground: src.ground || 'grass',
+            groundB: src.groundB || null,
             split: src.split || 'forward',
             textureId: src.textureId || null,
             textureRotation: src.textureRotation || 0,
