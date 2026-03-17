@@ -80,17 +80,23 @@ function shouldRenderWater(map, x, z) {
   return map.isWaterTile(x, z)
 }
 
-function isWaterNearby(map, x, z) {
-  for (let dz = -1; dz <= 1; dz++) {
-    for (let dx = -1; dx <= 1; dx++) {
-      if (shouldRenderWater(map, x + dx, z + dz)) return true
+// Returns 0-1: how close vertex (vx,vz) is to the nearest water tile.
+// 5x5 window (25 lookups) gives a ~2.5-tile gradient without heavy cost.
+function getVertexWaterProximity(map, vx, vz) {
+  let maxProx = 0
+  for (let dz = -2; dz <= 2; dz++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      const tx = vx + dx
+      const tz = vz + dz
+      if (!shouldRenderWater(map, tx, tz)) continue
+      const cx = clamp(vx, tx, tx + 1)
+      const cz = clamp(vz, tz, tz + 1)
+      const dist = Math.sqrt((vx - cx) * (vx - cx) + (vz - cz) * (vz - cz))
+      const prox = Math.max(0, 1 - dist / 2.5)
+      if (prox > maxProx) maxProx = prox
     }
   }
-  return false
-}
-
-function getWaterDistanceToLevel(map, x, z) {
-  return map.getAverageTileHeight(x, z) - map.getTileWaterLevel(x, z)
+  return maxProx
 }
 
 
@@ -234,25 +240,40 @@ function addTileGeometry(vertices, colors, uvs, indices, base, tileType, h, x, z
     cBR = getCornerBlendedColor(map, x + 1, z + 1, shadeBR)
   }
 
-  const nearWater = isWaterNearby(map, x, z)
   const nearCliff = isCliffNearby(map, x, z)
-  const waterDistance = getWaterDistanceToLevel(map, x, z)
 
-  if (tileType !== 'water' && nearWater) {
-    for (const c of [cTL, cTR, cBL, cBR]) {
-      c.r *= 1.05
-      c.g *= 0.95
-      c.b *= 0.86
-    }
-  }
+  if (tileType !== 'water') {
+    const wLevel = map.getTileWaterLevel(x, z)
 
-  if (tileType !== 'water' && waterDistance > 0 && waterDistance < 1.15) {
-    const t = 1 - clamp(waterDistance / 1.15, 0, 1)
-    for (const c of [cTL, cTR, cBL, cBR]) {
-      c.r *= 1 + t * 0.06
-      c.g *= 1 - t * 0.08
-      c.b *= 1 - t * 0.14
+    const proxTL = getVertexWaterProximity(map, x,     z    )
+    const proxTR = getVertexWaterProximity(map, x + 1, z    )
+    const proxBL = getVertexWaterProximity(map, x,     z + 1)
+    const proxBR = getVertexWaterProximity(map, x + 1, z + 1)
+
+    // Mud tint — horizontal gradient toward water
+    const applyMud = (c, t) => {
+      if (t <= 0) return
+      c.r *= 1 + t * 0.18
+      c.g *= 1 - t * 0.22
+      c.b *= 1 - t * 0.28
     }
+    applyMud(cTL, proxTL)
+    applyMud(cTR, proxTR)
+    applyMud(cBL, proxBL)
+    applyMud(cBR, proxBR)
+
+    // Underwater darkening — vertices below water level fade toward a deep murky colour
+    const applyDepth = (c, vertH) => {
+      const depth = clamp((wLevel - vertH) / 2.5, 0, 1)
+      if (depth <= 0) return
+      c.r *= 1 - depth * 0.60
+      c.g *= 1 - depth * 0.45
+      c.b *= 1 - depth * 0.20
+    }
+    applyDepth(cTL, h.tl)
+    applyDepth(cTR, h.tr)
+    applyDepth(cBL, h.bl)
+    applyDepth(cBR, h.br)
   }
 
   if (tileType !== 'water' && nearCliff) {
@@ -351,7 +372,6 @@ export function buildTerrainMeshes(map, waterTexture, shadowInf = null) {
     for (let x = 0; x < map.width; x++) {
       const h = map.getTileCornerHeights(x, z)
       const landType = map.getBaseGroundType(x, z)
-      const waterY = map.waterLevel + 0.02
 
       landBase += addTileGeometry(
         landVertices,
@@ -368,23 +388,18 @@ export function buildTerrainMeshes(map, waterTexture, shadowInf = null) {
       )
 
       if (shouldRenderWater(map, x, z)) {
-        addTileGeometry(
-          waterVertices,
-          waterColors,
-          waterUVs,
-          waterIndices,
-          waterBase,
-          'water',
-          {
-            tl: waterY,
-            tr: waterY,
-            bl: waterY,
-            br: waterY
-          },
-          x,
-          z,
-          map
-        )
+        const wY = map.getTileWaterLevel(x, z) + 0.02
+        // World-space UVs so texture flows seamlessly across tile boundaries
+        const WATER_UV_SCALE = 5
+        const u0 = x / WATER_UV_SCALE
+        const u1 = (x + 1) / WATER_UV_SCALE
+        const v0 = z / WATER_UV_SCALE
+        const v1 = (z + 1) / WATER_UV_SCALE
+        const wc = groundColor('water', 1.0)
+        waterVertices.push(x, wY, z,  x+1, wY, z,  x, wY, z+1,  x+1, wY, z+1)
+        waterColors.push(wc.r, wc.g, wc.b, wc.r, wc.g, wc.b, wc.r, wc.g, wc.b, wc.r, wc.g, wc.b)
+        waterUVs.push(u0, v0,  u1, v0,  u0, v1,  u1, v1)
+        waterIndices.push(waterBase, waterBase+2, waterBase+1, waterBase+2, waterBase+3, waterBase+1)
         waterBase += 4
       }
     }
@@ -423,17 +438,16 @@ export function buildTerrainMeshes(map, waterTexture, shadowInf = null) {
     if (waterTexture) {
       waterTexture.wrapS = THREE.RepeatWrapping
       waterTexture.wrapT = THREE.RepeatWrapping
-      waterTexture.repeat.set(1, 1)
       waterTexture.colorSpace = THREE.SRGBColorSpace
     }
 
     const waterMaterial = new THREE.MeshLambertMaterial({
       map: waterTexture || null,
-      color: waterTexture ? 0xc9d9ff : 0x6b84b4,
-      flatShading: true,
+      color: waterTexture ? 0xd4e8ff : 0x6b84b4,
+      vertexColors: true,
       side: THREE.DoubleSide,
       transparent: true,
-      alphaTest: 0.02,
+      opacity: 0.88,
       polygonOffset: true,
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1
@@ -499,6 +513,8 @@ export function buildCliffMeshes(map) {
     for (let x = 0; x < map.width; x++) {
       const h = map.getTileCornerHeights(x, z)
 
+      const wLevel = map.getTileWaterLevel(x, z)
+
       const rightTile = map.getTile(x + 1, z)
       if (rightTile) {
         const rh = map.getTileCornerHeights(x + 1, z)
@@ -511,7 +527,8 @@ export function buildCliffMeshes(map) {
         const avgA = (aTop1 + aTop2) * 0.5
         const avgB = (bTop1 + bTop2) * 0.5
 
-        if (Math.abs(avgA - avgB) > 0.01) {
+        // Skip cliff if the taller side is submerged — wall would be hidden under water and creates visible squares
+        if (Math.abs(avgA - avgB) > 0.01 && Math.max(avgA, avgB) > wLevel) {
           if (avgA > avgB) {
             addVerticalFace(x + 1, z, aTop1, aTop2, bTop1, bTop2, true)
           } else {
@@ -532,7 +549,7 @@ export function buildCliffMeshes(map) {
         const avgA = (aTop1 + aTop2) * 0.5
         const avgB = (bTop1 + bTop2) * 0.5
 
-        if (Math.abs(avgA - avgB) > 0.01) {
+        if (Math.abs(avgA - avgB) > 0.01 && Math.max(avgA, avgB) > wLevel) {
           if (avgA > avgB) {
             addVerticalFace(x, z + 1, aTop1, aTop2, bTop1, bTop2, false)
           } else {

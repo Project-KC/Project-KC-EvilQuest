@@ -281,9 +281,8 @@ let brushRadius = 3.2
       <select id="assetGroupSelect" style="display:none"></select>
       <input id="assetSearch" type="text" placeholder="Search assets..." />
       <div id="assetGrid" class="asset-grid"></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:5px;">
-        <button id="switchPlaceBtn">Use in Place</button>
-        <button id="refreshPreviewBtn">Refresh</button>
+      <div style="margin-top:5px;">
+        <button id="refreshPreviewBtn" style="width:100%">Refresh Preview</button>
       </div>
     </div>
 
@@ -382,7 +381,6 @@ let brushRadius = 3.2
   const assetGroupSelect = sidebar.querySelector('#assetGroupSelect')
   const assetSearch = sidebar.querySelector('#assetSearch')
   const assetGrid = sidebar.querySelector('#assetGrid')
-  const switchPlaceBtn = sidebar.querySelector('#switchPlaceBtn')
   const refreshPreviewBtn = sidebar.querySelector('#refreshPreviewBtn')
 
   const textureSearch = sidebar.querySelector('#textureSearch')
@@ -425,7 +423,7 @@ let brushRadius = 3.2
     { id: 'sand',  label: 'Sand',  color: '#c4a245' },
     { id: 'path',  label: 'Path',  color: '#8a7860' },
     { id: 'road',  label: 'Road',  color: '#7a7870' },
-    { id: 'water', label: 'Water', color: '#4a6aaa' },
+    { id: 'water', label: 'Mud', color: '#5a3d1a' },
   ]
 
   function buildGroundSwatches() {
@@ -491,7 +489,7 @@ let brushRadius = 3.2
     }
 
     useTexturePlaneBtn.classList.toggle('active-tool', state.tool === ToolMode.TEXTURE_PLANE)
-    switchPlaceBtn.classList.toggle('active-tool', state.tool === ToolMode.PLACE)
+
 
     const vpCheckbox = sidebar.querySelector('#toggleTexturePlaneV')
     if (vpCheckbox) vpCheckbox.checked = texturePlaneVertical
@@ -1374,6 +1372,10 @@ function applyToolAtTile(tile, eventLike = null) {
     const model = await loadAssetModel(asset.path)
     tuneModelLighting(model, asset.path)
 
+    if (asset.name?.toLowerCase().includes('wall')) {
+      scaleObjectToTiles(model, 2)
+    }
+
     previewObject = makeGhostMaterial(model)
     previewObject.rotation.y = previewRotation
     previewObject.userData.assetId = asset.id
@@ -1623,7 +1625,15 @@ function applyToolAtTile(tile, eventLike = null) {
       return null
     }
 
-    const bounds = model.userData.bounds || { width: 1, height: 1, depth: 1 }
+    if (asset.name?.toLowerCase().includes('wall')) {
+      scaleObjectToTiles(model, 2)
+    }
+
+    // Recompute bounds after any scaling
+    const scaledBox = new THREE.Box3().setFromObject(model)
+    const scaledSize = new THREE.Vector3()
+    scaledBox.getSize(scaledSize)
+    const bounds = { width: scaledSize.x, height: scaledSize.y, depth: scaledSize.z }
     const maxDim = Math.max(bounds.width, bounds.height, bounds.depth, 0.01)
 
     // model is bottom-center pivoted — shift down so it's truly centered
@@ -1871,11 +1881,6 @@ function applyToolAtTile(tile, eventLike = null) {
   })
 
   assetSearch.addEventListener('input', refreshAssetList)
-
-  switchPlaceBtn.addEventListener('click', async () => {
-    setTool(ToolMode.PLACE)
-    await updatePreviewObject()
-  })
 
   refreshPreviewBtn.addEventListener('click', async () => {
     await updatePreviewObject()
