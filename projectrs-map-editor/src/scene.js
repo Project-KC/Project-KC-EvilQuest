@@ -262,6 +262,9 @@ let brushRadius = 3.2
         <label><input id="toggleHalfPaint" type="checkbox" /> Half Tile Paint</label>
         <label><input id="toggleSplitLines" type="checkbox" /> Show Split Lines</label>
       </div>
+      <div style="font-size:11px;opacity:0.6;margin:8px 0 4px;border-top:1px solid #444;padding-top:8px;">Texture Brushes</div>
+      <input id="paintTextureSearch" type="text" placeholder="Search textures..." style="width:100%;box-sizing:border-box;margin-bottom:5px;" />
+      <div id="paintTexturePalette" style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;max-height:200px;overflow-y:auto;"></div>
     </div>
 
     <div class="ctx-panel" id="ctx-place" style="display:none">
@@ -928,9 +931,10 @@ let brushRadius = 3.2
     const meta = textureMeta.get(textureId)
     if (!meta) return { width: 1, height: 1 }
 
+    const MAX_SIZE = 4
     return {
-      width: Math.max(0.25, meta.width / 64),
-      height: Math.max(0.25, meta.height / 64)
+      width: Math.min(MAX_SIZE, Math.max(0.25, meta.width / 64)),
+      height: Math.min(MAX_SIZE, Math.max(0.25, meta.height / 64))
     }
   }
 
@@ -1678,6 +1682,35 @@ function applyToolAtTile(tile, eventLike = null) {
     }
   }
 
+  const paintTexturePalette = sidebar.querySelector('#paintTexturePalette')
+  const paintTextureSearch = sidebar.querySelector('#paintTextureSearch')
+
+  function refreshPaintTexturePalette() {
+    if (!paintTexturePalette) return
+    const q = (paintTextureSearch?.value || '').trim().toLowerCase()
+    const list = textureRegistry.filter((tex) => {
+      const name = (tex.name || '').toLowerCase()
+      return !q || name.includes(q) || String(tex.id).toLowerCase().includes(q)
+    })
+    paintTexturePalette.innerHTML = ''
+    for (const tex of list) {
+      const img = document.createElement('img')
+      img.src = tex.path
+      img.title = tex.name || tex.id
+      img.style.cssText = `width:100%;aspect-ratio:1;object-fit:cover;cursor:pointer;border-radius:3px;border:2px solid ${tex.id === selectedTextureId && state.tool === ToolMode.TEXTURE ? '#2d6cdf' : 'transparent'};`
+      img.addEventListener('click', () => {
+        selectedTextureId = tex.id
+        setTool(ToolMode.TEXTURE)
+        refreshPaintTexturePalette()
+        refreshTexturePalette()
+        updateToolUI()
+      })
+      paintTexturePalette.appendChild(img)
+    }
+  }
+
+  paintTextureSearch?.addEventListener('input', refreshPaintTexturePalette)
+
   tabProps.addEventListener('click', async () => {
     assetSectionFilter = 'Models'
     assetGroupFilter = 'all'
@@ -2272,7 +2305,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
     }
 
     distance += e.deltaY * 0.01
-    distance = Math.max(10, Math.min(70, distance))
+    distance = Math.max(2, Math.min(120, distance))
     updateCamera()
   })
 
@@ -2533,6 +2566,7 @@ if (key === 'e') {
 
       selectedTextureId = filteredTextures[0]?.id || null
       refreshTexturePalette()
+      refreshPaintTexturePalette()
       rebuildTerrain()
       updateToolUI()
     } catch (err) {
