@@ -296,6 +296,13 @@ let brushRadius = 3.2
         Shift+A stack upward<br>
         Delete / Backspace remove selected
       </div>
+      <div id="replaceRow" style="display:none;margin-top:8px;border-top:1px solid #444;padding-top:8px;">
+        <button id="replaceBtn" style="width:100%">Replace Selected</button>
+        <div id="replacePanel" style="display:none;margin-top:6px;">
+          <input id="replaceSearch" type="text" placeholder="Search assets..." style="width:100%;box-sizing:border-box;margin-bottom:5px;" />
+          <div id="replaceGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;max-height:180px;overflow-y:auto;"></div>
+        </div>
+      </div>
       <div id="tileSizeRow" style="display:none;margin-top:8px;border-top:1px solid #444;padding-top:8px;">
         <div style="font-size:11px;opacity:0.6;margin-bottom:5px;">Scale to tiles (longest axis)</div>
         <div style="display:flex;gap:4px;flex-wrap:wrap;">
@@ -412,6 +419,50 @@ let brushRadius = 3.2
     rebuildTerrain()
   })
 
+  const replaceBtnEl = sidebar.querySelector('#replaceBtn')
+  const replacePanel = sidebar.querySelector('#replacePanel')
+  const replaceSearchEl = sidebar.querySelector('#replaceSearch')
+  const replaceGridEl = sidebar.querySelector('#replaceGrid')
+
+  function buildReplaceGrid() {
+    const q = replaceSearchEl.value.trim().toLowerCase()
+    const assets = assetRegistry.filter((a) => {
+      if (!a.path?.toLowerCase().includes('modular assets')) return false
+      return !q || (a.name || a.id).toLowerCase().includes(q)
+    })
+    replaceGridEl.innerHTML = ''
+    for (const asset of assets) {
+      const card = document.createElement('div')
+      card.className = 'asset-card'
+      const img = document.createElement('img')
+      img.className = 'asset-thumb'
+      img.alt = asset.name
+      const label = document.createElement('div')
+      label.className = 'asset-label'
+      label.textContent = asset.name
+      card.appendChild(img)
+      card.appendChild(label)
+      replaceGridEl.appendChild(card)
+      card.addEventListener('click', async () => {
+        await replaceSelectedWith(asset.id)
+        replacePanel.style.display = 'none'
+        replaceBtnEl.textContent = 'Replace Selected'
+      })
+      generateThumbnail(asset).then((url) => { if (url) img.src = url })
+    }
+  }
+
+  replaceBtnEl?.addEventListener('click', () => {
+    const isOpen = replacePanel.style.display !== 'none'
+    replacePanel.style.display = isOpen ? 'none' : 'block'
+    replaceBtnEl.textContent = isOpen ? 'Replace Selected' : 'Cancel'
+    if (!isOpen) {
+      replaceSearchEl.value = ''
+      buildReplaceGrid()
+    }
+  })
+  replaceSearchEl?.addEventListener('input', buildReplaceGrid)
+
   mapWidthInput.value = map.width
   mapHeightInput.value = map.height
 
@@ -524,6 +575,17 @@ let brushRadius = 3.2
     const tileSizeRow = sidebar.querySelector('#tileSizeRow')
     if (tileSizeRow) {
       tileSizeRow.style.display = (state.tool === ToolMode.SELECT && selectedPlacedObject) ? 'block' : 'none'
+    }
+    const replaceRowEl = sidebar.querySelector('#replaceRow')
+    if (replaceRowEl) {
+      const showReplace = state.tool === ToolMode.SELECT && selectedPlacedObjects.length > 0
+      replaceRowEl.style.display = showReplace ? 'block' : 'none'
+      if (!showReplace) {
+        const rp = sidebar.querySelector('#replacePanel')
+        const rb = sidebar.querySelector('#replaceBtn')
+        if (rp) rp.style.display = 'none'
+        if (rb) rb.textContent = 'Replace Selected'
+      }
     }
     if (transformMode) {
       let axisLabel = 'ALL'
@@ -1078,6 +1140,11 @@ let brushRadius = 3.2
     position.z = snapValue(position.z, step)
   }
 
+  function isStoneModularAsset(asset) {
+    const p = asset?.path?.toLowerCase() ?? ''
+    return p.includes('stone modular') || p.includes('dark stone modular')
+  }
+
   function isModularAsset(assetId) {
     const asset = assetRegistry.find((a) => a.id === assetId)
     return asset?.path?.toLowerCase().includes('modular assets') ?? false
@@ -1372,6 +1439,7 @@ function applyToolAtTile(tile, eventLike = null) {
     const model = await loadAssetModel(asset.path)
     tuneModelLighting(model, asset.path)
 
+    if (isStoneModularAsset(asset)) model.scale.y = 1
     if (asset.name?.toLowerCase().includes('wall')) {
       scaleObjectToTiles(model, 2)
     }
@@ -1394,6 +1462,7 @@ function applyToolAtTile(tile, eventLike = null) {
     const model = await loadAssetModel(asset.path)
     tuneModelLighting(model, asset.path)
 
+    if (isStoneModularAsset(asset)) model.scale.y = 1
     if (asset.name?.toLowerCase().includes('wall')) {
       scaleObjectToTiles(model, 2)
     }
@@ -1411,6 +1480,31 @@ function applyToolAtTile(tile, eventLike = null) {
     model.userData.type = 'asset'
     placedGroup.add(model)
     rebuildTerrain()
+  }
+
+  async function replaceSelectedWith(assetId) {
+    if (!selectedPlacedObjects.length) return
+    const newAsset = assetRegistry.find((a) => a.id === assetId)
+    if (!newAsset) return
+    pushUndoState()
+    const replacements = []
+    for (const obj of [...selectedPlacedObjects]) {
+      const model = await loadAssetModel(newAsset.path)
+      tuneModelLighting(model, newAsset.path)
+      model.position.copy(obj.position)
+      model.rotation.copy(obj.rotation)
+      model.scale.copy(obj.scale)
+      model.userData.assetId = newAsset.id
+      model.userData.type = 'asset'
+      placedGroup.remove(obj)
+      placedGroup.add(model)
+      replacements.push(model)
+    }
+    selectedPlacedObjects = replacements
+    selectedPlacedObject = replacements[replacements.length - 1] || null
+    rebuildTerrain()
+    updateSelectionHelper()
+    updateToolUI()
   }
 
   async function duplicateSelected(mode = 'right') {
@@ -1625,6 +1719,7 @@ function applyToolAtTile(tile, eventLike = null) {
       return null
     }
 
+    if (isStoneModularAsset(asset)) model.scale.y = 1
     if (asset.name?.toLowerCase().includes('wall')) {
       scaleObjectToTiles(model, 2)
     }
@@ -2186,6 +2281,11 @@ function applyToolAtTile(tile, eventLike = null) {
     }
 
     if (isDragSelecting && dragSelectStart) {
+      const dx = event.clientX - dragSelectStart.x
+      const dy = event.clientY - dragSelectStart.y
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
+        dragSelectBox.style.display = 'block'
+      }
       updateDragSelectBox(dragSelectStart.x, dragSelectStart.y, event.clientX, event.clientY)
       return
     }
@@ -2271,12 +2371,10 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
         return
       }
 
-      // No object hit — start drag select
+      // No object hit — deselect immediately; show drag box only if mouse moves
+      if (!event.shiftKey) clearSelection()
       isDragSelecting = true
       dragSelectStart = { x: event.clientX, y: event.clientY }
-      dragSelectBox.style.display = 'block'
-      updateDragSelectBox(event.clientX, event.clientY, event.clientX, event.clientY)
-      if (!event.shiftKey) clearSelection()
       return
     }
 
