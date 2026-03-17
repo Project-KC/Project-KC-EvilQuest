@@ -199,6 +199,7 @@ let brushRadius = 3.2
     <span class="top-sep"></span>
     <button id="saveMapBtn">Save</button>
     <label class="file-label">Load <input id="loadMapInput" type="file" accept=".json" /></label>
+    <label class="file-label">Import Chunk <input id="importChunkInput" type="file" accept=".json" /></label>
     <button id="restoreAutoSaveBtn">Restore Auto-Save</button>
     <span class="top-sep"></span>
     <span class="top-label">W</span>
@@ -621,6 +622,50 @@ let brushRadius = 3.2
     mapHeightInput.value = map.height
     rebuildTerrain()
     updateSelectionHelper()
+    updateToolUI()
+  }
+
+  async function importChunk(data, offsetX, offsetZ) {
+    if (!data?.map) return
+    pushUndoState()
+
+    const src = MapData.fromJSON(data.map)
+
+    // Merge tiles
+    for (let z = 0; z < src.height; z++) {
+      for (let x = 0; x < src.width; x++) {
+        const dx = x + offsetX, dz = z + offsetZ
+        if (dx >= 0 && dx < map.width && dz >= 0 && dz < map.height) {
+          map.tiles[dz][dx] = JSON.parse(JSON.stringify(src.tiles[z][x]))
+        }
+      }
+    }
+
+    // Merge height vertices
+    for (let z = 0; z <= src.height; z++) {
+      for (let x = 0; x <= src.width; x++) {
+        const dx = x + offsetX, dz = z + offsetZ
+        if (dx >= 0 && dx <= map.width && dz >= 0 && dz <= map.height) {
+          map.setVertexHeight(dx, dz, src.getVertexHeight(x, z))
+        }
+      }
+    }
+
+    // Add placed objects shifted by offset
+    for (const placed of data.placedObjects || []) {
+      const asset = assetRegistry.find((a) => a.id === placed.assetId)
+      if (!asset) continue
+      const model = await loadAssetModel(asset.path)
+      tuneModelLighting(model, asset.path)
+      model.position.set(placed.position.x + offsetX, placed.position.y, placed.position.z + offsetZ)
+      model.rotation.set(placed.rotation.x, placed.rotation.y, placed.rotation.z)
+      model.scale.set(placed.scale.x, placed.scale.y, placed.scale.z)
+      model.userData.assetId = asset.id
+      model.userData.type = 'asset'
+      placedGroup.add(model)
+    }
+
+    rebuildTerrain()
     updateToolUI()
   }
 
@@ -1880,6 +1925,30 @@ function applyToolAtTile(tile, eventLike = null) {
     const data = JSON.parse(text)
     await loadSaveData(data)
     loadMapInput.value = ''
+  })
+
+  const importChunkInput = topBar.querySelector('#importChunkInput')
+  importChunkInput.addEventListener('change', async (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    const text = await file.text()
+    const data = JSON.parse(text)
+    importChunkInput.value = ''
+
+    const rawX = prompt('Import at tile X offset:', '0')
+    if (rawX === null) return
+    const rawZ = prompt('Import at tile Z offset:', '0')
+    if (rawZ === null) return
+
+    const offsetX = parseInt(rawX, 10) || 0
+    const offsetZ = parseInt(rawZ, 10) || 0
+
+    await importChunk(data, offsetX, offsetZ)
+
+    const prev = statusText.textContent
+    statusText.textContent = `Chunk imported at (${offsetX}, ${offsetZ})`
+    setTimeout(() => { statusText.textContent = prev }, 2500)
   })
 
   resizeMapBtn.addEventListener('click', () => {
