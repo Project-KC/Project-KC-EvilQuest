@@ -477,3 +477,97 @@ canvas {
   line-height: 1;
   pointer-events: none;
 }
+
+/* Layers panel */
+#layersPanel {
+  display: none;
+  position: fixed;
+  top: 54px;
+  right: 10px;
+  width: 180px;
+  background: rgba(6, 12, 22, 0.97);
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 8px;
+  padding: 10px 12px;
+  z-index: 50;
+  pointer-events: auto;
+  color: #bbb;
+  font-size: 12px;
+}
+
+#layersPanel.visible {
+  display: block;
+}
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  margin-bottom: 2px;
+  cursor: pointer;
+}
+
+.layer-row:hover {
+  background: rgba(255,255,255,0.06);
+}
+
+.layer-row.active {
+  background: rgba(26, 79, 175, 0.35);
+  border: 1px solid rgba(85, 144, 255, 0.4);
+}
+
+.layer-eye {
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.layer-eye:hover { color: #fff; }
+
+.layer-name {
+  flex: 1;
+  font-size: 11px;
+  color: #ccc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+}
+
+.layer-row.active .layer-name { color: #fff; }
+
+.layer-del {
+  background: none;
+  border: none;
+  color: #555;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+
+.layer-del:hover { color: #e84040; }
+
+.layer-add-btn {
+  width: 100%;
+  margin-top: 6px;
+  padding: 5px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 4px;
+  color: #aaa;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.layer-add-btn:hover {
+  background: rgba(255,255,255,0.12);
+  color: #fff;
+}

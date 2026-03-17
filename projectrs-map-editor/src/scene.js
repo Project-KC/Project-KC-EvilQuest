@@ -130,6 +130,10 @@ function tuneModelLighting(model, assetPath = '') {
   let textureRotation = 0
   let textureScale = 1
 
+  let layers = [{ id: 'layer_0', name: 'Layer 1', visible: true }]
+  let activeLayerId = 'layer_0'
+  let _layerCount = 1
+
   let selectedPlacedObject = null
   let selectedPlacedObjects = []
   let selectedTexturePlane = null
@@ -243,6 +247,7 @@ let brushRadius = 3.2
       <button id="toolPlace" class="tool-btn" title="Place Asset (3)">Place</button>
       <button id="toolSelect" class="tool-btn" title="Select (4)">Select</button>
       <button id="toolTexturePlane" class="tool-btn" title="Texture Plane (5)">T.Plane</button>
+      <button id="layersToggleBtn" class="tool-btn" title="Toggle Layers panel">Layers</button>
     </div>
     <div class="ctx-divider"></div>
 
@@ -295,6 +300,10 @@ let brushRadius = 3.2
         Shift+D duplicate right · Alt+D forward<br>
         Shift+A stack upward<br>
         Delete / Backspace remove selected
+      </div>
+      <div id="layerAssignRow" style="display:none;margin-top:8px;border-top:1px solid #444;padding-top:8px;">
+        <div style="font-size:11px;opacity:0.6;margin-bottom:4px;">Layer</div>
+        <select id="layerAssignSelect" style="width:100%;"></select>
       </div>
       <div id="replaceRow" style="display:none;margin-top:8px;border-top:1px solid #444;padding-top:8px;">
         <button id="replaceBtn" style="width:100%">Replace Selected</button>
@@ -358,6 +367,10 @@ let brushRadius = 3.2
     </div>
   `
   uiRoot.appendChild(keybindsPanel)
+
+  const layersPanel = document.createElement('div')
+  layersPanel.id = 'layersPanel'
+  uiRoot.appendChild(layersPanel)
 
   const toolButtons = {
     [ToolMode.TERRAIN]: sidebar.querySelector('#toolTerrain'),
@@ -506,6 +519,92 @@ let brushRadius = 3.2
     }
   }
 
+  function applyLayerVisibility() {
+    for (const obj of placedGroup.children) {
+      const layer = layers.find((l) => l.id === (obj.userData.layerId || 'layer_0'))
+      obj.visible = layer ? layer.visible : true
+    }
+  }
+
+  function refreshLayersPanel() {
+    layersPanel.innerHTML = ''
+
+    const header = document.createElement('div')
+    header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;'
+    const title = document.createElement('strong')
+    title.style.cssText = 'color:#fff;font-size:12px;'
+    title.textContent = 'Layers'
+    const closeBtn = document.createElement('button')
+    closeBtn.style.cssText = 'background:none;border:none;color:#888;cursor:pointer;font-size:14px;padding:0;'
+    closeBtn.textContent = '✕'
+    closeBtn.addEventListener('click', () => layersPanel.classList.remove('visible'))
+    header.appendChild(title)
+    header.appendChild(closeBtn)
+    layersPanel.appendChild(header)
+
+    for (const layer of layers) {
+      const row = document.createElement('div')
+      row.className = 'layer-row' + (layer.id === activeLayerId ? ' active' : '')
+
+      const eyeBtn = document.createElement('button')
+      eyeBtn.className = 'layer-eye'
+      eyeBtn.textContent = layer.visible ? '●' : '○'
+      eyeBtn.title = layer.visible ? 'Hide layer' : 'Show layer'
+      eyeBtn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        layer.visible = !layer.visible
+        applyLayerVisibility()
+        refreshLayersPanel()
+      })
+
+      const nameEl = document.createElement('div')
+      nameEl.className = 'layer-name'
+      nameEl.textContent = layer.name
+      nameEl.title = 'Click to set active'
+      nameEl.addEventListener('click', () => {
+        activeLayerId = layer.id
+        refreshLayersPanel()
+        updateToolUI()
+      })
+
+      const delBtn = document.createElement('button')
+      delBtn.className = 'layer-del'
+      delBtn.textContent = '✕'
+      delBtn.title = 'Delete layer'
+      delBtn.style.display = layers.length <= 1 ? 'none' : ''
+      delBtn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        const fallbackId = layers.find((l) => l.id !== layer.id)?.id || 'layer_0'
+        for (const obj of placedGroup.children) {
+          if (obj.userData.layerId === layer.id) obj.userData.layerId = fallbackId
+        }
+        layers = layers.filter((l) => l.id !== layer.id)
+        if (activeLayerId === layer.id) activeLayerId = fallbackId
+        applyLayerVisibility()
+        refreshLayersPanel()
+        updateToolUI()
+      })
+
+      row.appendChild(eyeBtn)
+      row.appendChild(nameEl)
+      row.appendChild(delBtn)
+      layersPanel.appendChild(row)
+    }
+
+    const addBtn = document.createElement('button')
+    addBtn.className = 'layer-add-btn'
+    addBtn.textContent = '+ New Layer'
+    addBtn.addEventListener('click', () => {
+      _layerCount++
+      const id = 'layer_' + Date.now()
+      layers.push({ id, name: 'Layer ' + _layerCount, visible: true })
+      activeLayerId = id
+      refreshLayersPanel()
+      updateToolUI()
+    })
+    layersPanel.appendChild(addBtn)
+  }
+
   function updateToolUI() {
     for (const [mode, button] of Object.entries(toolButtons)) {
       if (button) button.classList.toggle('active-tool', state.tool === mode)
@@ -575,6 +674,20 @@ let brushRadius = 3.2
     const tileSizeRow = sidebar.querySelector('#tileSizeRow')
     if (tileSizeRow) {
       tileSizeRow.style.display = (state.tool === ToolMode.SELECT && selectedPlacedObject) ? 'block' : 'none'
+    }
+    const layerAssignRow = sidebar.querySelector('#layerAssignRow')
+    if (layerAssignRow) {
+      const showAssign = state.tool === ToolMode.SELECT && selectedPlacedObjects.length > 0
+      layerAssignRow.style.display = showAssign ? 'block' : 'none'
+      if (showAssign) {
+        const sel = sidebar.querySelector('#layerAssignSelect')
+        if (sel) {
+          const currentId = selectedPlacedObject?.userData?.layerId || 'layer_0'
+          sel.innerHTML = layers.map((l) =>
+            `<option value="${l.id}"${l.id === currentId ? ' selected' : ''}>${l.name}</option>`
+          ).join('')
+        }
+      }
     }
     const replaceRowEl = sidebar.querySelector('#replaceRow')
     if (replaceRowEl) {
@@ -657,6 +770,7 @@ let brushRadius = 3.2
   function serializePlacedObjects() {
     return placedGroup.children.map((obj) => ({
       assetId: obj.userData.assetId || null,
+      layerId: obj.userData.layerId || 'layer_0',
       position: { x: obj.position.x, y: obj.position.y, z: obj.position.z },
       rotation: { x: obj.rotation.x, y: obj.rotation.y, z: obj.rotation.z },
       scale: { x: obj.scale.x, y: obj.scale.y, z: obj.scale.z }
@@ -678,6 +792,9 @@ let brushRadius = 3.2
       model.scale.set(placed.scale.x, placed.scale.y, placed.scale.z)
       model.userData.assetId = asset.id
       model.userData.type = 'asset'
+      model.userData.layerId = placed.layerId || 'layer_0'
+      const layer = layers.find((l) => l.id === model.userData.layerId)
+      model.visible = layer ? layer.visible : true
       placedGroup.add(model)
     }
   }
@@ -685,7 +802,9 @@ let brushRadius = 3.2
   function buildSaveData() {
     return {
       map: map.toJSON(),
-      placedObjects: serializePlacedObjects()
+      placedObjects: serializePlacedObjects(),
+      layers: JSON.parse(JSON.stringify(layers)),
+      activeLayerId
     }
   }
 
@@ -725,6 +844,17 @@ let brushRadius = 3.2
     transformLift = 0
     movePlaneStart = null
     state.levelHeight = null
+
+    if (data.layers?.length) {
+      layers = data.layers
+      activeLayerId = data.activeLayerId || layers[0].id
+      _layerCount = layers.length
+    } else {
+      layers = [{ id: 'layer_0', name: 'Layer 1', visible: true }]
+      activeLayerId = 'layer_0'
+      _layerCount = 1
+    }
+    refreshLayersPanel()
 
     await rebuildPlacedObjectsFromData(data.placedObjects || [])
 
@@ -772,6 +902,9 @@ let brushRadius = 3.2
       model.scale.set(placed.scale.x, placed.scale.y, placed.scale.z)
       model.userData.assetId = asset.id
       model.userData.type = 'asset'
+      model.userData.layerId = placed.layerId || activeLayerId
+      const _layer = layers.find((l) => l.id === model.userData.layerId)
+      model.visible = _layer ? _layer.visible : true
       placedGroup.add(model)
     }
 
@@ -1056,6 +1189,9 @@ let brushRadius = 3.2
     model.scale.set(placed.scale.x, placed.scale.y, placed.scale.z)
     model.userData.assetId = asset.id
     model.userData.type = 'asset'
+    model.userData.layerId = placed.layerId || activeLayerId
+    const _importLayer = layers.find((l) => l.id === model.userData.layerId)
+    model.visible = _importLayer ? _importLayer.visible : true
     placedGroup.add(model)
   }
 
@@ -1478,6 +1614,7 @@ function applyToolAtTile(tile, eventLike = null) {
     model.rotation.y = previewRotation
     model.userData.assetId = asset.id
     model.userData.type = 'asset'
+    model.userData.layerId = activeLayerId
     placedGroup.add(model)
     rebuildTerrain()
   }
@@ -1496,6 +1633,9 @@ function applyToolAtTile(tile, eventLike = null) {
       model.scale.copy(obj.scale)
       model.userData.assetId = newAsset.id
       model.userData.type = 'asset'
+      model.userData.layerId = obj.userData.layerId || activeLayerId
+      const _rLayer = layers.find((l) => l.id === model.userData.layerId)
+      model.visible = _rLayer ? _rLayer.visible : true
       placedGroup.remove(obj)
       placedGroup.add(model)
       replacements.push(model)
@@ -1544,6 +1684,7 @@ function applyToolAtTile(tile, eventLike = null) {
       model.scale.copy(selectedPlacedObject.scale)
       model.userData.assetId = asset.id
       model.userData.type = 'asset'
+      model.userData.layerId = selectedPlacedObject.userData.layerId || activeLayerId
 
       placedGroup.add(model)
 
@@ -2164,6 +2305,19 @@ function applyToolAtTile(tile, eventLike = null) {
     keybindsPanel.classList.remove('visible')
   })
 
+  sidebar.querySelector('#layersToggleBtn').addEventListener('click', () => {
+    layersPanel.classList.toggle('visible')
+    if (layersPanel.classList.contains('visible')) refreshLayersPanel()
+  })
+
+  sidebar.querySelector('#layerAssignSelect')?.addEventListener('change', (e) => {
+    const newLayerId = e.target.value
+    for (const obj of selectedPlacedObjects) {
+      obj.userData.layerId = newLayerId
+    }
+    applyLayerVisibility()
+  })
+
   rotateTextureBtn.addEventListener('click', () => {
     textureRotation = (textureRotation + 1) % 4
     rebuildTerrain()
@@ -2230,10 +2384,12 @@ function applyToolAtTile(tile, eventLike = null) {
     }
 
     if (transformMode === 'move' && selectedPlacedObject && terrainPoint) {
-      const movingIsModular = isModularAsset(selectedPlacedObject.userData.assetId)
+      const _movingAsset = assetRegistry.find((a) => a.id === selectedPlacedObject.userData.assetId)
+      const movingIsWallModular = isModularAsset(selectedPlacedObject.userData.assetId)
+        && _movingAsset?.name?.toLowerCase().includes('wall')
 
       let snappedX, snappedZ
-      if (movingIsModular && !event.altKey) {
+      if (movingIsWallModular && !event.altKey) {
         const snap = findModularEdgeSnap(selectedPlacedObject, terrainPoint.x, terrainPoint.z)
         snappedX = snap.x
         snappedZ = snap.z
@@ -2890,6 +3046,7 @@ if (key === 'e') {
 
   rebuildTerrain()
   buildGroundSwatches()
+  refreshLayersPanel()
   updateToolUI()
   initAssets()
   initTextures()
