@@ -130,8 +130,10 @@ function tuneModelLighting(model, assetPath = '') {
   let textureScale = 1
 
   let selectedPlacedObject = null
+  let selectedPlacedObjects = []
   let selectedTexturePlane = null
   let selectionHelper = null
+  let saveFileHandle = null
 
   let transformMode = null
   let transformAxis = 'all'
@@ -282,8 +284,9 @@ let brushRadius = 3.2
         G move · R rotate · S scale<br>
         X Y Z axis lock · click confirm · Esc cancel<br>
         Q/E raise/lower while moving · Shift snap<br>
+        Alt free move (bypass snap) · K snap to grid<br>
         Shift+D duplicate right · Alt+D forward<br>
-        Shift+A stack upward · K snap to grid<br>
+        Shift+A stack upward<br>
         Delete / Backspace remove selected
       </div>
     </div>
@@ -488,18 +491,29 @@ let brushRadius = 3.2
   }
 
   function clearSelectionHelper() {
-    if (selectionHelper) {
+    if (Array.isArray(selectionHelper)) {
+      for (const h of selectionHelper) scene.remove(h)
+    } else if (selectionHelper) {
       scene.remove(selectionHelper)
-      selectionHelper = null
     }
+    selectionHelper = null
   }
 
   function updateSelectionHelper() {
     clearSelectionHelper()
 
-    if (selectedPlacedObject) {
-      selectionHelper = new THREE.BoxHelper(selectedPlacedObject, 0x66ccff)
+    if (selectedPlacedObjects.length === 1) {
+      selectionHelper = new THREE.BoxHelper(selectedPlacedObjects[0], 0x66ccff)
       scene.add(selectionHelper)
+      return
+    }
+
+    if (selectedPlacedObjects.length > 1) {
+      selectionHelper = selectedPlacedObjects.map((obj) => {
+        const h = new THREE.BoxHelper(obj, 0xffaa44)
+        scene.add(h)
+        return h
+      })
       return
     }
 
@@ -516,6 +530,7 @@ let brushRadius = 3.2
 
   function clearSelection() {
     selectedPlacedObject = null
+    selectedPlacedObjects = []
     selectedTexturePlane = null
     transformMode = null
     transformStart = null
@@ -589,6 +604,7 @@ let brushRadius = 3.2
 
     map = MapData.fromJSON(data.map)
     selectedPlacedObject = null
+    selectedPlacedObjects = []
     selectedTexturePlane = null
     transformMode = null
     transformStart = null
@@ -615,6 +631,7 @@ let brushRadius = 3.2
   async function applySnapshot(snapshot) {
     map = MapData.fromJSON(snapshot.map)
     selectedPlacedObject = null
+    selectedPlacedObjects = []
     selectedTexturePlane = null
     transformMode = null
     transformStart = null
@@ -926,6 +943,62 @@ let brushRadius = 3.2
     position.z = snapValue(position.z, step)
   }
 
+  function isModularAsset(assetId) {
+    const asset = assetRegistry.find((a) => a.id === assetId)
+    return asset?.path?.toLowerCase().includes('modular assets') ?? false
+  }
+
+  function findModularEdgeSnap(movingObj, targetX, targetZ) {
+    const THRESHOLD = 0.65
+
+    // Local extents relative to the object's position (constant while translating)
+    const movingBox = new THREE.Box3().setFromObject(movingObj)
+    const lMinX = movingBox.min.x - movingObj.position.x
+    const lMaxX = movingBox.max.x - movingObj.position.x
+    const lMinZ = movingBox.min.z - movingObj.position.z
+    const lMaxZ = movingBox.max.z - movingObj.position.z
+
+    // Predicted bbox at target position
+    const tMinX = targetX + lMinX
+    const tMaxX = targetX + lMaxX
+    const tMinZ = targetZ + lMinZ
+    const tMaxZ = targetZ + lMaxZ
+
+    let bestX = null, bestZ = null
+    let bestDX = THRESHOLD, bestDZ = THRESHOLD
+
+    for (const other of placedGroup.children) {
+      if (selectedPlacedObjects.includes(other)) continue
+      if (!isModularAsset(other.userData.assetId)) continue
+
+      const ob = new THREE.Box3().setFromObject(other)
+
+      // X: my left→other right, my right→other left, center align
+      for (const [d, snap] of [
+        [Math.abs(tMinX - ob.max.x), ob.max.x - lMinX],
+        [Math.abs(tMaxX - ob.min.x), ob.min.x - lMaxX],
+        [Math.abs(targetX - other.position.x), other.position.x],
+      ]) {
+        if (d < bestDX) { bestDX = d; bestX = snap }
+      }
+
+      // Z: my front→other back, my back→other front, center align
+      for (const [d, snap] of [
+        [Math.abs(tMinZ - ob.max.z), ob.max.z - lMinZ],
+        [Math.abs(tMaxZ - ob.min.z), ob.min.z - lMaxZ],
+        [Math.abs(targetZ - other.position.z), other.position.z],
+      ]) {
+        if (d < bestDZ) { bestDZ = d; bestZ = snap }
+      }
+    }
+
+    // Fall back to 1-unit grid if no nearby object edge found
+    return {
+      x: bestX ?? snapValue(targetX, 1.0),
+      z: bestZ ?? snapValue(targetZ, 1.0)
+    }
+  }
+
   function getRightVector(rotY) {
     return {
       x: Math.cos(rotY),
@@ -950,8 +1023,9 @@ let brushRadius = 3.2
     }
 
     if (selectedPlacedObject) {
-      selectedPlacedObject.position.x = snapValue(selectedPlacedObject.position.x, 0.5)
-      selectedPlacedObject.position.z = snapValue(selectedPlacedObject.position.z, 0.5)
+      const step = isModularAsset(selectedPlacedObject.userData.assetId) ? 1.0 : 0.5
+      selectedPlacedObject.position.x = snapValue(selectedPlacedObject.position.x, step)
+      selectedPlacedObject.position.z = snapValue(selectedPlacedObject.position.z, step)
       updateSelectionHelper()
       updateToolUI()
     }
@@ -1288,7 +1362,10 @@ function applyToolAtTile(tile, eventLike = null) {
           y: selectedPlacedObject.rotation.y,
           z: selectedPlacedObject.rotation.z
         },
-        scale: selectedPlacedObject.scale.clone()
+        scale: selectedPlacedObject.scale.clone(),
+        groupStarts: selectedPlacedObjects
+          .filter((o) => o !== selectedPlacedObject)
+          .map((o) => ({ obj: o, position: o.position.clone() }))
       }
     }
 
@@ -1315,6 +1392,13 @@ function applyToolAtTile(tile, eventLike = null) {
         transformStart.rotation.z
       )
       selectedPlacedObject.scale.copy(transformStart.scale)
+
+      if (transformStart.groupStarts?.length) {
+        for (const { obj, position } of transformStart.groupStarts) {
+          obj.position.copy(position)
+        }
+      }
+
       updateSelectionHelper()
     }
 
@@ -1658,8 +1742,32 @@ function applyToolAtTile(tile, eventLike = null) {
     levelHeightInput.value = ''
   })
 
-  saveMapBtn.addEventListener('click', () => {
-    downloadJSON('projectrs-map.json', buildSaveData())
+  saveMapBtn.addEventListener('click', async () => {
+    const data = JSON.stringify(buildSaveData(), null, 2)
+    if (window.showSaveFilePicker) {
+      try {
+        if (!saveFileHandle) {
+          saveFileHandle = await window.showSaveFilePicker({
+            suggestedName: 'main.json',
+            startIn: 'documents',
+            types: [{ description: 'JSON Map', accept: { 'application/json': ['.json'] } }]
+          })
+        }
+        const writable = await saveFileHandle.createWritable()
+        await writable.write(data)
+        await writable.close()
+        const prev = statusText.textContent
+        statusText.textContent = 'Saved'
+        setTimeout(() => { statusText.textContent = prev }, 1500)
+      } catch (e) {
+        if (e.name !== 'AbortError') {
+          console.warn('Save failed:', e)
+          downloadJSON('main.json', buildSaveData())
+        }
+      }
+    } else {
+      downloadJSON('main.json', buildSaveData())
+    }
   })
 
   const restoreAutoSaveBtn = topBar.querySelector('#restoreAutoSaveBtn')
@@ -1688,6 +1796,7 @@ function applyToolAtTile(tile, eventLike = null) {
     pushUndoState()
     map = map.resize(newWidth, newHeight)
     selectedPlacedObject = null
+    selectedPlacedObjects = []
     selectedTexturePlane = null
     transformMode = null
     transformStart = null
@@ -1785,8 +1894,17 @@ function applyToolAtTile(tile, eventLike = null) {
     }
 
     if (transformMode === 'move' && selectedPlacedObject && terrainPoint) {
-      const snappedX = event.shiftKey ? snapValue(terrainPoint.x, 0.5) : terrainPoint.x
-      const snappedZ = event.shiftKey ? snapValue(terrainPoint.z, 0.5) : terrainPoint.z
+      const movingIsModular = isModularAsset(selectedPlacedObject.userData.assetId)
+
+      let snappedX, snappedZ
+      if (movingIsModular && !event.altKey) {
+        const snap = findModularEdgeSnap(selectedPlacedObject, terrainPoint.x, terrainPoint.z)
+        snappedX = snap.x
+        snappedZ = snap.z
+      } else {
+        snappedX = event.shiftKey ? snapValue(terrainPoint.x, 0.5) : terrainPoint.x
+        snappedZ = event.shiftKey ? snapValue(terrainPoint.z, 0.5) : terrainPoint.z
+      }
 
       if (transformAxis === 'x') {
         selectedPlacedObject.position.x = snappedX
@@ -1803,14 +1921,22 @@ function applyToolAtTile(tile, eventLike = null) {
         const deltaY = (movePlaneStart.mouseY - event.clientY) * 0.02
         selectedPlacedObject.position.y = movePlaneStart.value + deltaY
       } else {
-        selectedPlacedObject.position.set(
-          snappedX,
-          terrainPoint.y + transformLift,
-          snappedZ
-        )
+        const targetY = transformLift !== 0
+          ? selectedPlacedObject.position.y
+          : terrainPoint.y
+        selectedPlacedObject.position.set(snappedX, targetY, snappedZ)
       }
 
-      updateSelectionHelper()
+      // Move group members by the same delta as the primary
+      if (transformStart?.groupStarts?.length) {
+        const dx = selectedPlacedObject.position.x - transformStart.position.x
+        const dy = selectedPlacedObject.position.y - transformStart.position.y
+        const dz = selectedPlacedObject.position.z - transformStart.position.z
+        for (const { obj, position } of transformStart.groupStarts) {
+          obj.position.set(position.x + dx, position.y + dy, position.z + dz)
+        }
+      }
+
       return
     }
 
@@ -1891,14 +2017,26 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
 
       const pickedObject = pickPlacedObject(event)
       if (pickedObject) {
-        selectedPlacedObject = pickedObject
+        if (event.shiftKey) {
+          const idx = selectedPlacedObjects.indexOf(pickedObject)
+          if (idx >= 0) {
+            selectedPlacedObjects.splice(idx, 1)
+            selectedPlacedObject = selectedPlacedObjects[selectedPlacedObjects.length - 1] ?? null
+          } else {
+            selectedPlacedObjects.push(pickedObject)
+            selectedPlacedObject = pickedObject
+          }
+        } else {
+          selectedPlacedObjects = [pickedObject]
+          selectedPlacedObject = pickedObject
+        }
         selectedTexturePlane = null
         updateSelectionHelper()
         updateToolUI()
         return
       }
 
-      clearSelection()
+      if (!event.shiftKey) clearSelection()
       return
     }
 
@@ -2106,10 +2244,11 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
         return
       }
 
-      if (selectedPlacedObject) {
+      if (selectedPlacedObjects.length > 0) {
         pushUndoState()
-        placedGroup.remove(selectedPlacedObject)
+        for (const obj of selectedPlacedObjects) placedGroup.remove(obj)
         selectedPlacedObject = null
+        selectedPlacedObjects = []
         rebuildTerrain()
         updateSelectionHelper()
         updateToolUI()
@@ -2130,12 +2269,15 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
     }
 
     if (transformMode === 'move') {
-      if (key === 'q') {
-        transformLift += 0.1
-        return
-      }
-      if (key === 'e') {
-        transformLift -= 0.1
+      if (key === 'q' || key === 'e') {
+        const delta = key === 'q' ? 0.1 : -0.1
+        transformLift += delta
+        if (selectedPlacedObject) {
+          selectedPlacedObject.position.y += delta
+          if (transformStart?.groupStarts?.length) {
+            for (const { obj } of transformStart.groupStarts) obj.position.y += delta
+          }
+        }
         return
       }
     }
@@ -2341,7 +2483,11 @@ if (key === 'e') {
 
   function animate() {
     requestAnimationFrame(animate)
-    if (selectionHelper) selectionHelper.update()
+    if (Array.isArray(selectionHelper)) {
+      for (const h of selectionHelper) h.update()
+    } else if (selectionHelper) {
+      selectionHelper.update()
+    }
     const t = performance.now() * 0.0003
     waterTexture.offset.set(t * 0.18, t * 0.09)
     renderer.render(scene, camera)
