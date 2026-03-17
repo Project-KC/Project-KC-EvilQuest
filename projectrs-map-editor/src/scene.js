@@ -152,6 +152,7 @@ function tuneModelLighting(model, assetPath = '') {
   let terrainGroup = null
   let cliffs = null
   let splitLines = null
+  let tileGrid = null
   let textureOverlayGroup = null
   let texturePlaneGroup = null
 
@@ -167,6 +168,7 @@ const state = {
   halfPaint: false,
   hovered: { x: 0, z: 0 },
   showSplitLines: false,
+  showTileGrid: false,
   isPainting: false,
   draggedTiles: new Set(),
   levelMode: false,
@@ -270,6 +272,7 @@ let brushRadius = 3.2
       <div class="row">
         <label><input id="toggleHalfPaint" type="checkbox" /> Half Tile Paint</label>
         <label><input id="toggleSplitLines" type="checkbox" /> Show Split Lines</label>
+        <label><input id="toggleTileGrid" type="checkbox" /> Show Tile Grid</label>
       </div>
       <div style="font-size:11px;opacity:0.6;margin:8px 0 4px;border-top:1px solid #444;padding-top:8px;">Texture Brushes</div>
       <button id="eraseTextureBrushBtn" style="width:100%;margin-bottom:5px;">Erase Texture</button>
@@ -993,6 +996,47 @@ let brushRadius = 3.2
     return lines
   }
 
+  function buildTileGrid() {
+    const points = []
+    const LIFT = 0.04
+
+    for (let z = 0; z < map.height; z++) {
+      for (let x = 0; x < map.width; x++) {
+        const h = map.getTileCornerHeights(x, z)
+
+        // top edge
+        points.push(
+          new THREE.Vector3(x,     h.tl + LIFT, z),
+          new THREE.Vector3(x + 1, h.tr + LIFT, z)
+        )
+        // left edge
+        points.push(
+          new THREE.Vector3(x, h.tl + LIFT, z),
+          new THREE.Vector3(x, h.bl + LIFT, z + 1)
+        )
+        // close the bottom and right borders
+        if (z === map.height - 1) {
+          points.push(
+            new THREE.Vector3(x,     h.bl + LIFT, z + 1),
+            new THREE.Vector3(x + 1, h.br + LIFT, z + 1)
+          )
+        }
+        if (x === map.width - 1) {
+          points.push(
+            new THREE.Vector3(x + 1, h.tr + LIFT, z),
+            new THREE.Vector3(x + 1, h.br + LIFT, z + 1)
+          )
+        }
+      }
+    }
+
+    const geometry = new THREE.BufferGeometry().setFromPoints(points)
+    const material = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.18 })
+    const lines = new THREE.LineSegments(geometry, material)
+    lines.visible = state.showTileGrid
+    return lines
+  }
+
   function buildObjectShadowInfluences() {
     // Per-vertex darkening [0..1] driven by proximity to placed objects
     const rows = map.height + 1
@@ -1049,6 +1093,7 @@ let brushRadius = 3.2
     if (terrainGroup) scene.remove(terrainGroup)
     if (cliffs) scene.remove(cliffs)
     if (splitLines) scene.remove(splitLines)
+    if (tileGrid) scene.remove(tileGrid)
     if (textureOverlayGroup) scene.remove(textureOverlayGroup)
     if (texturePlaneGroup) scene.remove(texturePlaneGroup)
 
@@ -1058,12 +1103,14 @@ let brushRadius = 3.2
     terrainGroup = buildTerrainMeshes(map, waterTexture, shadowInf)
     cliffs = buildCliffMeshes(map)
     splitLines = buildSplitLines()
+    tileGrid = buildTileGrid()
     textureOverlayGroup = buildTextureOverlays(map, textureRegistry, textureCache)
     texturePlaneGroup = buildTexturePlanes(map, textureRegistry, textureCache)
 
     scene.add(terrainGroup)
     scene.add(cliffs)
     scene.add(splitLines)
+    scene.add(tileGrid)
     scene.add(textureOverlayGroup)
     scene.add(texturePlaneGroup)
 
@@ -2286,6 +2333,11 @@ function applyToolAtTile(tile, eventLike = null) {
   sidebar.querySelector('#toggleSplitLines').addEventListener('change', (e) => {
     state.showSplitLines = e.target.checked
     if (splitLines) splitLines.visible = state.showSplitLines
+  })
+
+  sidebar.querySelector('#toggleTileGrid').addEventListener('change', (e) => {
+    state.showTileGrid = e.target.checked
+    if (tileGrid) tileGrid.visible = state.showTileGrid
   })
 
   sidebar.querySelector('#toggleHalfPaint').addEventListener('change', (e) => {
