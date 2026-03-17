@@ -221,14 +221,14 @@
       "path": "/assets/Modular assets/Stone modular/stone arrowslit2.glb"
     },
     {
-      "id": "stone big wall arrowslit",
-      "name": "Stone Big Wall Arrowslit",
-      "path": "/assets/Modular assets/Stone modular/stone big wall arrowslit.glb"
+      "id": "stone big arrowslit",
+      "name": "Stone Big Arrowslit",
+      "path": "/assets/Modular assets/Stone modular/stone big arrowslit.glb"
     },
     {
-      "id": "stone big wall",
-      "name": "Stone Big Wall",
-      "path": "/assets/Modular assets/Stone modular/stone big wall.glb"
+      "id": "stone big",
+      "name": "Stone Big",
+      "path": "/assets/Modular assets/Stone modular/stone big.glb"
     },
     {
       "id": "stone block walk way",
@@ -356,9 +356,9 @@
       "path": "/assets/Modular assets/Stone modular/stone stairs.glb"
     },
     {
-      "id": "stone wall corner",
-      "name": "Stone Wall Corner",
-      "path": "/assets/Modular assets/Stone modular/stone wall corner.glb"
+      "id": "stone corner",
+      "name": "Stone Corner",
+      "path": "/assets/Modular assets/Stone modular/stone corner.glb"
     },
     {
       "id": "stone wall door",
