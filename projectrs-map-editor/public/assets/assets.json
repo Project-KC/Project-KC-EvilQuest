@@ -436,19 +436,24 @@
       "path": "/assets/Modular assets/white modular/white halfwall.glb"
     },
     {
-      "id": "white small wall",
-      "name": "White Small Wall",
-      "path": "/assets/Modular assets/white modular/white small wallglb.glb"
-    },
-    {
       "id": "white wall",
       "name": "White Wall",
       "path": "/assets/Modular assets/white modular/white wall.glb"
     },
     {
-      "id": "white window",
-      "name": "White Window",
-      "path": "/assets/Modular assets/white modular/white window.glb"
+      "id": "white doorway with wood",
+      "name": "White Doorway With Wood",
+      "path": "/assets/Modular assets/white modular/white doorway with wood.glb"
+    },
+    {
+      "id": "white pole",
+      "name": "White Pole",
+      "path": "/assets/Modular assets/white modular/white pole.glb"
+    },
+    {
+      "id": "wood plank",
+      "name": "Wood Plank",
+      "path": "/assets/Modular assets/white modular/wood plank.glb"
     },
     {
       "id": "wood pole",

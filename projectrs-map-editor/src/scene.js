@@ -21,38 +21,61 @@ const sun = new THREE.DirectionalLight(0xffd78a, 1.1)
 sun.position.set(16, 30, 16)
 scene.add(sun)
 
-scene.add(new THREE.AmbientLight(0x8a8a8a, 0.5))
+const fillLight = new THREE.DirectionalLight(0xaabbcc, 0.65)
+fillLight.position.set(-10, 6, 10)
+scene.add(fillLight)
+
+scene.add(new THREE.AmbientLight(0x8a8a8a, 0.62))
 
 scene.add(new THREE.AmbientLight(0x5c6448, 0.08))
-scene.add(new THREE.HemisphereLight(0x181818, 0x2f2410, 0.12))
+scene.add(new THREE.HemisphereLight(0x181818, 0x2f2410, 0.18))
 
-function tuneModelLighting(model) {
+function tuneModelLighting(model, assetPath = '') {
+  const isModular = assetPath.toLowerCase().includes('modular assets')
+
   model.traverse((child) => {
     if (!child.isMesh || !child.material) return
 
     const materials = Array.isArray(child.material) ? child.material : [child.material]
 
-    const tuned = materials.map((sourceMat) => {
-      const map = sourceMat.map || null
+    const tuned = materials.map((src) => {
+      if (src.map) src.map.colorSpace = THREE.SRGBColorSpace
 
-      if (map) {
-        map.colorSpace = THREE.SRGBColorSpace
+      const alphaTest = src.alphaTest ?? 0
+      const isAlphaCutout = alphaTest > 0
+
+      let mat
+
+      if (isModular) {
+        // Flat unlit — consistent face colours, good for RS Classic architecture
+        mat = new THREE.MeshBasicMaterial({
+          map: src.map || null,
+          color: src.color ? src.color.clone() : 0xffffff,
+          alphaMap: src.alphaMap || null,
+          alphaTest,
+          side: THREE.DoubleSide,
+          transparent: isAlphaCutout ? false : !!src.transparent,
+          depthWrite: true
+        })
+      } else {
+        // Phong with zero shininess — responds to scene light so props don't look blown out
+        mat = new THREE.MeshPhongMaterial({
+          map: src.map || null,
+          normalMap: src.normalMap || null,
+          color: src.color ? src.color.clone() : 0xffffff,
+          emissive: src.emissive ? src.emissive.clone() : 0x000000,
+          emissiveMap: src.emissiveMap || null,
+          alphaMap: src.alphaMap || null,
+          alphaTest,
+          shininess: 0,
+          specular: 0x000000,
+          side: THREE.DoubleSide,
+          transparent: isAlphaCutout ? false : !!src.transparent,
+          depthWrite: true
+        })
+        mat.aoMap = src.aoMap || null
+        mat.opacity = src.opacity ?? 1
       }
-
-      const mat = new THREE.MeshPhongMaterial({
-        map,
-        color: sourceMat.color ? sourceMat.color.clone() : 0xffffff,
-        emissive: sourceMat.emissive ? sourceMat.emissive.clone() : 0x000000,
-        emissiveMap: sourceMat.emissiveMap || null,
-        shininess: 0,
-        specular: 0x000000,
-        side: THREE.DoubleSide
-      })
-
-      mat.lightMap = sourceMat.lightMap || null
-      mat.aoMap = sourceMat.aoMap || null
-      mat.transparent = !!sourceMat.transparent
-      mat.opacity = sourceMat.opacity ?? 1
 
       mat.needsUpdate = true
       return mat
@@ -243,6 +266,7 @@ let brushRadius = 3.2
       <div class="asset-tabs">
         <button class="asset-tab active" id="tabProps">Props</button>
         <button class="asset-tab" id="tabModular">Modular</button>
+        <button class="asset-tab" id="tabWalls">Walls</button>
       </div>
       <select id="assetGroupSelect" style="display:none"></select>
       <input id="assetSearch" type="text" placeholder="Search assets..." />
@@ -332,6 +356,7 @@ let brushRadius = 3.2
 
   const tabProps = sidebar.querySelector('#tabProps')
   const tabModular = sidebar.querySelector('#tabModular')
+  const tabWalls = sidebar.querySelector('#tabWalls')
   const assetGroupSelect = sidebar.querySelector('#assetGroupSelect')
   const assetSearch = sidebar.querySelector('#assetSearch')
   const assetGrid = sidebar.querySelector('#assetGrid')
@@ -517,7 +542,7 @@ let brushRadius = 3.2
       if (!asset) continue
 
       const model = await loadAssetModel(asset.path)
-      tuneModelLighting(model)
+      tuneModelLighting(model, asset.path)
 
       model.position.set(placed.position.x, placed.position.y, placed.position.z)
       model.rotation.set(placed.rotation.x, placed.rotation.y, placed.rotation.z)
@@ -667,18 +692,24 @@ let brushRadius = 3.2
     const inf = []
     for (let i = 0; i < rows; i++) inf.push(new Float32Array(cols).fill(1.0))
 
+    // Force world matrices to be current before computing bounds
+    scene.updateMatrixWorld(true)
+
     const _box  = new THREE.Box3()
     const _size = new THREE.Vector3()
 
     for (const obj of placedGroup.children) {
-      // Ensure world matrices are current before computing bounds
-      obj.updateMatrixWorld(true)
       _box.setFromObject(obj)
       if (_box.isEmpty()) continue
       _box.getSize(_size)
 
+      const asset = assetRegistry.find((a) => a.id === obj.userData.assetId)
+      const isModular = asset?.path?.toLowerCase().includes('modular assets') ?? false
+      const isTree = asset?.name?.toLowerCase().includes('tree') ?? false
+
       const footprint = Math.max(_size.x, _size.z) * 0.5
-      const shadowR   = footprint + 1.6   // extend dark halo beyond the footprint
+      const shadowR   = footprint + (isTree || isModular ? 2.8 : 1.0)
+      const maxDark   = isTree || isModular ? 0.82 : 0.42
 
       const cx = obj.position.x
       const cz = obj.position.z
@@ -695,8 +726,8 @@ let brushRadius = 3.2
           const dist = Math.sqrt(dx * dx + dz * dz)
           if (dist >= shadowR) continue
 
-          const t      = 1.0 - dist / shadowR   // 1 at centre, 0 at edge
-          const dark   = t * t * 0.45            // quadratic falloff, max 45% darker
+          const t      = 1.0 - dist / shadowR
+          const dark   = t * t * maxDark
           const factor = 1.0 - dark
           if (factor < inf[vz][vx]) inf[vz][vx] = factor
         }
@@ -819,7 +850,7 @@ let brushRadius = 3.2
     if (!asset) continue
 
     const model = await loadAssetModel(asset.path)
-    tuneModelLighting(model)
+    tuneModelLighting(model, asset.path)
 
     model.position.set(
       placed.position.x + offsetX,
@@ -1135,7 +1166,7 @@ function applyToolAtTile(tile, eventLike = null) {
     if (!asset) return
 
     const model = await loadAssetModel(asset.path)
-    tuneModelLighting(model)
+    tuneModelLighting(model, asset.path)
 
     previewObject = makeGhostMaterial(model)
     previewObject.rotation.y = previewRotation
@@ -1153,7 +1184,7 @@ function applyToolAtTile(tile, eventLike = null) {
     if (!asset) return
 
     const model = await loadAssetModel(asset.path)
-    tuneModelLighting(model)
+    tuneModelLighting(model, asset.path)
 
     pushUndoState()
 
@@ -1195,7 +1226,7 @@ function applyToolAtTile(tile, eventLike = null) {
       if (!asset) return
 
       const model = await loadAssetModel(asset.path)
-      tuneModelLighting(model)
+      tuneModelLighting(model, asset.path)
 
       const targetFootprint = getObjectFootprint(selectedPlacedObject)
 
@@ -1394,7 +1425,13 @@ function applyToolAtTile(tile, eventLike = null) {
   function refreshAssetList() {
     const q = assetSearch.value.trim().toLowerCase()
 
+    const WALL_FILES = ['stone wall.glb', 'dark stone wall.glb', 'white wall.glb']
+
     filteredAssets = assetRegistry.filter((asset) => {
+      if (assetSectionFilter === '__walls__') {
+        const fileName = asset.path.split('/').pop().toLowerCase()
+        return WALL_FILES.includes(fileName)
+      }
       if (assetSectionFilter !== 'all' && asset.section !== assetSectionFilter) return false
       if (assetGroupFilter !== 'all' && asset.group !== assetGroupFilter) return false
 
@@ -1538,6 +1575,7 @@ function applyToolAtTile(tile, eventLike = null) {
     assetGroupFilter = 'all'
     tabProps.classList.add('active')
     tabModular.classList.remove('active')
+    tabWalls.classList.remove('active')
     assetGroupSelect.style.display = 'none'
     refreshAssetList()
     await updatePreviewObject()
@@ -1548,8 +1586,20 @@ function applyToolAtTile(tile, eventLike = null) {
     assetGroupFilter = 'all'
     tabModular.classList.add('active')
     tabProps.classList.remove('active')
+    tabWalls.classList.remove('active')
     assetGroupSelect.style.display = ''
     refreshAssetGroupOptions()
+    refreshAssetList()
+    await updatePreviewObject()
+  })
+
+  tabWalls.addEventListener('click', async () => {
+    assetSectionFilter = '__walls__'
+    assetGroupFilter = 'all'
+    tabWalls.classList.add('active')
+    tabProps.classList.remove('active')
+    tabModular.classList.remove('active')
+    assetGroupSelect.style.display = 'none'
     refreshAssetList()
     await updatePreviewObject()
   })

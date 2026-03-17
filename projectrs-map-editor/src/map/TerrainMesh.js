@@ -90,7 +90,7 @@ function isWaterNearby(map, x, z) {
 }
 
 function getWaterDistanceToLevel(map, x, z) {
-  return map.getAverageTileHeight(x, z) - map.waterLevel
+  return map.getAverageTileHeight(x, z) - map.getTileWaterLevel(x, z)
 }
 
 
@@ -129,7 +129,9 @@ function getNoiseExtra(type, vx, vz) {
     const tinyDither = sampleNoise(vx * 2.4, vz * 2.4, 1.5, 1.9) * 0.014
     return bigPatch + midPatch + tinyDither
   } else if (type === 'path') {
-    return sampleNoise(vx * 0.45, vz * 0.45, 1.2, 0.8) * 0.02
+    const bigPatch = sampleNoise(vx * 0.22, vz * 0.22, 1.0, 1.1) * 0.04
+    const tinyDither = sampleNoise(vx * 1.8, vz * 1.8, 1.3, 1.7) * 0.012
+    return bigPatch + tinyDither
   } else if (type === 'road') {
     const smallVar = sampleNoise(vx * 1.2, vz * 1.2, 1.5, 0.9) * 0.025
     const tiny = sampleNoise(vx * 3.0, vz * 3.0, 2.0, 1.5) * 0.01
@@ -191,7 +193,7 @@ function getCornerBlendedColor(map, cornerX, cornerZ, shade) {
     if (!map.getTile(nx, nz)) continue
     const type = map.getBaseGroundType(nx, nz)
     if (type === 'road') continue  // road doesn't bleed into neighbours
-    const w = type === 'path' ? 0.6 : 1.0
+    const w = 1.0
     const c = groundColor(type, 1.0)
     r += c.r * w; g += c.g * w; b += c.b * w
     noise += getNoiseExtra(type, cornerX, cornerZ) * w
@@ -261,17 +263,6 @@ function addTileGeometry(vertices, colors, uvs, indices, base, tileType, h, x, z
     }
   }
 
-  if (tileType === 'grass') {
-    const adjacentPaths = countAdjacentGround(map, x, z, 'path')
-    if (adjacentPaths > 0) {
-      const pathInfluence = 1 + adjacentPaths * 0.02
-      for (const c of [cTL, cTR, cBL, cBR]) {
-        c.r *= 1.03 * pathInfluence
-        c.g *= 0.94
-        c.b *= 0.84
-      }
-    }
-  }
 
   // Valley ambient occlusion — darken vertices lower than their surroundings
   if (tileType !== 'water') {
@@ -451,7 +442,6 @@ export function buildTerrainMeshes(map, waterTexture, shadowInf = null) {
     const waterMesh = new THREE.Mesh(waterGeometry, waterMaterial)
     waterMesh.name = 'terrain-water'
     waterMesh.receiveShadow = true
-    waterMesh.renderOrder = 2
     group.add(waterMesh)
   }
 

@@ -3,7 +3,8 @@ export class MapData {
     this.width = width
     this.height = height
 
-    this.waterLevel = -1.25
+    this.waterLevel = -2.5
+    this.chunkWaterLevels = {}   // keyed "chunkX,chunkZ", overrides waterLevel per 64x64 chunk
     this.texturePlanes = []
     this.selectedTexturePlaneId = null
 
@@ -78,6 +79,27 @@ export class MapData {
     return tile.ground || 'grass'
   }
 
+  getChunkWaterLevel(chunkX, chunkZ) {
+    const key = `${chunkX},${chunkZ}`
+    return Object.prototype.hasOwnProperty.call(this.chunkWaterLevels, key)
+      ? this.chunkWaterLevels[key]
+      : this.waterLevel
+  }
+
+  setChunkWaterLevel(chunkX, chunkZ, level) {
+    this.chunkWaterLevels[`${chunkX},${chunkZ}`] = level
+  }
+
+  clearChunkWaterLevel(chunkX, chunkZ) {
+    delete this.chunkWaterLevels[`${chunkX},${chunkZ}`]
+  }
+
+  getTileWaterLevel(x, z) {
+    const chunkX = Math.floor(x / 64)
+    const chunkZ = Math.floor(z / 64)
+    return this.getChunkWaterLevel(chunkX, chunkZ)
+  }
+
   shouldRenderWaterTile(x, z) {
     const tile = this.getTile(x, z)
     if (!tile) return false
@@ -87,7 +109,7 @@ export class MapData {
     const h = this.getTileCornerHeights(x, z)
     const minH = Math.min(h.tl, h.tr, h.bl, h.br)
 
-    return minH <= this.waterLevel
+    return minH <= this.getTileWaterLevel(x, z)
   }
 
   getEffectiveGroundType(x, z) {
@@ -216,6 +238,7 @@ export class MapData {
   resize(newWidth, newHeight) {
     const next = new MapData(newWidth, newHeight)
     next.waterLevel = this.waterLevel
+    next.chunkWaterLevels = { ...this.chunkWaterLevels }
     next.texturePlanes = JSON.parse(JSON.stringify(this.texturePlanes))
     next.selectedTexturePlaneId = this.selectedTexturePlaneId
 
@@ -239,6 +262,7 @@ export class MapData {
       width: this.width,
       height: this.height,
       waterLevel: this.waterLevel,
+      chunkWaterLevels: { ...this.chunkWaterLevels },
       selectedTexturePlaneId: this.selectedTexturePlaneId,
       texturePlanes: this.texturePlanes,
       tiles: this.tiles,
@@ -249,7 +273,10 @@ export class MapData {
   static fromJSON(data) {
     const map = new MapData(data.width, data.height)
 
-    map.waterLevel = typeof data.waterLevel === 'number' ? data.waterLevel : -1.25
+    map.waterLevel = typeof data.waterLevel === 'number' ? data.waterLevel : -2.5
+    map.chunkWaterLevels = (data.chunkWaterLevels && typeof data.chunkWaterLevels === 'object')
+      ? { ...data.chunkWaterLevels }
+      : {}
     map.selectedTexturePlaneId = data.selectedTexturePlaneId || null
     map.texturePlanes = Array.isArray(data.texturePlanes)
       ? JSON.parse(JSON.stringify(data.texturePlanes))
