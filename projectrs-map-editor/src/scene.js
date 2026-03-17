@@ -804,6 +804,26 @@ let brushRadius = 3.2
     return hits[0].point.clone()
   }
 
+  const _surfaceQuat = new THREE.Quaternion()
+
+  function pickSurfacePoint(event, excludeObjects = []) {
+    updateMouse(event)
+    raycaster.setFromCamera(mouse, camera)
+
+    const terrainHits = raycaster.intersectObjects(getTerrainMeshes(), false)
+
+    const eligible = placedGroup.children.filter(o => !excludeObjects.includes(o))
+    const placedHits = raycaster.intersectObjects(eligible, true).filter(hit => {
+      if (!hit.face) return false
+      hit.object.getWorldQuaternion(_surfaceQuat)
+      const worldNormalY = hit.face.normal.clone().applyQuaternion(_surfaceQuat).y
+      return worldNormalY > 0.5  // only upward-facing surfaces (roofs, floors)
+    })
+
+    const best = [...terrainHits, ...placedHits].sort((a, b) => a.distance - b.distance)[0]
+    return best ? best.point.clone() : null
+  }
+
   function pickTile(event) {
     const p = pickTerrainPoint(event)
     if (!p) return null
@@ -1251,7 +1271,7 @@ function applyToolAtTile(tile, eventLike = null) {
     previewObject.position.copy(pos)
   }
 
-  async function placeSelectedAsset(tile) {
+  async function placeSelectedAsset(tile, event) {
     if (!selectedAssetId) return
 
     const asset = assetRegistry.find((a) => a.id === selectedAssetId)
@@ -1263,6 +1283,10 @@ function applyToolAtTile(tile, eventLike = null) {
     pushUndoState()
 
     const pos = tileWorldPosition(tile.x, tile.z)
+    if (event) {
+      const sp = pickSurfacePoint(event)
+      if (sp) pos.y = sp.y
+    }
     model.position.copy(pos)
     model.rotation.y = previewRotation
     model.userData.assetId = asset.id
@@ -1851,7 +1875,9 @@ function applyToolAtTile(tile, eventLike = null) {
     hoverText.textContent = `tile (${tile.x}, ${tile.z})  elev ${y.toFixed(2)}`
 
     if (previewObject) {
+      const sp = pickSurfacePoint(event)
       const pos = tileWorldPosition(tile.x, tile.z)
+      if (sp) pos.y = sp.y
       previewObject.position.copy(pos)
     }
 
@@ -1921,9 +1947,13 @@ function applyToolAtTile(tile, eventLike = null) {
         const deltaY = (movePlaneStart.mouseY - event.clientY) * 0.02
         selectedPlacedObject.position.y = movePlaneStart.value + deltaY
       } else {
-        const targetY = transformLift !== 0
-          ? selectedPlacedObject.position.y
-          : terrainPoint.y
+        let targetY
+        if (transformLift !== 0) {
+          targetY = selectedPlacedObject.position.y
+        } else {
+          const surfacePoint = pickSurfacePoint(event, selectedPlacedObjects)
+          targetY = surfacePoint ? surfacePoint.y : terrainPoint.y
+        }
         selectedPlacedObject.position.set(snappedX, targetY, snappedZ)
       }
 
@@ -2041,7 +2071,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
     }
 
     if (state.tool === ToolMode.PLACE) {
-      await placeSelectedAsset(tile)
+      await placeSelectedAsset(tile, event)
       return
     }
 
