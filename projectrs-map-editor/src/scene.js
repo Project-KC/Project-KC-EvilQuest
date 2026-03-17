@@ -126,6 +126,7 @@ function tuneModelLighting(model, assetPath = '') {
   const textureCache = new Map()
   const textureMeta = new Map()
   let selectedTextureId = null
+  let paintTabTextureId = null   // texture selected in the paint tab (null = none, '__erase__' = erase)
   let textureRotation = 0
   let textureScale = 1
 
@@ -241,8 +242,7 @@ let brushRadius = 3.2
       <button id="toolPaint" class="tool-btn" title="Paint Tool (2)">Paint</button>
       <button id="toolPlace" class="tool-btn" title="Place Asset (3)">Place</button>
       <button id="toolSelect" class="tool-btn" title="Select (4)">Select</button>
-      <button id="toolTexture" class="tool-btn" title="Texture Paint (5)">Texture</button>
-      <button id="toolTexturePlane" class="tool-btn" title="Texture Plane (6)">T.Plane</button>
+      <button id="toolTexturePlane" class="tool-btn" title="Texture Plane (5)">T.Plane</button>
     </div>
     <div class="ctx-divider"></div>
 
@@ -267,6 +267,7 @@ let brushRadius = 3.2
         <label><input id="toggleSplitLines" type="checkbox" /> Show Split Lines</label>
       </div>
       <div style="font-size:11px;opacity:0.6;margin:8px 0 4px;border-top:1px solid #444;padding-top:8px;">Texture Brushes</div>
+      <button id="eraseTextureBrushBtn" style="width:100%;margin-bottom:5px;">Erase Texture</button>
       <input id="paintTextureSearch" type="text" placeholder="Search textures..." style="width:100%;box-sizing:border-box;margin-bottom:5px;" />
       <div id="paintTexturePalette" style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;max-height:200px;overflow-y:auto;"></div>
     </div>
@@ -315,9 +316,8 @@ let brushRadius = 3.2
     <div class="ctx-panel" id="ctx-texture" style="display:none">
       <input id="textureSearch" type="text" placeholder="Search textures..." />
       <div id="texturePalette" style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;max-height:200px;overflow:auto;margin-top:7px;"></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:5px;">
-        <button id="useTexturePaintBtn">Paint Mode</button>
-        <button id="useTexturePlaneBtn">Plane Mode</button>
+      <div style="margin-top:5px;">
+        <button id="useTexturePlaneBtn" style="width:100%">Plane Mode</button>
       </div>
       <button id="rotateTextureBtn">Rotate Texture (R)</button>
       <label style="margin-top:6px;font-size:11px;color:rgba(255,255,255,0.45);">Scale</label>
@@ -358,7 +358,6 @@ let brushRadius = 3.2
     [ToolMode.PAINT]: sidebar.querySelector('#toolPaint'),
     [ToolMode.PLACE]: sidebar.querySelector('#toolPlace'),
     [ToolMode.SELECT]: sidebar.querySelector('#toolSelect'),
-    [ToolMode.TEXTURE]: sidebar.querySelector('#toolTexture'),
     [ToolMode.TEXTURE_PLANE]: sidebar.querySelector('#toolTexturePlane')
   }
 
@@ -366,7 +365,6 @@ let brushRadius = 3.2
   toolButtons[ToolMode.PAINT]?.addEventListener('click', () => setTool(ToolMode.PAINT))
   toolButtons[ToolMode.PLACE]?.addEventListener('click', () => setTool(ToolMode.PLACE))
   toolButtons[ToolMode.SELECT]?.addEventListener('click', () => setTool(ToolMode.SELECT))
-  toolButtons[ToolMode.TEXTURE]?.addEventListener('click', () => setTool(ToolMode.TEXTURE))
   toolButtons[ToolMode.TEXTURE_PLANE]?.addEventListener('click', () => setTool(ToolMode.TEXTURE_PLANE))
 
   const levelModeBtn = sidebar.querySelector('#toggleLevelMode')
@@ -389,7 +387,6 @@ let brushRadius = 3.2
 
   const textureSearch = sidebar.querySelector('#textureSearch')
   const texturePalette = sidebar.querySelector('#texturePalette')
-  const useTexturePaintBtn = sidebar.querySelector('#useTexturePaintBtn')
   const useTexturePlaneBtn = sidebar.querySelector('#useTexturePlaneBtn')
   const textureScaleSlider = sidebar.querySelector('#textureScale')
   const rotateTextureBtn = sidebar.querySelector('#rotateTextureBtn')
@@ -445,7 +442,10 @@ let brushRadius = 3.2
       `
       div.addEventListener('click', () => {
         state.paintType = gt.id
+        paintTabTextureId = null
         setTool(ToolMode.PAINT)
+        refreshPaintTexturePalette()
+        updateToolUI()
       })
       container.appendChild(div)
     }
@@ -468,7 +468,6 @@ let brushRadius = 3.2
       [ToolMode.PAINT]: 'ctx-paint',
       [ToolMode.PLACE]: 'ctx-place',
       [ToolMode.SELECT]: 'ctx-select',
-      [ToolMode.TEXTURE]: 'ctx-texture',
       [ToolMode.TEXTURE_PLANE]: 'ctx-texture',
     }
     for (const id of ['ctx-terrain', 'ctx-paint', 'ctx-place', 'ctx-select', 'ctx-texture']) {
@@ -491,7 +490,6 @@ let brushRadius = 3.2
       levelHeightInput.value = state.levelHeight.toFixed(2)
     }
 
-    useTexturePaintBtn.classList.toggle('active-tool', state.tool === ToolMode.TEXTURE)
     useTexturePlaneBtn.classList.toggle('active-tool', state.tool === ToolMode.TEXTURE_PLANE)
     switchPlaceBtn.classList.toggle('active-tool', state.tool === ToolMode.PLACE)
 
@@ -500,14 +498,21 @@ let brushRadius = 3.2
 
     // Status bar
     let status = toolLabel(state.tool)
-    if (state.tool === ToolMode.PAINT) status += ` · ${state.paintType}`
+    if (state.tool === ToolMode.PAINT) {
+      if (paintTabTextureId === '__erase__') status += ' · Erase Texture'
+      else if (paintTabTextureId) status += ` · Texture: ${paintTabTextureId}`
+      else status += ` · ${state.paintType}`
+    }
     if (state.tool === ToolMode.PLACE && selectedAssetId) {
       const asset = assetRegistry.find((a) => a.id === selectedAssetId)
       status += ` · ${asset?.name || selectedAssetId}`
     }
-    if (state.tool === ToolMode.TEXTURE || state.tool === ToolMode.TEXTURE_PLANE) {
+    if (state.tool === ToolMode.TEXTURE_PLANE) {
       status += ` · ${selectedTextureId || 'no texture'}`
     }
+
+    const eraseBtn = sidebar.querySelector('#eraseTextureBrushBtn')
+    if (eraseBtn) eraseBtn.classList.toggle('active-tool', state.tool === ToolMode.PAINT && paintTabTextureId === '__erase__')
     if (state.tool === ToolMode.TEXTURE_PLANE) {
       status += ` · ${texturePlaneVertical ? 'vertical' : 'horizontal'}`
     }
@@ -1325,6 +1330,16 @@ function applyToolAtTile(tile, eventLike = null) {
   if (state.tool === ToolMode.PAINT) {
     captureStrokeHistoryOnce()
 
+    if (eventLike?.shiftKey || paintTabTextureId) {
+      if (eventLike?.shiftKey || paintTabTextureId === '__erase__') {
+        map.clearTextureTile(tile.x, tile.z)
+      } else {
+        map.paintTextureTile(tile.x, tile.z, paintTabTextureId, textureRotation, textureScale)
+      }
+      rebuildTerrain()
+      return
+    }
+
     if (state.paintType === 'water') {
       map.paintWaterTile(tile.x, tile.z)
     } else if (state.halfPaint) {
@@ -1343,21 +1358,6 @@ function applyToolAtTile(tile, eventLike = null) {
     return
   }
 
-  if (state.tool === ToolMode.TEXTURE) {
-    captureStrokeHistoryOnce()
-
-    if (eventLike?.shiftKey) {
-      map.clearTextureTile(tile.x, tile.z)
-      rebuildTerrain()
-      return
-    }
-
-    if (selectedTextureId) {
-      map.paintTextureTile(tile.x, tile.z, selectedTextureId, textureRotation, textureScale)
-      rebuildTerrain()
-    }
-    return
-  }
 }
 
   async function updatePreviewObject() {
@@ -1777,7 +1777,7 @@ function applyToolAtTile(tile, eventLike = null) {
 
       img.addEventListener('dblclick', () => {
         selectedTextureId = tex.id
-        setTool(ToolMode.TEXTURE)
+        setTool(ToolMode.TEXTURE_PLANE)
         refreshTexturePalette()
         updateToolUI()
       })
@@ -1809,12 +1809,11 @@ function applyToolAtTile(tile, eventLike = null) {
       const img = document.createElement('img')
       img.src = tex.path
       img.title = tex.name || tex.id
-      img.style.cssText = `width:100%;aspect-ratio:1;object-fit:cover;cursor:pointer;border-radius:3px;border:2px solid ${tex.id === selectedTextureId && state.tool === ToolMode.TEXTURE ? '#2d6cdf' : 'transparent'};`
+      img.style.cssText = `width:100%;aspect-ratio:1;object-fit:cover;cursor:pointer;border-radius:3px;border:2px solid ${tex.id === paintTabTextureId ? '#2d6cdf' : 'transparent'};`
       img.addEventListener('click', () => {
-        selectedTextureId = tex.id
-        setTool(ToolMode.TEXTURE)
+        paintTabTextureId = tex.id
+        setTool(ToolMode.PAINT)
         refreshPaintTexturePalette()
-        refreshTexturePalette()
         updateToolUI()
       })
       paintTexturePalette.appendChild(img)
@@ -1822,6 +1821,14 @@ function applyToolAtTile(tile, eventLike = null) {
   }
 
   paintTextureSearch?.addEventListener('input', refreshPaintTexturePalette)
+
+  const eraseTextureBrushBtn = sidebar.querySelector('#eraseTextureBrushBtn')
+  eraseTextureBrushBtn?.addEventListener('click', () => {
+    paintTabTextureId = '__erase__'
+    setTool(ToolMode.PAINT)
+    refreshPaintTexturePalette()
+    updateToolUI()
+  })
 
   tabProps.addEventListener('click', async () => {
     assetSectionFilter = 'Models'
@@ -1875,10 +1882,6 @@ function applyToolAtTile(tile, eventLike = null) {
   })
 
   textureSearch.addEventListener('input', refreshTexturePalette)
-
-  useTexturePaintBtn.addEventListener('click', () => {
-    setTool(ToolMode.TEXTURE)
-  })
 
   useTexturePlaneBtn.addEventListener('click', () => {
     setTool(ToolMode.TEXTURE_PLANE)
@@ -2187,8 +2190,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
 
   if (
     state.tool === ToolMode.TERRAIN ||
-    state.tool === ToolMode.PAINT ||
-    state.tool === ToolMode.TEXTURE
+    state.tool === ToolMode.PAINT
   ) {
     if (state.tool === ToolMode.TERRAIN) {
       const now = performance.now()
@@ -2616,8 +2618,7 @@ if (key === 'e') {
     if (key === '2') return setTool(ToolMode.PAINT)
     if (key === '3') return setTool(ToolMode.PLACE)
     if (key === '4') return setTool(ToolMode.SELECT)
-    if (key === '5') return setTool(ToolMode.TEXTURE)
-    if (key === '6') return setTool(ToolMode.TEXTURE_PLANE)
+    if (key === '5') return setTool(ToolMode.TEXTURE_PLANE)
 
     if (key === 'v') {
       texturePlaneVertical = !texturePlaneVertical
@@ -2682,7 +2683,7 @@ if (key === 'e') {
         return
       }
 
-      if (state.tool === ToolMode.TEXTURE || state.tool === ToolMode.TEXTURE_PLANE) {
+      if (state.tool === ToolMode.TEXTURE_PLANE || (state.tool === ToolMode.PAINT && paintTabTextureId && paintTabTextureId !== '__erase__')) {
         textureRotation = (textureRotation + 1) % 4
         rebuildTerrain()
         updateToolUI()
