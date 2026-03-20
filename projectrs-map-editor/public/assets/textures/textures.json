@@ -74,6 +74,8 @@
   { "id": "tex73", "name": "Texture 73", "path": "/assets/textures/73.png" },
   { "id": "tex74", "name": "Texture 74", "path": "/assets/textures/74.png" },
   { "id": "tex75", "name": "Texture 75", "path": "/assets/textures/75.png" },
+  { "id": "tex76", "name": "Texture 76", "path": "/assets/textures/76.png" },
+  { "id": "tex77", "name": "Texture 77", "path": "/assets/textures/77.png" },
   { "id": "tex0", "name": "Texture 0", "path": "/assets/textures/0.png" },
   { "id": "tex-tree-leaves", "name": "Tree Leaves", "path": "/assets/textures/tree leaves.png" },
   { "id": "tex-7f0972d5", "name": "Texture 7f0972d5", "path": "/assets/textures/7f0972d5-71be-48f5-ab41-c14c33b43671.png" }

@@ -19,10 +19,12 @@ scene.fog = new THREE.Fog(0x0a1205, 22, 72)
 
 const sun = new THREE.DirectionalLight(0xffd78a, 1.1)
 sun.position.set(16, 30, 16)
+sun.layers.set(0)
 scene.add(sun)
 
 const fillLight = new THREE.DirectionalLight(0xaabbcc, 0.65)
 fillLight.position.set(-10, 6, 10)
+fillLight.layers.set(0)
 scene.add(fillLight)
 
 scene.add(new THREE.AmbientLight(0x8a8a8a, 0.62))
@@ -32,6 +34,7 @@ scene.add(new THREE.HemisphereLight(0x181818, 0x2f2410, 0.18))
 
 function tuneModelLighting(model, assetPath = '') {
   const isModular = assetPath.toLowerCase().includes('modular assets')
+  const isWoodModular = assetPath.toLowerCase().includes('wood modular')
 
   model.traverse((child) => {
     if (!child.isMesh || !child.material) return
@@ -50,7 +53,7 @@ function tuneModelLighting(model, assetPath = '') {
         // Flat unlit — consistent face colours, good for RS Classic architecture
         mat = new THREE.MeshBasicMaterial({
           map: src.map || null,
-          color: src.color ? src.color.clone() : 0xffffff,
+          color: isWoodModular ? new THREE.Color(0.45, 0.35, 0.25) : (src.color ? src.color.clone() : 0xffffff),
           alphaMap: src.alphaMap || null,
           alphaTest,
           side: THREE.DoubleSide,
@@ -93,10 +96,13 @@ function tuneModelLighting(model, assetPath = '') {
     0.1,
     1000
   )
+  camera.layers.enable(1)
 
   const renderer = new THREE.WebGLRenderer({ antialias: true })
   renderer.setSize(window.innerWidth, window.innerHeight)
   renderer.outputColorSpace = THREE.SRGBColorSpace
+  renderer.toneMapping = THREE.ACESFilmicToneMapping
+  renderer.toneMappingExposure = 1.0
   renderer.domElement.style.position = 'absolute'
   renderer.domElement.style.inset = '0'
   renderer.domElement.style.zIndex = '0'
@@ -188,6 +194,7 @@ const state = {
 let brushRadius = 3.2
 
   const raycaster = new THREE.Raycaster()
+  raycaster.layers.enable(1)
   const mouse = new THREE.Vector2()
 
   const highlightGeo = new THREE.PlaneGeometry(1, 1)
@@ -1525,7 +1532,7 @@ let brushRadius = 3.2
 
   function isStoneModularAsset(asset) {
     const p = asset?.path?.toLowerCase() ?? ''
-    return p.includes('stone modular') || p.includes('dark stone modular')
+    return p.includes('stone modular') || p.includes('dark stone modular') || p.includes('wood modular')
   }
 
   function isModularAsset(assetId) {
@@ -2404,7 +2411,7 @@ function applyToolAtTile(tile, eventLike = null) {
   function refreshAssetList() {
     const q = assetSearch.value.trim().toLowerCase()
 
-    const WALL_FILES = ['stone wall.glb', 'dark stone wall.glb', 'white wall.glb']
+    const WALL_FILES = ['stone wall.glb', 'dark stone wall.glb', 'white wall.glb', 'wood wall.glb']
 
     filteredAssets = assetRegistry.filter((asset) => {
       if (assetSectionFilter === '__walls__') {

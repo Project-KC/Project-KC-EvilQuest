@@ -704,6 +704,7 @@ export function buildTexturePlanes(map, textureRegistry, textureCache) {
     })
 
     const mesh = new THREE.Mesh(geometry, material)
+    mesh.layers.set(1)
 
     const px = plane.position?.x ?? 0
     const py = plane.position?.y ?? 0
