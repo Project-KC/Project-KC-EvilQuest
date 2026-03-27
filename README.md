@@ -6,12 +6,7 @@ A multiplayer browser MMORPG inspired by RuneScape Classic. Built with Bun, Type
 
 - **3D World:** Chunk-streamed terrain with heightmap elevation, vertex-colored tiles, variable-height walls, roofs, floors, stairs, and linear fog
 - **Building System:** Edge-based thin walls, elevated floor platforms, 4-step stair ramps, flat and peaked roofs — all configurable per tile
-- **Multi-Map:** 1024x1024 overworld with distinct regions + 256x256 underground dungeon, connected by transition tiles
 - **Multiplayer:** Server-authoritative with dual WebSocket protocol (binary game + JSON chat)
-- **Combat:** OSRS-style tick-based combat with hit chance, max hit, 4 melee stances, equipment bonuses
-- **Skills:** 12 skills with OSRS XP formula — 6 combat + 6 gathering/crafting (forestry, fishing, mining, cooking, smithing, crafting)
-- **World Objects:** Harvestable trees (3D models), rocks, fishing spots + crafting stations (furnace, cooking range, altar)
-- **Items:** 30 items — weapons, armor, food, skilling resources, processed bars
 - **Persistence:** SQLite saves player position, inventory, skills, and map level
 - **Map Editor:** Full-featured visual editor with tools for tiles, heights, walls, floors, stairs, roofs, NPC/object placement, undo/redo, copy/paste, export/import
 
