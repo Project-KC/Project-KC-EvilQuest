@@ -6,3 +6,4 @@ dist/
 *.db-shm
 *.db-wal
 server/data/maps/overworld.bak/
+server/data/maps/overworld/standby.json
