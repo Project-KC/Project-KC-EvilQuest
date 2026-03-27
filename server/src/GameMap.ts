@@ -426,21 +426,35 @@ export class GameMap {
     if (dx === 0 && dz === 1) return (this.getWall(fx, fz) & WallEdge.S) !== 0;
     if (dx === -1 && dz === 0) return (this.getWall(fx, fz) & WallEdge.W) !== 0;
 
+    // Diagonal movement: check source, destination, AND both intermediate tiles
+    // Moving NE (dx=1, dz=-1): also check (fx+1, fz) and (fx, fz-1)
     if (dx === 1 && dz === -1) {
-      return (this.getWall(fx, fz) & WallEdge.N) !== 0 || (this.getWall(fx, fz) & WallEdge.E) !== 0
-          || (this.getWall(tx, tz) & WallEdge.S) !== 0 || (this.getWall(tx, tz) & WallEdge.W) !== 0;
+      if ((this.getWall(fx, fz) & WallEdge.N) !== 0 || (this.getWall(fx, fz) & WallEdge.E) !== 0) return true;
+      if ((this.getWall(tx, tz) & WallEdge.S) !== 0 || (this.getWall(tx, tz) & WallEdge.W) !== 0) return true;
+      // Check intermediate: east tile's N edge and north tile's E edge
+      if ((this.getWall(fx + 1, fz) & WallEdge.N) !== 0 || (this.getWall(fx, fz - 1) & WallEdge.E) !== 0) return true;
+      return false;
     }
     if (dx === -1 && dz === -1) {
-      return (this.getWall(fx, fz) & WallEdge.N) !== 0 || (this.getWall(fx, fz) & WallEdge.W) !== 0
-          || (this.getWall(tx, tz) & WallEdge.S) !== 0 || (this.getWall(tx, tz) & WallEdge.E) !== 0;
+      if ((this.getWall(fx, fz) & WallEdge.N) !== 0 || (this.getWall(fx, fz) & WallEdge.W) !== 0) return true;
+      if ((this.getWall(tx, tz) & WallEdge.S) !== 0 || (this.getWall(tx, tz) & WallEdge.E) !== 0) return true;
+      // Check intermediate: west tile's N edge and north tile's W edge
+      if ((this.getWall(fx - 1, fz) & WallEdge.N) !== 0 || (this.getWall(fx, fz - 1) & WallEdge.W) !== 0) return true;
+      return false;
     }
     if (dx === 1 && dz === 1) {
-      return (this.getWall(fx, fz) & WallEdge.S) !== 0 || (this.getWall(fx, fz) & WallEdge.E) !== 0
-          || (this.getWall(tx, tz) & WallEdge.N) !== 0 || (this.getWall(tx, tz) & WallEdge.W) !== 0;
+      if ((this.getWall(fx, fz) & WallEdge.S) !== 0 || (this.getWall(fx, fz) & WallEdge.E) !== 0) return true;
+      if ((this.getWall(tx, tz) & WallEdge.N) !== 0 || (this.getWall(tx, tz) & WallEdge.W) !== 0) return true;
+      // Check intermediate: east tile's S edge and south tile's E edge
+      if ((this.getWall(fx + 1, fz) & WallEdge.S) !== 0 || (this.getWall(fx, fz + 1) & WallEdge.E) !== 0) return true;
+      return false;
     }
     if (dx === -1 && dz === 1) {
-      return (this.getWall(fx, fz) & WallEdge.S) !== 0 || (this.getWall(fx, fz) & WallEdge.W) !== 0
-          || (this.getWall(tx, tz) & WallEdge.N) !== 0 || (this.getWall(tx, tz) & WallEdge.E) !== 0;
+      if ((this.getWall(fx, fz) & WallEdge.S) !== 0 || (this.getWall(fx, fz) & WallEdge.W) !== 0) return true;
+      if ((this.getWall(tx, tz) & WallEdge.N) !== 0 || (this.getWall(tx, tz) & WallEdge.E) !== 0) return true;
+      // Check intermediate: west tile's S edge and south tile's W edge
+      if ((this.getWall(fx - 1, fz) & WallEdge.S) !== 0 || (this.getWall(fx, fz + 1) & WallEdge.W) !== 0) return true;
+      return false;
     }
 
     return false;

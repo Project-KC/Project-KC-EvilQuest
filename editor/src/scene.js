@@ -335,6 +335,144 @@ function tuneModelLighting(model) {
     return pick.pickedMesh.metadata.npcSpawn
   }
 
+  // --- Collision / Wall system ---
+  // Stores wall edges, blocked tiles, floors, stairs per floor level
+  const collisionData = {
+    walls: {},        // "x,z" -> bitmask (N=1, E=2, S=4, W=8)
+    wallHeights: {},  // "x,z" -> number
+    floors: {},       // "x,z" -> number (elevated floor Y)
+    stairs: {},       // "x,z" -> { direction, baseHeight, topHeight }
+    floorLayers: {}   // floorNum -> { walls, wallHeights, floors, stairs }
+  }
+  let collisionMode = 'wall'  // 'wall' | 'block' | 'floor' | 'stair'
+  let wallEraseMode = false
+  let collisionFloor = 0
+  let stairDirection = 'N'
+  const collisionGroup = new TransformNode('collisionGroup', scene)
+
+  function getCollisionLayer() {
+    if (collisionFloor === 0) return collisionData
+    if (!collisionData.floorLayers[collisionFloor]) {
+      collisionData.floorLayers[collisionFloor] = { walls: {}, wallHeights: {}, floors: {}, stairs: {} }
+    }
+    return collisionData.floorLayers[collisionFloor]
+  }
+
+  function getWallAt(x, z) {
+    return getCollisionLayer().walls[`${x},${z}`] || 0
+  }
+
+  function setWallAt(x, z, bitmask) {
+    const layer = getCollisionLayer()
+    if (bitmask === 0) delete layer.walls[`${x},${z}`]
+    else layer.walls[`${x},${z}`] = bitmask
+  }
+
+  function toggleWallEdge(x, z, edge) {
+    const current = getWallAt(x, z)
+    setWallAt(x, z, current ^ edge)
+  }
+
+  function setBlockedTile(x, z, blocked) {
+    setWallAt(x, z, blocked ? 15 : 0) // 15 = all edges (N|E|S|W)
+  }
+
+  function setFloorAt(x, z, height) {
+    const layer = getCollisionLayer()
+    if (height == null) delete layer.floors[`${x},${z}`]
+    else layer.floors[`${x},${z}`] = height
+  }
+
+  function setStairAt(x, z, data) {
+    const layer = getCollisionLayer()
+    if (!data) delete layer.stairs[`${x},${z}`]
+    else layer.stairs[`${x},${z}`] = data
+  }
+
+  function serializeCollisionData() {
+    return JSON.parse(JSON.stringify(collisionData))
+  }
+
+  function loadCollisionData(data) {
+    collisionData.walls = data?.walls || {}
+    collisionData.wallHeights = data?.wallHeights || {}
+    collisionData.floors = data?.floors || {}
+    collisionData.stairs = data?.stairs || {}
+    collisionData.floorLayers = data?.floorLayers || {}
+    rebuildCollisionMeshes()
+  }
+
+  function rebuildCollisionMeshes() {
+    for (const child of [...collisionGroup.getChildren()]) child.dispose()
+
+    const layer = getCollisionLayer()
+
+    // Wall edge lines
+    const wallLines = []
+    for (const [key, bitmask] of Object.entries(layer.walls)) {
+      const [x, z] = key.split(',').map(Number)
+      const h = map.getAverageTileHeight(x, z) + 0.15
+      if (bitmask & 1) wallLines.push([new Vector3(x, h, z), new Vector3(x + 1, h, z)])           // N
+      if (bitmask & 2) wallLines.push([new Vector3(x + 1, h, z), new Vector3(x + 1, h, z + 1)])   // E
+      if (bitmask & 4) wallLines.push([new Vector3(x, h, z + 1), new Vector3(x + 1, h, z + 1)])   // S
+      if (bitmask & 8) wallLines.push([new Vector3(x, h, z), new Vector3(x, h, z + 1)])           // W
+    }
+    if (wallLines.length > 0) {
+      const lines = MeshBuilder.CreateLineSystem('collWalls', { lines: wallLines }, scene)
+      lines.color = new Color3(1, 0.2, 0.2)
+      lines.renderingGroupId = 3  // render on top of everything
+      lines.parent = collisionGroup
+    }
+
+    // Floor tiles — flat quads
+    for (const [key, height] of Object.entries(layer.floors || {})) {
+      const [x, z] = key.split(',').map(Number)
+      const plane = MeshBuilder.CreatePlane(`collFloor_${key}`, { size: 0.9 }, scene)
+      plane.rotation.x = Math.PI / 2
+      plane.position = new Vector3(x + 0.5, height + 0.05, z + 0.5)
+      const mat = new StandardMaterial(`collFloorMat_${key}`, scene)
+      mat.diffuseColor = new Color3(0.2, 0.5, 1)
+      mat.emissiveColor = new Color3(0.1, 0.25, 0.5)
+      mat.alpha = 0.4
+      mat.specularColor = new Color3(0, 0, 0)
+      mat.backFaceCulling = false
+      plane.material = mat
+      plane.renderingGroupId = 3
+      plane.parent = collisionGroup
+    }
+
+    // Stairs — arrow indicators
+    for (const [key, stair] of Object.entries(layer.stairs || {})) {
+      const [x, z] = key.split(',').map(Number)
+      const midH = (stair.baseHeight + stair.topHeight) / 2
+      // Arrow line showing direction
+      const cx = x + 0.5, cz = z + 0.5
+      const dirVec = { N: [0, -0.4], E: [0.4, 0], S: [0, 0.4], W: [-0.4, 0] }[stair.direction] || [0, -0.4]
+      const arrowLines = [
+        [new Vector3(cx - dirVec[0], midH + 0.2, cz - dirVec[1]), new Vector3(cx + dirVec[0], midH + 0.2, cz + dirVec[1])]
+      ]
+      const arrow = MeshBuilder.CreateLineSystem(`collStair_${key}`, { lines: arrowLines }, scene)
+      arrow.color = new Color3(0.2, 1, 0.4)
+      arrow.renderingGroupId = 3
+      arrow.parent = collisionGroup
+    }
+
+    collisionGroup.setEnabled(state.tool === ToolMode.COLLISION)
+  }
+
+  // Detect which tile edge is nearest to click position
+  function getNearestEdge(tileX, tileZ, u, v) {
+    // u,v are fractional position within tile (0-1)
+    const dists = [v, 1 - u, 1 - v, u] // N, E, S, W distances to edges
+    const edges = [1, 2, 4, 8]          // N, E, S, W bitmasks
+    const labels = ['N', 'E', 'S', 'W']
+    let minIdx = 0
+    for (let i = 1; i < 4; i++) {
+      if (dists[i] < dists[minIdx]) minIdx = i
+    }
+    return { edge: edges[minIdx], label: labels[minIdx] }
+  }
+
   let _shadowInfluencesCache = null
 
   function invalidateShadowCache() { _shadowInfluencesCache = null }
@@ -525,6 +663,7 @@ let brushRadius = 3.2
       <button id="toolSelect" class="tool-btn" title="Select (4)">Select</button>
       <button id="toolTexturePlane" class="tool-btn" title="Texture Plane (5)">T.Plane</button>
       <button id="toolNpcSpawn" class="tool-btn" title="NPC Spawn (6)">NPCs</button>
+      <button id="toolCollision" class="tool-btn" title="Collision (7)">Collision</button>
       <button id="layersToggleBtn" class="tool-btn" title="Toggle Layers panel">Layers</button>
       <button id="heightCullBtn" class="tool-btn" title="Hide objects above camera height (H)">Height Cull</button>
     </div>
@@ -698,6 +837,58 @@ let brushRadius = 3.2
       <div style="font-size:11px;color:rgba(255,255,255,0.45);margin-top:10px;border-top:1px solid #444;padding-top:8px;">Spawns <span id="npcSpawnCount">0</span></div>
       <div id="npcSpawnList" style="max-height:200px;overflow-y:auto;margin-top:4px;"></div>
     </div>
+
+    <div class="ctx-panel" id="ctx-collision" style="display:none">
+      <div style="font-size:11px;color:rgba(255,255,255,0.45);margin-bottom:4px;">Mode</div>
+      <div style="display:flex;gap:3px;margin-bottom:8px;">
+        <button id="collWallBtn" class="tool-btn active-tool" style="flex:1;font-size:10px;padding:4px;">Walls</button>
+        <button id="collBlockBtn" class="tool-btn" style="flex:1;font-size:10px;padding:4px;">Block Tile</button>
+        <button id="collFloorBtn" class="tool-btn" style="flex:1;font-size:10px;padding:4px;">Floor</button>
+        <button id="collStairBtn" class="tool-btn" style="flex:1;font-size:10px;padding:4px;">Stairs</button>
+      </div>
+      <div id="collWallPanel">
+        <button id="autoWallsBtn" style="width:100%;margin-bottom:4px;font-size:11px;">Auto-detect walls from objects</button>
+        <button id="clearAllWallsBtn" style="width:100%;margin-bottom:4px;font-size:11px;">Clear all walls (this floor)</button>
+        <div style="display:flex;gap:3px;margin-bottom:6px;">
+          <button id="wallDrawBtn" class="tool-btn active-tool" style="flex:1;font-size:10px;padding:4px;">Draw</button>
+          <button id="wallEraseBtn" class="tool-btn" style="flex:1;font-size:10px;padding:4px;">Erase</button>
+        </div>
+        <div class="hint">Click/drag edges · Shift = erase<br>Erase mode: drag to remove walls</div>
+        <label style="margin-top:6px;font-size:11px;color:rgba(255,255,255,0.45);">Wall Height <span id="wallHeightLabel">1.8</span></label>
+        <input id="wallHeightSlider" type="range" min="0.5" max="6" step="0.1" value="1.8" style="width:100%;margin-top:3px;" />
+      </div>
+      <div id="collBlockPanel" style="display:none;">
+        <div class="hint">Click tile to block/unblock<br>Blocks all 4 edges</div>
+      </div>
+      <div id="collFloorPanel" style="display:none;">
+        <label style="font-size:11px;color:rgba(255,255,255,0.45);">Floor Height <span id="floorHeightLabel">3.0</span></label>
+        <input id="floorHeightInput" type="number" step="0.5" value="3.0" style="width:100%;margin-top:3px;" />
+        <div class="hint" style="margin-top:4px;">Click to set floor · Shift+Click to remove</div>
+      </div>
+      <div id="collStairPanel" style="display:none;">
+        <div style="display:flex;gap:3px;margin-bottom:5px;">
+          <button class="stair-dir-btn active-tool" data-dir="N" style="flex:1;font-size:10px;padding:4px;">N</button>
+          <button class="stair-dir-btn" data-dir="E" style="flex:1;font-size:10px;padding:4px;">E</button>
+          <button class="stair-dir-btn" data-dir="S" style="flex:1;font-size:10px;padding:4px;">S</button>
+          <button class="stair-dir-btn" data-dir="W" style="flex:1;font-size:10px;padding:4px;">W</button>
+        </div>
+        <div style="display:flex;gap:5px;margin-bottom:3px;">
+          <div style="flex:1;">
+            <div style="font-size:10px;color:#888;">Base H</div>
+            <input id="stairBaseH" type="number" step="0.5" value="0" style="width:100%;" />
+          </div>
+          <div style="flex:1;">
+            <div style="font-size:10px;color:#888;">Top H</div>
+            <input id="stairTopH" type="number" step="0.5" value="3.5" style="width:100%;" />
+          </div>
+        </div>
+        <div class="hint">Click to place stair · Shift+Click to remove</div>
+      </div>
+      <div style="margin-top:8px;border-top:1px solid #444;padding-top:6px;">
+        <label style="font-size:11px;color:rgba(255,255,255,0.45);">Floor Level <span id="collFloorLevel">0</span></label>
+        <input id="collFloorLevelSlider" type="range" min="0" max="3" step="1" value="0" style="width:100%;margin-top:3px;" />
+      </div>
+    </div>
   `
   uiRoot.appendChild(sidebar)
 
@@ -737,7 +928,8 @@ let brushRadius = 3.2
     [ToolMode.PLACE]: sidebar.querySelector('#toolPlace'),
     [ToolMode.SELECT]: sidebar.querySelector('#toolSelect'),
     [ToolMode.TEXTURE_PLANE]: sidebar.querySelector('#toolTexturePlane'),
-    [ToolMode.NPC_SPAWN]: sidebar.querySelector('#toolNpcSpawn')
+    [ToolMode.NPC_SPAWN]: sidebar.querySelector('#toolNpcSpawn'),
+    [ToolMode.COLLISION]: sidebar.querySelector('#toolCollision')
   }
 
   toolButtons[ToolMode.TERRAIN]?.addEventListener('click', () => setTool(ToolMode.TERRAIN))
@@ -746,6 +938,7 @@ let brushRadius = 3.2
   toolButtons[ToolMode.SELECT]?.addEventListener('click', () => setTool(ToolMode.SELECT))
   toolButtons[ToolMode.TEXTURE_PLANE]?.addEventListener('click', () => setTool(ToolMode.TEXTURE_PLANE))
   toolButtons[ToolMode.NPC_SPAWN]?.addEventListener('click', () => setTool(ToolMode.NPC_SPAWN))
+  toolButtons[ToolMode.COLLISION]?.addEventListener('click', () => setTool(ToolMode.COLLISION))
 
   // --- NPC Spawn: fetch defs + wire sidebar controls (must be after sidebar is created) ---
   fetch('/data/npcs.json')
@@ -827,6 +1020,122 @@ let brushRadius = 3.2
       updateSelectionHelper()
     })
   }
+
+  // --- Collision tool sub-mode buttons ---
+  const collModes = { wall: 'collWallBtn', block: 'collBlockBtn', floor: 'collFloorBtn', stair: 'collStairBtn' }
+  const collPanels = { wall: 'collWallPanel', block: 'collBlockPanel', floor: 'collFloorPanel', stair: 'collStairPanel' }
+  for (const [mode, btnId] of Object.entries(collModes)) {
+    sidebar.querySelector(`#${btnId}`)?.addEventListener('click', () => {
+      collisionMode = mode
+      for (const [m, bid] of Object.entries(collModes)) {
+        sidebar.querySelector(`#${bid}`)?.classList.toggle('active-tool', m === mode)
+      }
+      for (const [m, pid] of Object.entries(collPanels)) {
+        const el = sidebar.querySelector(`#${pid}`)
+        if (el) el.style.display = m === mode ? 'block' : 'none'
+      }
+    })
+  }
+
+  sidebar.querySelector('#wallHeightSlider')?.addEventListener('input', (e) => {
+    sidebar.querySelector('#wallHeightLabel').textContent = parseFloat(e.target.value).toFixed(1)
+  })
+
+  sidebar.querySelector('#collFloorLevelSlider')?.addEventListener('input', (e) => {
+    collisionFloor = parseInt(e.target.value)
+    sidebar.querySelector('#collFloorLevel').textContent = collisionFloor
+    rebuildCollisionMeshes()
+  })
+
+  for (const btn of sidebar.querySelectorAll('.stair-dir-btn')) {
+    btn.addEventListener('click', () => {
+      stairDirection = btn.dataset.dir
+      for (const b of sidebar.querySelectorAll('.stair-dir-btn')) b.classList.toggle('active-tool', b === btn)
+    })
+  }
+
+  sidebar.querySelector('#wallDrawBtn')?.addEventListener('click', () => {
+    wallEraseMode = false
+    sidebar.querySelector('#wallDrawBtn')?.classList.add('active-tool')
+    sidebar.querySelector('#wallEraseBtn')?.classList.remove('active-tool')
+  })
+  sidebar.querySelector('#wallEraseBtn')?.addEventListener('click', () => {
+    wallEraseMode = true
+    sidebar.querySelector('#wallEraseBtn')?.classList.add('active-tool')
+    sidebar.querySelector('#wallDrawBtn')?.classList.remove('active-tool')
+  })
+
+  sidebar.querySelector('#clearAllWallsBtn')?.addEventListener('click', () => {
+    pushUndoState()
+    const layer = getCollisionLayer()
+    layer.walls = {}
+    layer.wallHeights = {}
+    rebuildCollisionMeshes()
+    statusText.textContent = 'Cleared all walls on floor ' + collisionFloor
+  })
+
+  sidebar.querySelector('#autoWallsBtn')?.addEventListener('click', () => {
+    pushUndoState()
+    let count = 0
+    for (const obj of placedGroup.getChildren()) {
+      const assetId = obj.userData?.assetId
+      if (!assetId) continue
+      const asset = assetRegistry.find(a => a.id === assetId)
+      if (!asset?.name?.toLowerCase().includes('wall')) continue
+
+      // Get world-space bounding box of the wall object
+      let min, max
+      try {
+        const b = obj.getHierarchyBoundingVectors(true)
+        min = b.min; max = b.max
+      } catch { continue }
+
+      const sizeX = max.x - min.x
+      const sizeZ = max.z - min.z
+
+      // Determine wall orientation from bounding box: thin axis is the blocking direction
+      const isXAligned = sizeX > sizeZ  // wall stretches along X → blocks N/S edges
+      const isZAligned = sizeZ > sizeX  // wall stretches along Z → blocks E/W edges
+
+      // Find all tiles the wall overlaps
+      const tileX0 = Math.floor(min.x)
+      const tileX1 = Math.floor(max.x - 0.01)
+      const tileZ0 = Math.floor(min.z)
+      const tileZ1 = Math.floor(max.z - 0.01)
+
+      for (let tx = tileX0; tx <= tileX1; tx++) {
+        for (let tz = tileZ0; tz <= tileZ1; tz++) {
+          if (tx < 0 || tz < 0 || tx >= map.width || tz >= map.height) continue
+
+          // Center of the wall within this tile
+          const wallCenterInTileX = ((min.x + max.x) / 2) - tx
+          const wallCenterInTileZ = ((min.z + max.z) / 2) - tz
+
+          let edge = 0
+          if (isXAligned) {
+            // Wall runs along X axis → it blocks crossing in Z direction
+            // Determine if it's on the N or S edge of the tile
+            edge = wallCenterInTileZ < 0.5 ? 1 : 4  // N=1 or S=4
+          } else if (isZAligned) {
+            // Wall runs along Z axis → it blocks crossing in X direction
+            edge = wallCenterInTileX < 0.5 ? 8 : 2  // W=8 or E=2
+          } else {
+            // Square-ish wall (corner piece?) — block nearest edge
+            const ne = getNearestEdge(tx, tz, wallCenterInTileX, wallCenterInTileZ)
+            edge = ne.edge
+          }
+
+          const current = getWallAt(tx, tz)
+          if (!(current & edge)) {
+            setWallAt(tx, tz, current | edge)
+            count++
+          }
+        }
+      }
+    }
+    rebuildCollisionMeshes()
+    statusText.textContent = `Auto-detected ${count} wall edges`
+  })
 
   const smoothModeBtn = sidebar.querySelector('#toggleSmoothMode')
   const levelModeBtn = sidebar.querySelector('#toggleLevelMode')
@@ -1195,8 +1504,9 @@ let brushRadius = 3.2
       [ToolMode.SELECT]: 'ctx-select',
       [ToolMode.TEXTURE_PLANE]: 'ctx-texture',
       [ToolMode.NPC_SPAWN]: 'ctx-npc-spawn',
+      [ToolMode.COLLISION]: 'ctx-collision',
     }
-    for (const id of ['ctx-terrain', 'ctx-paint', 'ctx-place', 'ctx-select', 'ctx-texture', 'ctx-npc-spawn']) {
+    for (const id of ['ctx-terrain', 'ctx-paint', 'ctx-place', 'ctx-select', 'ctx-texture', 'ctx-npc-spawn', 'ctx-collision']) {
       const el = sidebar.querySelector(`#${id}`)
       if (el) el.style.display = 'none'
     }
@@ -1357,15 +1667,53 @@ let brushRadius = 3.2
   }
 
   function setTool(mode) {
+    const wasCollision = state.tool === ToolMode.COLLISION
     state.tool = mode
     if (hoverEdgeHelper) { hoverEdgeHelper.dispose(); hoverEdgeHelper = null }
     npcSpawnGroup.setEnabled(mode === ToolMode.NPC_SPAWN)
+    collisionGroup.setEnabled(mode === ToolMode.COLLISION)
+    if (mode === ToolMode.COLLISION) rebuildCollisionMeshes()
     if (mode === ToolMode.NPC_SPAWN) {
       rebuildNpcSpawnMeshes()
       refreshNpcSpawnList()
     }
+    // X-ray mode: make placed objects transparent in collision tool
+    if (mode === ToolMode.COLLISION && !wasCollision) setPlacedObjectsXray(true)
+    if (mode !== ToolMode.COLLISION && wasCollision) setPlacedObjectsXray(false)
     updateToolUI()
     updatePreviewObject().catch(console.error)
+  }
+
+  function setPlacedObjectsXray(xray) {
+    for (const obj of placedGroup.getChildren()) {
+      for (const mesh of obj.getChildMeshes ? obj.getChildMeshes() : []) {
+        const mat = mesh.material
+        if (!mat) continue
+        if (xray) {
+          // Store original alpha to restore later
+          if (mat._origAlpha === undefined) mat._origAlpha = mat.alpha
+          if (mat._origTransMode === undefined) mat._origTransMode = mat.transparencyMode
+          mat.alpha = 0.15
+          mat.transparencyMode = 2 // ALPHABLEND
+        } else {
+          if (mat._origAlpha !== undefined) { mat.alpha = mat._origAlpha; delete mat._origAlpha }
+          if (mat._origTransMode !== undefined) { mat.transparencyMode = mat._origTransMode; delete mat._origTransMode }
+        }
+      }
+    }
+    // Also make texture planes transparent
+    if (texturePlaneGroup) {
+      for (const mesh of texturePlaneGroup.getChildMeshes ? texturePlaneGroup.getChildMeshes() : []) {
+        const mat = mesh.material
+        if (!mat) continue
+        if (xray) {
+          if (mat._origAlpha === undefined) mat._origAlpha = mat.alpha
+          mat.alpha = 0.1
+        } else {
+          if (mat._origAlpha !== undefined) { mat.alpha = mat._origAlpha; delete mat._origAlpha }
+        }
+      }
+    }
   }
 
   function createBoundingBoxHelper(target, color) {
@@ -1493,7 +1841,8 @@ let brushRadius = 3.2
       placedObjects: serializePlacedObjects(),
       layers: JSON.parse(JSON.stringify(layers)),
       activeLayerId,
-      npcSpawns: serializeNpcSpawns()
+      npcSpawns: serializeNpcSpawns(),
+      collisionData: serializeCollisionData()
     }
   }
 
@@ -1550,6 +1899,7 @@ let brushRadius = 3.2
 
     await rebuildPlacedObjectsFromData(data.placedObjects || [])
     loadNpcSpawns(data.npcSpawns)
+    loadCollisionData(data.collisionData)
 
     mapWidthInput.value = map.width
     mapHeightInput.value = map.height
@@ -1628,7 +1978,8 @@ let brushRadius = 3.2
     return {
       map: JSON.parse(JSON.stringify(map.toJSON())),
       placedObjects: serializePlacedObjects(),
-      npcSpawns: JSON.parse(JSON.stringify(serializeNpcSpawns()))
+      npcSpawns: JSON.parse(JSON.stringify(serializeNpcSpawns())),
+      collisionData: serializeCollisionData()
     }
   }
 
@@ -1647,6 +1998,7 @@ let brushRadius = 3.2
 
     await rebuildPlacedObjectsFromData(snapshot.placedObjects || [])
     loadNpcSpawns(snapshot.npcSpawns)
+    loadCollisionData(snapshot.collisionData)
 
     mapWidthInput.value = map.width
     mapHeightInput.value = map.height
@@ -1659,6 +2011,8 @@ let brushRadius = 3.2
       rebuildTexturePlanesOnly()
       rebuildTextureOverlaysOnly()
     }
+    // Reapply xray if collision tool is active (objects were just rebuilt)
+    if (state.tool === ToolMode.COLLISION) setPlacedObjectsXray(true)
     updateSelectionHelper()
     updateToolUI()
   }
@@ -2646,10 +3000,10 @@ function applyToolAtTile(tile, eventLike = null) {
     const { x, z, u = 0.5, v = 0.5 } = hovered
     const dL = u, dR = 1 - u, dT = v, dB = 1 - v
     const min = Math.min(dL, dR, dT, dB)
-    if (min === dL) return { x: x + 0.25, z: z + 0.5 }
-    if (min === dR) return { x: x + 0.75, z: z + 0.5 }
-    if (min === dT) return { x: x + 0.5,  z: z + 0.25 }
-    return                 { x: x + 0.5,  z: z + 0.75 }
+    if (min === dL) return { x: x + 0.25, z: z + 0.5, edge: 8 }  // W
+    if (min === dR) return { x: x + 0.75, z: z + 0.5, edge: 2 }  // E
+    if (min === dT) return { x: x + 0.5,  z: z + 0.25, edge: 1 } // N
+    return                 { x: x + 0.5,  z: z + 0.75, edge: 4 } // S
   }
 
   function updateHoverEdgeHelper() {
@@ -2746,7 +3100,12 @@ function applyToolAtTile(tile, eventLike = null) {
     const pos = tileWorldPosition(tile.x, tile.z)
     if (asset.name?.toLowerCase().includes('wall')) {
       const snap = getWallEdgeSnap(tile)
-      if (snap) { pos.x = snap.x; pos.z = snap.z }
+      if (snap) {
+        pos.x = snap.x; pos.z = snap.z
+        // Auto-set wall collision on the snapped edge
+        const current = getWallAt(tile.x, tile.z)
+        setWallAt(tile.x, tile.z, current | snap.edge)
+      }
     }
     if (event) {
       const sp = pickSurfacePoint(event)
@@ -3579,6 +3938,7 @@ function applyToolAtTile(tile, eventLike = null) {
       const mapData = JSON.parse(data.files['map.json'])
       const meta = JSON.parse(data.files['meta.json'])
       const spawns = JSON.parse(data.files['spawns.json'])
+      const walls = data.files['walls.json'] ? JSON.parse(data.files['walls.json']) : null
 
       // Convert server format to editor save format
       const saveData = {
@@ -3586,7 +3946,8 @@ function applyToolAtTile(tile, eventLike = null) {
         placedObjects: mapData.placedObjects || [],
         layers: mapData.layers || [{ id: 'layer_0', name: 'Layer 1', visible: true }],
         activeLayerId: mapData.activeLayerId || 'layer_0',
-        npcSpawns: (spawns.npcs || []).map((s, i) => ({ id: i + 1, npcId: s.npcId, x: s.x, z: s.z, wanderRange: s.wanderRange ?? 3 }))
+        npcSpawns: (spawns.npcs || []).map((s, i) => ({ id: i + 1, npcId: s.npcId, x: s.x, z: s.z, wanderRange: s.wanderRange ?? 3 })),
+        collisionData: walls
       }
       await loadSaveData(saveData)
       statusText.textContent = `Loaded "${mapId}" from server`
@@ -3632,7 +3993,7 @@ function applyToolAtTile(tile, eventLike = null) {
       const res = await fetch(`${SERVER_API}/save-map`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mapId, meta, spawns, mapData: mapFile })
+        body: JSON.stringify({ mapId, meta, spawns, mapData: mapFile, walls: serializeCollisionData() })
       })
       const data = await res.json()
       if (data.ok) {
@@ -4013,6 +4374,36 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
         state.lastTerrainEditTime = now
         applyToolAtTile(tile, event)
       }
+    } else if (state.tool === ToolMode.COLLISION) {
+      if (collisionMode === 'wall') {
+        const erasing = wallEraseMode || event.shiftKey
+        if (erasing) {
+          // Erase mode: clear all edges per tile, track by tile
+          const tileKey = `${tile.x},${tile.z}`
+          if (!state.draggedTiles.has(tileKey)) {
+            state.draggedTiles.add(tileKey)
+            setWallAt(tile.x, tile.z, 0)
+            delete getCollisionLayer().wallHeights[`${tile.x},${tile.z}`]
+            rebuildCollisionMeshes()
+          }
+        } else {
+          // Draw mode: track tile+edge so we can paint different edges on the same tile
+          const { edge } = getNearestEdge(tile.x, tile.z, tile.u, tile.v)
+          const edgeKey = `${tile.x},${tile.z},${edge}`
+          if (!state.draggedTiles.has(edgeKey)) {
+            state.draggedTiles.add(edgeKey)
+            const current = getWallAt(tile.x, tile.z)
+            setWallAt(tile.x, tile.z, current | edge)
+            rebuildCollisionMeshes()
+          }
+        }
+      } else if (collisionMode === 'block') {
+        if (!state.draggedTiles.has(key)) {
+          state.draggedTiles.add(key)
+          setBlockedTile(tile.x, tile.z, !event.shiftKey)
+          rebuildCollisionMeshes()
+        }
+      }
     } else {
       if (!state.draggedTiles.has(key)) {
         state.draggedTiles.add(key)
@@ -4186,6 +4577,51 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
       rebuildNpcSpawnMeshes()
       refreshNpcSpawnList()
       updateToolUI()
+      return
+    }
+
+    if (state.tool === ToolMode.COLLISION) {
+      if (!state.historyCapturedThisStroke) { pushUndoState(); state.historyCapturedThisStroke = true }
+      if (collisionMode === 'wall') {
+        const erasing = wallEraseMode || event.shiftKey
+        if (erasing) {
+          // Erase: clear ALL edges on this tile
+          setWallAt(tile.x, tile.z, 0)
+          delete getCollisionLayer().wallHeights[`${tile.x},${tile.z}`]
+        } else {
+          const { edge } = getNearestEdge(tile.x, tile.z, tile.u, tile.v)
+          toggleWallEdge(tile.x, tile.z, edge)
+          // Set wall height if non-default
+          const wallH = parseFloat(sidebar.querySelector('#wallHeightSlider')?.value) || 1.8
+          if (wallH !== 1.8 && getWallAt(tile.x, tile.z) > 0) {
+            getCollisionLayer().wallHeights[`${tile.x},${tile.z}`] = wallH
+          }
+        }
+      } else if (collisionMode === 'block') {
+        const current = getWallAt(tile.x, tile.z)
+        setBlockedTile(tile.x, tile.z, current !== 15)
+      } else if (collisionMode === 'floor') {
+        if (event.shiftKey) {
+          setFloorAt(tile.x, tile.z, null)
+        } else {
+          const h = parseFloat(sidebar.querySelector('#floorHeightInput')?.value) || 3.0
+          setFloorAt(tile.x, tile.z, h)
+        }
+      } else if (collisionMode === 'stair') {
+        if (event.shiftKey) {
+          setStairAt(tile.x, tile.z, null)
+        } else {
+          setStairAt(tile.x, tile.z, {
+            direction: stairDirection,
+            baseHeight: parseFloat(sidebar.querySelector('#stairBaseH')?.value) || 0,
+            topHeight: parseFloat(sidebar.querySelector('#stairTopH')?.value) || 3.5
+          })
+        }
+      }
+      rebuildCollisionMeshes()
+      state.isPainting = true
+      state.draggedTiles.clear()
+      state.draggedTiles.add(`${tile.x},${tile.z}`)
       return
     }
 
@@ -4594,6 +5030,7 @@ if (key === 'e') {
     if (key === '4') return setTool(ToolMode.SELECT)
     if (key === '5') return setTool(ToolMode.TEXTURE_PLANE)
     if (key === '6') return setTool(ToolMode.NPC_SPAWN)
+    if (key === '7') return setTool(ToolMode.COLLISION)
 
     if (key === 'v') {
       texturePlaneVertical = !texturePlaneVertical

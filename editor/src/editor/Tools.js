@@ -5,7 +5,8 @@ export const ToolMode = {
   SELECT: 'select',
   TEXTURE: 'texture',
   TEXTURE_PLANE: 'texture_plane',
-  NPC_SPAWN: 'npc_spawn'
+  NPC_SPAWN: 'npc_spawn',
+  COLLISION: 'collision'
 }
 
 export function toolLabel(mode) {
@@ -16,5 +17,6 @@ export function toolLabel(mode) {
   if (mode === ToolMode.TEXTURE) return 'Texture Paint'
   if (mode === ToolMode.TEXTURE_PLANE) return 'Texture Plane'
   if (mode === ToolMode.NPC_SPAWN) return 'NPC Spawn'
+  if (mode === ToolMode.COLLISION) return 'Collision'
   return 'Unknown Tool'
 }

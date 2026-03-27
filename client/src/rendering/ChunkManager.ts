@@ -484,7 +484,8 @@ export class ChunkManager {
     console.log(`[ChunkManager] Ground mesh vertices: ${ground.getTotalVertices()}`);
     const water = this.buildWaterMesh(chunkX, chunkZ, startX, startZ, endX, endZ);
     const cliff = this.buildCliffMesh(chunkX, chunkZ, startX, startZ, endX, endZ);
-    const wall = this.buildWallMesh(chunkX, chunkZ, startX, startZ, endX, endZ);
+    // Wall meshes disabled — collision walls are invisible barriers, GLB models provide visuals
+    const wall = null;
     const roof = this.buildRoofMesh(chunkX, chunkZ, startX, startZ, endX, endZ);
     const floor = this.buildFloorMesh(chunkX, chunkZ, startX, startZ, endX, endZ);
     const stairs = this.buildStairMesh(chunkX, chunkZ, startX, startZ, endX, endZ);
@@ -1098,7 +1099,7 @@ export class ChunkManager {
   // --- Upper floor layer mesh builders (identical logic as floor 0 but from layer data) ---
 
   private buildFloorLayerMeshes(chunkX: number, chunkZ: number, startX: number, startZ: number, endX: number, endZ: number, floorIdx: number, layer: FloorLayerClientData): FloorMeshSet | null {
-    const wall = this.buildWallMeshForLayer(chunkX, chunkZ, startX, startZ, endX, endZ, floorIdx, layer);
+    const wall = null; // collision-only, GLB models provide visuals
     const roof = this.buildRoofMeshForLayer(chunkX, chunkZ, startX, startZ, endX, endZ, floorIdx, layer);
     const floor = this.buildFloorMeshForLayer(chunkX, chunkZ, startX, startZ, endX, endZ, floorIdx, layer);
     const stairs = this.buildStairMeshForLayer(chunkX, chunkZ, startX, startZ, endX, endZ, floorIdx, layer);
@@ -1429,14 +1430,36 @@ export class ChunkManager {
   isWallBlocked(fromX: number, fromZ: number, toX: number, toZ: number): boolean {
     const fx = Math.floor(fromX), fz = Math.floor(fromZ), tx = Math.floor(toX), tz = Math.floor(toZ);
     const dx = tx - fx, dz = tz - fz;
+    // Cardinal
     if (dx === 0 && dz === -1) return (this.getWallRaw(fx, fz) & WallEdge.N) !== 0;
     if (dx === 1 && dz === 0) return (this.getWallRaw(fx, fz) & WallEdge.E) !== 0;
     if (dx === 0 && dz === 1) return (this.getWallRaw(fx, fz) & WallEdge.S) !== 0;
     if (dx === -1 && dz === 0) return (this.getWallRaw(fx, fz) & WallEdge.W) !== 0;
-    if (dx === 1 && dz === -1) return (this.getWallRaw(fx, fz) & WallEdge.N) !== 0 || (this.getWallRaw(fx, fz) & WallEdge.E) !== 0 || (this.getWallRaw(tx, tz) & WallEdge.S) !== 0 || (this.getWallRaw(tx, tz) & WallEdge.W) !== 0;
-    if (dx === -1 && dz === -1) return (this.getWallRaw(fx, fz) & WallEdge.N) !== 0 || (this.getWallRaw(fx, fz) & WallEdge.W) !== 0 || (this.getWallRaw(tx, tz) & WallEdge.S) !== 0 || (this.getWallRaw(tx, tz) & WallEdge.E) !== 0;
-    if (dx === 1 && dz === 1) return (this.getWallRaw(fx, fz) & WallEdge.S) !== 0 || (this.getWallRaw(fx, fz) & WallEdge.E) !== 0 || (this.getWallRaw(tx, tz) & WallEdge.N) !== 0 || (this.getWallRaw(tx, tz) & WallEdge.W) !== 0;
-    if (dx === -1 && dz === 1) return (this.getWallRaw(fx, fz) & WallEdge.S) !== 0 || (this.getWallRaw(fx, fz) & WallEdge.W) !== 0 || (this.getWallRaw(tx, tz) & WallEdge.N) !== 0 || (this.getWallRaw(tx, tz) & WallEdge.E) !== 0;
+    // Diagonal: check source, destination, AND both intermediate tiles
+    if (dx === 1 && dz === -1) {
+      if ((this.getWallRaw(fx, fz) & WallEdge.N) !== 0 || (this.getWallRaw(fx, fz) & WallEdge.E) !== 0) return true;
+      if ((this.getWallRaw(tx, tz) & WallEdge.S) !== 0 || (this.getWallRaw(tx, tz) & WallEdge.W) !== 0) return true;
+      if ((this.getWallRaw(fx + 1, fz) & WallEdge.N) !== 0 || (this.getWallRaw(fx, fz - 1) & WallEdge.E) !== 0) return true;
+      return false;
+    }
+    if (dx === -1 && dz === -1) {
+      if ((this.getWallRaw(fx, fz) & WallEdge.N) !== 0 || (this.getWallRaw(fx, fz) & WallEdge.W) !== 0) return true;
+      if ((this.getWallRaw(tx, tz) & WallEdge.S) !== 0 || (this.getWallRaw(tx, tz) & WallEdge.E) !== 0) return true;
+      if ((this.getWallRaw(fx - 1, fz) & WallEdge.N) !== 0 || (this.getWallRaw(fx, fz - 1) & WallEdge.W) !== 0) return true;
+      return false;
+    }
+    if (dx === 1 && dz === 1) {
+      if ((this.getWallRaw(fx, fz) & WallEdge.S) !== 0 || (this.getWallRaw(fx, fz) & WallEdge.E) !== 0) return true;
+      if ((this.getWallRaw(tx, tz) & WallEdge.N) !== 0 || (this.getWallRaw(tx, tz) & WallEdge.W) !== 0) return true;
+      if ((this.getWallRaw(fx + 1, fz) & WallEdge.S) !== 0 || (this.getWallRaw(fx, fz + 1) & WallEdge.E) !== 0) return true;
+      return false;
+    }
+    if (dx === -1 && dz === 1) {
+      if ((this.getWallRaw(fx, fz) & WallEdge.S) !== 0 || (this.getWallRaw(fx, fz) & WallEdge.W) !== 0) return true;
+      if ((this.getWallRaw(tx, tz) & WallEdge.N) !== 0 || (this.getWallRaw(tx, tz) & WallEdge.E) !== 0) return true;
+      if ((this.getWallRaw(fx - 1, fz) & WallEdge.S) !== 0 || (this.getWallRaw(fx, fz + 1) & WallEdge.W) !== 0) return true;
+      return false;
+    }
     return false;
   }
 
