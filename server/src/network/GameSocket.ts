@@ -18,7 +18,9 @@ export function handleGameSocketOpen(
   const saved = world.db.loadPlayerState(accountId);
 
   // Use saved position, or map spawn point for new players
-  const mapLevel = saved?.mapLevel ?? 'overworld';
+  let mapLevel = saved?.mapLevel ?? 'kcmap';
+  // Fallback to kcmap if saved map no longer exists
+  try { world.getMap(mapLevel); } catch { mapLevel = 'kcmap'; }
   const map = world.getMap(mapLevel);
   const defaultSpawn = map.findSpawnPoint();
   const spawnX = saved ? saved.x : defaultSpawn.x;

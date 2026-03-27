@@ -50,7 +50,7 @@ export class World {
     this.data = new DataLoader();
 
     // Load all maps
-    this.loadMap('overworld');
+    this.loadMap('kcmap');
     this.loadMap('underground');
 
     // Spawn NPCs and objects from data files
@@ -86,6 +86,12 @@ export class World {
         this.chunkManagers.get(mapId)!.addEntity(id, obj.position.x, obj.position.y);
       }
     }
+    // Force all connected players on this map to reload by sending MAP_CHANGE
+    for (const [, player] of this.players) {
+      if (player.currentMapLevel === mapId) {
+        this.sendMapChange(player, mapId);
+      }
+    }
     console.log(`Map '${mapId}' reloaded: ${gameMap.width}x${gameMap.height}`);
   }
 
@@ -109,7 +115,7 @@ export class World {
           console.warn(`Unknown NPC id ${spawn.npcId} in ${mapId}/spawns.json`);
           continue;
         }
-        const npc = new Npc(npcDef, spawn.x, spawn.z);
+        const npc = new Npc(npcDef, spawn.x, spawn.z, spawn.wanderRange);
         npc.currentMapLevel = mapId;
         this.npcs.set(npc.id, npc);
 
@@ -1130,6 +1136,6 @@ export class World {
 
   /** Convenience: get the 'overworld' map (used by legacy callers) */
   get map(): GameMap {
-    return this.getMap('overworld');
+    return this.getMap('kcmap');
   }
 }

@@ -201,6 +201,7 @@ export interface SpawnEntry {
   npcId: number;
   x: number;
   z: number;
+  wanderRange?: number;
 }
 
 export interface ObjectSpawnEntry {

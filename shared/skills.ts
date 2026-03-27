@@ -131,11 +131,27 @@ export const STANCE_XP: Record<MeleeStance, { accuracy: number; power: number; d
 // OSRS combat formulas
 export const ACC_BASE = 64;
 
+/**
+ * 2004Scape max hit formula:
+ * maxHit = floor((effStr * (strBonus + 64) + 320) / 640)
+ */
 export function osrsMeleeMaxHit(effStr: number, bStr: number, dmgMult: number = 1.0): number {
-  const base = Math.floor(1.3 + (effStr / 10) + (bStr / 80) + (effStr * bStr) / 640);
+  const base = Math.floor((effStr * (bStr + 64) + 320) / 640);
   return Math.max(1, Math.floor(base * dmgMult));
 }
 
+/**
+ * 2004Scape hit check: two independent random rolls compared.
+ * Returns true if the attack lands.
+ * randominc(n) = random integer from 0 to n inclusive.
+ */
+export function rollHit(attackRoll: number, defenceRoll: number): boolean {
+  const atkRand = Math.floor(Math.random() * (attackRoll + 1));
+  const defRand = Math.floor(Math.random() * (defenceRoll + 1));
+  return atkRand > defRand;
+}
+
+/** @deprecated Use rollHit instead — kept for backward compat */
 export function calculateHitChance(attackRoll: number, defenceRoll: number): number {
   if (attackRoll > defenceRoll) {
     return 1 - ((defenceRoll + 2) / (2 * (attackRoll + 1)));

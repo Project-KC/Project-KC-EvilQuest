@@ -669,6 +669,36 @@
       "id": "Fence1Fix",
       "name": "Fence1Fix",
       "path": "/assets/models/Fence1Fix.glb"
+    },
+    {
+      "id": "Fence2",
+      "name": "Fence2",
+      "path": "/assets/models/Fence2.glb"
+    },
+    {
+      "id": "Waterwheel",
+      "name": "Waterwheel",
+      "path": "/assets/models/Waterwheel.glb"
+    },
+    {
+      "id": "dying tree",
+      "name": "Dying Tree",
+      "path": "/assets/models/dying tree.glb"
+    },
+    {
+      "id": "oaktree",
+      "name": "Oak Tree",
+      "path": "/assets/models/oaktree.glb"
+    },
+    {
+      "id": "oaktree2",
+      "name": "Oak Tree 2",
+      "path": "/assets/models/oaktree2.glb"
+    },
+    {
+      "id": "sTree4",
+      "name": "sTree4",
+      "path": "/assets/models/sTree4.glb"
     }
   ]
 }

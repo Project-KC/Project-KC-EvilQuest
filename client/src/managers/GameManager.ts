@@ -245,7 +245,7 @@ export class GameManager {
     });
 
     // Load overworld map, object definitions, and tree 3D model
-    this.chunkManager.loadMap('overworld').then(() => {
+    this.chunkManager.loadMap('kcmap').then(() => {
       this.applyFog();
       this.repositionWorldObjects();
     });

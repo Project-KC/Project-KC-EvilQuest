@@ -335,19 +335,23 @@ function addTileGeometry(vertices, colors, uvs, indices, base, tileType, h, x, z
     colorMultiplyScalar(cB, avgAO * (shadowableB && shadowInf ? avgShadow : 1.0))
 
     if (splitDir === 'forward') {
+      // Triangle A (matches game CW winding for RHS): TL, TR, BL
       pushVertex(vertices, colors, uvs, x,     h.tl, z,     cA, 0, 0)
-      pushVertex(vertices, colors, uvs, x,     h.bl, z + 1, cA, 0, 1)
       pushVertex(vertices, colors, uvs, x + 1, h.tr, z,     cA, 1, 0)
-      pushVertex(vertices, colors, uvs, x,     h.bl, z + 1, cB, 0, 1)
-      pushVertex(vertices, colors, uvs, x + 1, h.br, z + 1, cB, 1, 1)
-      pushVertex(vertices, colors, uvs, x + 1, h.tr, z,     cB, 1, 0)
-    } else {
-      pushVertex(vertices, colors, uvs, x,     h.tl, z,     cA, 0, 0)
       pushVertex(vertices, colors, uvs, x,     h.bl, z + 1, cA, 0, 1)
+      // Triangle B: TR, BR, BL
+      pushVertex(vertices, colors, uvs, x + 1, h.tr, z,     cB, 1, 0)
+      pushVertex(vertices, colors, uvs, x + 1, h.br, z + 1, cB, 1, 1)
+      pushVertex(vertices, colors, uvs, x,     h.bl, z + 1, cB, 0, 1)
+    } else {
+      // Triangle A: TL, TR, BR
+      pushVertex(vertices, colors, uvs, x,     h.tl, z,     cA, 0, 0)
+      pushVertex(vertices, colors, uvs, x + 1, h.tr, z,     cA, 1, 0)
       pushVertex(vertices, colors, uvs, x + 1, h.br, z + 1, cA, 1, 1)
+      // Triangle B: TL, BR, BL
       pushVertex(vertices, colors, uvs, x,     h.tl, z,     cB, 0, 0)
       pushVertex(vertices, colors, uvs, x + 1, h.br, z + 1, cB, 1, 1)
-      pushVertex(vertices, colors, uvs, x + 1, h.tr, z,     cB, 1, 0)
+      pushVertex(vertices, colors, uvs, x,     h.bl, z + 1, cB, 0, 1)
     }
 
     indices.push(base + 0, base + 1, base + 2, base + 3, base + 4, base + 5)
@@ -360,9 +364,11 @@ function addTileGeometry(vertices, colors, uvs, indices, base, tileType, h, x, z
   pushVertex(vertices, colors, uvs, x + 1, h.br, z + 1, cBR, 1, 1)
 
   if (splitDir === 'forward') {
-    indices.push(base + 0, base + 2, base + 1, base + 2, base + 3, base + 1)
+    // 0=TL, 1=TR, 2=BL, 3=BR; matches game CW winding for RHS (upward normals)
+    indices.push(base + 0, base + 1, base + 2, base + 1, base + 3, base + 2)
   } else {
-    indices.push(base + 0, base + 2, base + 3, base + 0, base + 3, base + 1)
+    // diagonal TR-BL
+    indices.push(base + 0, base + 1, base + 3, base + 0, base + 3, base + 2)
   }
   return 4
 }
@@ -468,6 +474,7 @@ export function buildTerrainMeshes(map, waterTexture, shadowInf = null, scene) {
   }
 
   const group = new TransformNode('terrain-group', scene)
+  group.setEnabled(false)  // start hidden — caller enables after swap
 
   // Store persistent land geometry for partial height-only updates
   _landTileOff = newTileOff
@@ -527,6 +534,7 @@ export function buildTerrainMeshes(map, waterTexture, shadowInf = null, scene) {
 
 export function buildWaterMeshes(map, waterTexture, scene) {
   const group = new TransformNode('terrain-water-group', scene)
+  group.setEnabled(false)
 
   const waterVertices = []
   const waterColors   = []
@@ -703,6 +711,7 @@ export function buildCliffMeshes(map, scene) {
   const mat = createLambertMaterial('cliffs-mat', scene, { backFaceCulling: false })
   mesh.material = mat
   mesh.hasVertexAlpha = true
+  mesh.setEnabled(false)  // start hidden — caller enables after swap
   return mesh
 }
 
@@ -777,6 +786,7 @@ export function updateTerrainLandHeights(map, shadowInf, x1, z1, x2, z2) {
 
 export function buildTextureOverlays(map, textureRegistry, textureCache, scene) {
   const group = new TransformNode('texture-overlays', scene)
+  group.setEnabled(false)
 
   for (let z = 0; z < map.height; z++) {
     for (let x = 0; x < map.width; x++) {
@@ -818,13 +828,14 @@ export function buildTextureOverlays(map, textureRegistry, textureCache, scene) 
 
         const mesh = createMeshFromArrays(`texoverlay_${x}_${z}`, positions, null, makeUVs(rotation, scale, worldUV), idxs, scene)
         const mat = new StandardMaterial(`texoverlay_mat_${x}_${z}`, scene)
+        mat.diffuseTexture = texture
+        mat.diffuseColor = new Color3(0.82, 0.82, 0.82)
         mat.emissiveTexture = texture
-        mat.emissiveColor = new Color3(0.82, 0.82, 0.82)
-        mat.diffuseColor = new Color3(0, 0, 0)
+        mat.emissiveColor = new Color3(0.18, 0.18, 0.18)
         mat.specularColor = new Color3(0, 0, 0)
-        mat.disableLighting = true
-        mat.useAlphaFromDiffuseTexture = false
-        mat.opacityTexture = texture
+        mat.useAlphaFromDiffuseTexture = true
+        mat.transparencyMode = 1 // ALPHATEST
+        mat.backFaceCulling = false
         mat.zOffset = -2
         mesh.material = mat
         mesh.parent = group
@@ -842,63 +853,57 @@ export function buildTextureOverlays(map, textureRegistry, textureCache, scene) 
   return group
 }
 
+export function buildSingleTexturePlane(plane, textureRegistry, textureCache, scene, isSelected) {
+  const textureInfo = textureRegistry.find((t) => t.id === plane.textureId)
+  if (!textureInfo) return null
+
+  const textureSrc = textureCache.get(textureInfo.id)
+  if (!textureSrc) return null
+
+  const texture = textureSrc.clone()
+  const scale = plane.uvRepeat || 1
+
+  texture.wrapU = Texture.WRAP_ADDRESSMODE
+  texture.wrapV = Texture.WRAP_ADDRESSMODE
+  texture.uScale = scale
+  texture.vScale = scale
+
+  const mesh = MeshBuilder.CreatePlane(`texplane_${plane.id}`, {
+    width: Math.max(0.01, plane.width || 1),
+    height: Math.max(0.01, plane.height || 1),
+    sideOrientation: Mesh.DOUBLESIDE
+  }, scene)
+
+  texture.hasAlpha = true
+  const mat = new StandardMaterial(`texplane_mat_${plane.id}`, scene)
+  mat.diffuseTexture = texture
+  mat.emissiveTexture = texture
+  mat.useAlphaFromDiffuseTexture = true
+  mat.diffuseColor = new Color3(0, 0, 0)
+  mat.emissiveColor = isSelected ? new Color3(0.2, 0.4, 0.8) : new Color3(1, 1, 1)
+  mat.specularColor = new Color3(0, 0, 0)
+  mat.transparencyMode = 1
+  mat.alphaCutOff = 0.05
+  mat.zOffset = -1
+  mesh.material = mat
+
+  mesh.position.set(plane.position?.x ?? 0, plane.position?.y ?? 0, plane.position?.z ?? 0)
+  mesh.rotation.set(plane.rotation?.x ?? 0, plane.rotation?.y ?? 0, plane.rotation?.z ?? 0)
+  mesh.scaling.set(plane.scale?.x ?? 1, plane.scale?.y ?? 1, plane.scale?.z ?? 1)
+  mesh.renderingGroupId = 0
+  mesh.metadata = { texturePlane: plane }
+
+  return mesh
+}
+
 export function buildTexturePlanes(map, textureRegistry, textureCache, scene) {
   const group = new TransformNode('texture-planes', scene)
+  group.setEnabled(false)
 
   for (const plane of map.texturePlanes) {
-    const textureInfo = textureRegistry.find((t) => t.id === plane.textureId)
-    if (!textureInfo) continue
-
-    const textureSrc = textureCache.get(textureInfo.id)
-    if (!textureSrc) continue
-
-    const texture = textureSrc.clone()
-    const scale = plane.uvRepeat || 1
-
-    const sx = plane.scale?.x ?? 1
-    const sy = plane.scale?.y ?? 1
-    const width = Math.max(0.01, plane.width || 1)
-    const height = Math.max(0.01, plane.height || 1)
-
-    const px = plane.position?.x ?? 0
-    const py = plane.position?.y ?? 0
-    const pz = plane.position?.z ?? 0
-
-    texture.wrapU = Texture.WRAP_ADDRESSMODE
-    texture.wrapV = Texture.WRAP_ADDRESSMODE
-    texture.uScale = scale
-    texture.vScale = scale
-
     const isSelected = map.selectedTexturePlaneId === plane.id
-
-    const mesh = MeshBuilder.CreatePlane(`texplane_${plane.id}`, {
-      width: width,
-      height: height,
-      sideOrientation: Mesh.DOUBLESIDE
-    }, scene)
-
-    const mat = new StandardMaterial(`texplane_mat_${plane.id}`, scene)
-    mat.emissiveTexture = texture
-    mat.emissiveColor = isSelected ? new Color3(0.92, 0.96, 1.0) : new Color3(0.82, 0.82, 0.82)
-    mat.diffuseColor = new Color3(0, 0, 0)
-    mat.specularColor = new Color3(0, 0, 0)
-    mat.disableLighting = true
-    mat.opacityTexture = texture
-    mat.zOffset = -1
-    mesh.material = mat
-
-    const rx = plane.rotation?.x ?? 0
-    const ry = plane.rotation?.y ?? 0
-    const rz = plane.rotation?.z ?? 0
-    const sz = plane.scale?.z ?? 1
-
-    mesh.position.set(px, py, pz)
-    mesh.rotation.set(rx, ry, rz)
-    mesh.scaling.set(sx, sy, sz)
-    mesh.renderingGroupId = 1
-    mesh.metadata = { texturePlane: plane }
-
-    mesh.parent = group
+    const mesh = buildSingleTexturePlane(plane, textureRegistry, textureCache, scene, isSelected)
+    if (mesh) mesh.parent = group
   }
 
   return group

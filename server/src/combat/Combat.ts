@@ -2,7 +2,7 @@ import type { Player } from '../entity/Player';
 import type { Npc } from '../entity/Npc';
 import {
   addXp, STANCE_BONUSES, STANCE_XP, ACC_BASE,
-  osrsMeleeMaxHit, calculateHitChance,
+  osrsMeleeMaxHit, rollHit,
   type CombatBonuses, type ItemDef,
 } from '@projectrs/shared';
 
@@ -20,8 +20,12 @@ export interface XpDrop {
 }
 
 /**
- * OSRS-style melee combat: player attacks NPC.
- * Returns hit info + XP drops for the player.
+ * 2004Scape-style melee combat: player attacks NPC.
+ * - Dual random roll hit check (not percentage)
+ * - Max hit = floor((effStr * (strBonus + 64) + 320) / 640)
+ * - Damage = random(0..maxHit) inclusive (0 = hit but no damage)
+ * - XP awarded on capped damage (no overkill XP)
+ * - Flinch: NPC retaliates at half attack speed on first hit
  */
 export function processPlayerCombat(
   player: Player,
@@ -44,7 +48,7 @@ export function processPlayerCombat(
   const bonuses = player.computeBonuses(itemDefs);
   const stance = STANCE_BONUSES[player.stance];
 
-  // Effective levels
+  // Effective levels (stat + stance bonus + 8)
   const effAcc = player.skills.accuracy.currentLevel + stance.accuracy + 8;
   const effStr = player.skills.power.currentLevel + stance.power + 8;
 
@@ -55,32 +59,36 @@ export function processPlayerCombat(
   else if (weaponStyle === 'slash') attackBonus = bonuses.slashAttack;
   else attackBonus = bonuses.crushAttack;
 
-  // Attack roll
+  // Attack roll = effective_attack * (equipment_bonus + 64)
   const attackRoll = effAcc * (attackBonus + ACC_BASE);
 
-  // NPC defence roll (NPCs use flat defence stat)
+  // NPC defence roll (NPCs use flat defence stat, no equipment)
   const npcDefLevel = npc.def.defence + 8;
-  const npcDefRoll = npcDefLevel * ACC_BASE; // NPCs have no equipment
+  const npcDefRoll = npcDefLevel * ACC_BASE;
 
-  // Hit chance
-  const hitChance = calculateHitChance(attackRoll, npcDefRoll);
-
-  // Max hit
+  // Max hit = floor((effStr * (strBonus + 64) + 320) / 640)
   const maxHit = osrsMeleeMaxHit(effStr, bonuses.meleeStrength);
 
+  // 2004Scape hit check: random(0..atkRoll) > random(0..defRoll)
   let damage = 0;
-  if (Math.random() < hitChance) {
-    damage = 1 + Math.floor(Math.random() * maxHit);
+  if (rollHit(attackRoll, npcDefRoll)) {
+    // Damage = random(0..maxHit) inclusive
+    damage = Math.floor(Math.random() * (maxHit + 1));
   }
 
   const actual = npc.takeDamage(damage);
 
-  // NPC retaliates
+  // NPC retaliates with flinch (half attack speed for first counter-attack)
   if (npc.alive) {
+    const wasInCombat = npc.combatTarget != null;
     npc.combatTarget = player;
+    if (!wasInCombat) {
+      // Flinch: first retaliation at half attack speed
+      npc.attackCooldown = Math.floor(npc.def.attackSpeed / 2);
+    }
   }
 
-  // Award XP based on stance (4 XP per damage dealt)
+  // Award XP based on stance — only on capped damage (no overkill XP)
   const xpDrops: XpDrop[] = [];
   const levelUps: { skill: string; level: number }[] = [];
 
@@ -104,13 +112,14 @@ export function processPlayerCombat(
       xpDrops.push({ skill: 'defence', amount: Math.floor(amt) });
       if (r.leveled) levelUps.push({ skill: 'defence', level: r.newLevel });
     }
-    // HP XP is auto-awarded by addXp for combat skills
-    // but let's check if HP leveled
+    // HP XP is auto-awarded by addXp for combat skills — check if HP leveled
     const oldHpLevel = player.skills.hitpoints.level;
-    // HP XP already added by addXp's auto mechanism, just check level
     if (player.skills.hitpoints.level > oldHpLevel) {
       levelUps.push({ skill: 'hitpoints', level: player.skills.hitpoints.level });
     }
+
+    // Track hero points for kill credit
+    npc.addHeroPoints(player.id, actual);
 
     // Sync health from skills (HP level may have changed)
     player.syncHealthFromSkills();
@@ -130,7 +139,7 @@ export function processPlayerCombat(
 }
 
 /**
- * NPC attacks player — simpler: NPC uses flat stats.
+ * NPC attacks player — 2004Scape style.
  */
 export function processNpcCombat(
   npc: Npc,
@@ -146,7 +155,7 @@ export function processNpcCombat(
   const dx = Math.abs(npc.position.x - target.position.x);
   const dz = Math.abs(npc.position.y - target.position.y);
   if (dx > 1.5 || dz > 1.5) {
-    return null; // Not in range yet, NPC AI will chase
+    return null;
   }
 
   // Check cooldown
@@ -167,18 +176,16 @@ export function processNpcCombat(
   const avgDef = Math.floor((bonuses.stabDefence + bonuses.slashDefence + bonuses.crushDefence) / 3);
   const playerDefRoll = effDef * (avgDef + ACC_BASE);
 
-  const hitChance = calculateHitChance(npcAttackRoll, playerDefRoll);
-
   // NPC max hit
-  const npcMaxHit = osrsMeleeMaxHit(npc.def.strength + 8, 0); // no equipment bonus
+  const npcMaxHit = osrsMeleeMaxHit(npc.def.strength + 8, 0);
 
+  // 2004Scape hit check
   let damage = 0;
-  if (Math.random() < hitChance) {
-    damage = 1 + Math.floor(Math.random() * npcMaxHit);
+  if (rollHit(npcAttackRoll, playerDefRoll)) {
+    damage = Math.floor(Math.random() * (npcMaxHit + 1));
   }
 
   const actual = target.takeDamage(damage);
-  // Sync current HP into skills
   target.skills.hitpoints.currentLevel = target.health;
 
   return {
@@ -191,7 +198,7 @@ export function processNpcCombat(
 }
 
 /**
- * Roll loot from NPC's loot table.
+ * Roll loot — drops go to the player with the most hero points (kill credit).
  */
 export function rollLoot(npc: Npc): { itemId: number; quantity: number }[] {
   const drops: { itemId: number; quantity: number }[] = [];

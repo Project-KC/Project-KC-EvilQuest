@@ -12,6 +12,14 @@ import { Color3, Color4 } from '@babylonjs/core/Maths/math.color'
 import { Texture } from '@babylonjs/core/Materials/Textures/texture'
 import { ImageProcessingConfiguration } from '@babylonjs/core/Materials/imageProcessingConfiguration'
 import '@babylonjs/core/Culling/ray'
+import '@babylonjs/core/Shaders/color.vertex'
+import '@babylonjs/core/Shaders/color.fragment'
+import '@babylonjs/core/Shaders/rgbdDecode.fragment'
+import '@babylonjs/core/Shaders/postprocess.vertex'
+import '@babylonjs/core/Shaders/default.vertex'
+import '@babylonjs/core/Shaders/default.fragment'
+import '@babylonjs/core/Shaders/pbr.vertex'
+import '@babylonjs/core/Shaders/pbr.fragment'
 import '@babylonjs/loaders/glTF'
 
 import { MapData } from './map/MapData.js'
@@ -25,6 +33,7 @@ import {
   buildWaterMeshes,
   buildTextureOverlays,
   buildTexturePlanes,
+  buildSingleTexturePlane,
   updateTerrainLandHeights
 } from './map/TerrainMesh.js'
 
@@ -46,67 +55,40 @@ export function createEditorScene(container) {
   scene.preventDefaultOnPointerDown = false
   scene.preventDefaultOnPointerUp = false
 
-  scene.clearColor = new Color4(0.039, 0.071, 0.020, 1.0) // 0x0a1205
+  scene.clearColor = new Color4(0.4, 0.6, 0.9, 1.0) // sky blue (matches game overworld)
   scene.fogMode = Scene.FOGMODE_LINEAR
-  scene.fogColor = new Color3(0.039, 0.071, 0.020)
-  scene.fogStart = 22
-  scene.fogEnd = 72
+  scene.fogColor = new Color3(0.4, 0.6, 0.9)
+  scene.fogStart = 80
+  scene.fogEnd = 200
 
-  // Disable image processing — vertex colors are pre-baked with shading
-  scene.imageProcessingConfiguration.isEnabled = false
-
-  // Single bright hemispheric light — vertex colors contain all shading already.
-  // HemisphericLight with intensity 2.0 and white diffuse ensures vertex colors
-  // render at approximately their raw values through StandardMaterial's diffuse path.
+  // Lighting — identical to GameManager.ts so the editor matches the game
   const ambient = new HemisphericLight('ambient', new Vector3(0, 1, 0), scene)
-  ambient.intensity = 2.0
-  ambient.diffuse = new Color3(1.0, 1.0, 1.0)
-  ambient.groundColor = new Color3(0.85, 0.85, 0.85)
+  ambient.intensity = 0.9
+  ambient.diffuse = new Color3(0.54, 0.54, 0.54)
+  ambient.groundColor = new Color3(0.35, 0.33, 0.30)
   ambient.specular = new Color3(0, 0, 0)
 
-  // Keep references for dungeon mode switching
-  const sun = ambient   // alias for applyMapType compatibility
-  const fill = ambient  // alias for applyMapType compatibility
+  const sun = new DirectionalLight('sun', new Vector3(-0.5, -1, -0.3), scene)
+  sun.intensity = 1.1
+  sun.diffuse = new Color3(1.0, 0.84, 0.54)
+
+  const fill = new DirectionalLight('fill', new Vector3(0.3, -0.6, 0.5), scene)
+  fill.intensity = 0.65
+  fill.diffuse = new Color3(0.67, 0.73, 0.80)
 
   // Initialize asset loader with scene reference
   initAssetLoader(scene)
 
-function tuneModelLighting(model, assetPath = '') {
-  const pathLower = assetPath.toLowerCase()
-  const isModular = pathLower.includes('modular assets')
-  const isWoodModular = pathLower.includes('wood modular')
-  const isWhiteModular = pathLower.includes('white')
-  const isRock = pathLower.includes('rock')
-
-  const WHITE_MODULAR_BRIGHTNESS = 0.55
-
-  let brightness = 1.0
-  if (isWhiteModular) brightness = WHITE_MODULAR_BRIGHTNESS
-  else if (isWoodModular) brightness = 0.34
-  else if (isModular) brightness = 1.0
-  else if (isRock) brightness = 0.60
-
+function tuneModelLighting(model) {
+  // Match the game client: keep PBR materials as-is, just fix backface culling
+  // and transparency mode. PBR works fine with hemispheric + directional lights.
   const meshes = model.getChildMeshes ? model.getChildMeshes() : []
   for (const child of meshes) {
     const mat = child.material
     if (!mat) continue
-
-    // Convert to unlit: move color to emissive, zero out diffuse
-    const hasDiffuseTex = !!mat.diffuseTexture
-    if (hasDiffuseTex) {
-      mat.emissiveTexture = mat.diffuseTexture
-      mat.diffuseTexture = null
-      mat.emissiveColor = new Color3(brightness, brightness, brightness)
-    } else {
-      const dc = mat.diffuseColor || new Color3(1, 1, 1)
-      mat.emissiveColor = new Color3(dc.r * brightness, dc.g * brightness, dc.b * brightness)
-    }
-
-    mat.diffuseColor = new Color3(0, 0, 0)
-    mat.specularColor = new Color3(0, 0, 0)
-    mat.ambientColor = new Color3(0, 0, 0)
     mat.backFaceCulling = false
-    mat.disableLighting = true
+    if (mat.transparencyMode !== undefined) mat.transparencyMode = 1 // ALPHATEST
+    mat.alpha = 1
   }
 }
 
@@ -228,6 +210,131 @@ function tuneModelLighting(model, assetPath = '') {
 
   let texturePlaneVertical = true
 
+  // --- NPC Spawn system ---
+  let npcDefs = []           // loaded from /data/npcs.json
+  let npcSpawns = []         // { id, npcId, x, z, wanderRange }
+  let _npcSpawnNextId = 1
+  let selectedNpcSpawn = null
+  const npcSpawnGroup = new TransformNode('npcSpawnGroup', scene)
+
+  function addNpcSpawn(npcId, x, z, wanderRange, id) {
+    const spawn = { id: id || _npcSpawnNextId++, npcId, x, z, wanderRange }
+    if (id && id >= _npcSpawnNextId) _npcSpawnNextId = id + 1
+    npcSpawns.push(spawn)
+    return spawn
+  }
+
+  function removeNpcSpawn(spawn) {
+    const idx = npcSpawns.indexOf(spawn)
+    if (idx >= 0) npcSpawns.splice(idx, 1)
+    if (selectedNpcSpawn === spawn) selectedNpcSpawn = null
+  }
+
+  function serializeNpcSpawns() {
+    return npcSpawns.map(s => ({ id: s.id, npcId: s.npcId, x: s.x, z: s.z, wanderRange: s.wanderRange }))
+  }
+
+  function loadNpcSpawns(data) {
+    npcSpawns = []
+    _npcSpawnNextId = 1
+    selectedNpcSpawn = null
+    for (const s of data || []) {
+      addNpcSpawn(s.npcId, s.x, s.z, s.wanderRange ?? 3, s.id)
+    }
+    rebuildNpcSpawnMeshes()
+    refreshNpcSpawnList()
+  }
+
+  function rebuildNpcSpawnMeshes() {
+    // Dispose all children
+    for (const child of [...npcSpawnGroup.getChildren()]) child.dispose()
+
+    for (const spawn of npcSpawns) {
+      const def = npcDefs.find(d => d.id === spawn.npcId)
+      const name = def?.name || `NPC ${spawn.npcId}`
+      const isSelected = spawn === selectedNpcSpawn
+
+      // Spawn marker — a small cylinder
+      const marker = MeshBuilder.CreateCylinder(`npcSpawn_${spawn.id}`, { height: 1.2, diameterTop: 0.3, diameterBottom: 0.5, tessellation: 8 }, scene)
+      const markerMat = new StandardMaterial(`npcSpawnMat_${spawn.id}`, scene)
+      const aggressive = def?.aggressive
+      markerMat.diffuseColor = isSelected ? new Color3(1, 1, 0.2) : (aggressive ? new Color3(0.9, 0.2, 0.15) : new Color3(0.15, 0.7, 0.9))
+      markerMat.emissiveColor = markerMat.diffuseColor.scale(0.4)
+      markerMat.specularColor = new Color3(0, 0, 0)
+      marker.material = markerMat
+      const y = map.getAverageTileHeight(Math.floor(spawn.x), Math.floor(spawn.z))
+      marker.position = new Vector3(spawn.x, y + 0.6, spawn.z)
+      marker.metadata = { npcSpawn: spawn }
+      marker.parent = npcSpawnGroup
+
+      // Wander range circle
+      if (spawn.wanderRange > 0) {
+        const segments = 32
+        const points = []
+        for (let i = 0; i <= segments; i++) {
+          const angle = (i / segments) * Math.PI * 2
+          points.push(new Vector3(
+            spawn.x + Math.cos(angle) * spawn.wanderRange,
+            y + 0.08,
+            spawn.z + Math.sin(angle) * spawn.wanderRange
+          ))
+        }
+        const circle = MeshBuilder.CreateLines(`npcWander_${spawn.id}`, { points }, scene)
+        circle.color = isSelected ? new Color3(1, 1, 0.3) : (aggressive ? new Color3(0.9, 0.3, 0.2) : new Color3(0.2, 0.6, 0.8))
+        circle.alpha = isSelected ? 0.9 : 0.5
+        circle.parent = npcSpawnGroup
+      }
+
+      // Small sphere on top as a secondary visual indicator
+      const dot = MeshBuilder.CreateSphere(`npcDot_${spawn.id}`, { diameter: 0.25, segments: 6 }, scene)
+      const dotMat = new StandardMaterial(`npcDotMat_${spawn.id}`, scene)
+      dotMat.diffuseColor = new Color3(1, 1, 1)
+      dotMat.emissiveColor = isSelected ? new Color3(1, 1, 0.3) : new Color3(0.8, 0.8, 0.8)
+      dotMat.specularColor = new Color3(0, 0, 0)
+      dot.material = dotMat
+      dot.position = new Vector3(spawn.x, y + 1.35, spawn.z)
+      dot.metadata = { npcSpawn: spawn }
+      dot.parent = npcSpawnGroup
+    }
+
+    // Show/hide based on tool
+    npcSpawnGroup.setEnabled(state.tool === ToolMode.NPC_SPAWN)
+  }
+
+  function refreshNpcSpawnList() {
+    const listEl = sidebar.querySelector('#npcSpawnList')
+    const countEl = sidebar.querySelector('#npcSpawnCount')
+    if (!listEl) return
+    if (countEl) countEl.textContent = npcSpawns.length
+
+    listEl.innerHTML = ''
+    for (const spawn of npcSpawns) {
+      const def = npcDefs.find(d => d.id === spawn.npcId)
+      const name = def?.name || `NPC ${spawn.npcId}`
+      const row = document.createElement('div')
+      row.style.cssText = `display:flex;justify-content:space-between;align-items:center;padding:3px 5px;font-size:11px;cursor:pointer;border-radius:3px;margin-bottom:2px;${spawn === selectedNpcSpawn ? 'background:#1a4faf;' : 'background:#222;'}`
+      row.innerHTML = `<span>${name} <span style="opacity:0.5;">(${spawn.x.toFixed(1)}, ${spawn.z.toFixed(1)}) r=${spawn.wanderRange}</span></span>`
+      row.addEventListener('click', () => {
+        selectedNpcSpawn = spawn
+        // Focus camera on spawn
+        camera.target = new Vector3(spawn.x, map.getAverageTileHeight(Math.floor(spawn.x), Math.floor(spawn.z)), spawn.z)
+        rebuildNpcSpawnMeshes()
+        refreshNpcSpawnList()
+        updateToolUI()
+      })
+      listEl.appendChild(row)
+    }
+  }
+
+  function pickNpcSpawn(event) {
+    updateMouse(event)
+    const pick = scene.pick(scene.pointerX, scene.pointerY, (mesh) => {
+      return mesh.isDescendantOf(npcSpawnGroup) && mesh.metadata?.npcSpawn
+    })
+    if (!pick.hit) return null
+    return pick.pickedMesh.metadata.npcSpawn
+  }
+
   let _shadowInfluencesCache = null
 
   function invalidateShadowCache() { _shadowInfluencesCache = null }
@@ -317,7 +424,10 @@ let brushRadius = 3.2
   let _terrainDirtyOpts = { skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true }
   let _terrainDirtyRegion = null  // {x1,z1,x2,z2} when only heights changed; null = full rebuild needed
 
-  function markTerrainDirty({ skipTexturePlanes = false, skipShadows = false, skipTextureOverlays = false, heightsOnly = false, region = null } = {}) {
+  function markTerrainDirty({ skipTexturePlanes = true, skipShadows = false, skipTextureOverlays = true, heightsOnly = false, region = null, rebuildTexturePlanes = false, rebuildTextureOverlays = false } = {}) {
+    // Convenience: explicit rebuild flags override skip flags
+    if (rebuildTexturePlanes) skipTexturePlanes = false
+    if (rebuildTextureOverlays) skipTextureOverlays = false
     _terrainDirty = true
     if (!skipTexturePlanes)   _terrainDirtyOpts.skipTexturePlanes   = false
     if (!skipShadows)         _terrainDirtyOpts.skipShadows         = false
@@ -367,6 +477,11 @@ let brushRadius = 3.2
     <label class="file-label">Import Chunk <input id="importChunkInput" type="file" accept=".json" /></label>
     <button id="restoreAutoSaveBtn">Restore Auto-Save</button>
     <span class="top-sep"></span>
+    <select id="serverMapSelect" style="width:110px;font-size:11px;"></select>
+    <button id="serverLoadBtn" title="Load map from game server">Load Server</button>
+    <button id="serverSaveBtn" title="Save map to game server (overwrites!)">Save Server</button>
+    <button id="serverReloadBtn" title="Hot-reload map in running game">Reload Game</button>
+    <span class="top-sep"></span>
     <span class="top-label">W</span>
     <input id="mapWidthInput" type="number" min="4" value="64" />
     <span class="top-label">H</span>
@@ -409,6 +524,7 @@ let brushRadius = 3.2
       <button id="toolPlace" class="tool-btn" title="Place Asset (3)">Place</button>
       <button id="toolSelect" class="tool-btn" title="Select (4)">Select</button>
       <button id="toolTexturePlane" class="tool-btn" title="Texture Plane (5)">T.Plane</button>
+      <button id="toolNpcSpawn" class="tool-btn" title="NPC Spawn (6)">NPCs</button>
       <button id="layersToggleBtn" class="tool-btn" title="Toggle Layers panel">Layers</button>
       <button id="heightCullBtn" class="tool-btn" title="Hide objects above camera height (H)">Height Cull</button>
     </div>
@@ -535,6 +651,30 @@ let brushRadius = 3.2
           </div>
         </div>
       </div>
+      <div id="planeRotationRow" style="display:none;margin-top:8px;border-top:1px solid #444;padding-top:8px;">
+        <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Plane Rotation</div>
+        <div style="display:flex;gap:3px;margin-bottom:5px;">
+          <button class="plane-preset-btn" data-rx="0" data-ry="0" data-rz="0" style="flex:1;font-size:10px;padding:4px 2px;">Vertical</button>
+          <button class="plane-preset-btn" data-rx="-1.5708" data-ry="0" data-rz="0" style="flex:1;font-size:10px;padding:4px 2px;">Flat</button>
+          <button class="plane-preset-btn" data-rx="-0.7854" data-ry="0" data-rz="0" style="flex:1;font-size:10px;padding:4px 2px;">45°</button>
+        </div>
+        <div style="display:flex;gap:3px;align-items:center;margin-bottom:3px;">
+          <span style="font-size:10px;color:#888;width:14px;">X</span>
+          <input id="planeRotX" type="range" min="-3.14" max="3.14" step="0.05" value="0" style="flex:1;" />
+          <input id="planeRotXNum" type="number" step="5" style="width:42px;font-size:10px;" />
+        </div>
+        <div style="display:flex;gap:3px;align-items:center;margin-bottom:3px;">
+          <span style="font-size:10px;color:#888;width:14px;">Y</span>
+          <input id="planeRotY" type="range" min="-3.14" max="3.14" step="0.05" value="0" style="flex:1;" />
+          <input id="planeRotYNum" type="number" step="5" style="width:42px;font-size:10px;" />
+        </div>
+        <div style="display:flex;gap:3px;align-items:center;">
+          <span style="font-size:10px;color:#888;width:14px;">Z</span>
+          <input id="planeRotZ" type="range" min="-3.14" max="3.14" step="0.05" value="0" style="flex:1;" />
+          <input id="planeRotZNum" type="number" step="5" style="width:42px;font-size:10px;" />
+        </div>
+        <div class="hint" style="margin-top:4px;">Scroll = tilt · Ctrl+Scroll = spin · Shift = fine</div>
+      </div>
     </div>
 
     <div class="ctx-panel" id="ctx-texture" style="display:none">
@@ -547,6 +687,16 @@ let brushRadius = 3.2
       <label style="margin-top:6px;font-size:11px;color:rgba(255,255,255,0.45);">Scale <span id="textureScaleVal">1</span></label>
       <input id="textureScale" type="range" min="1" max="8" step="1" value="1" />
       <label style="margin-top:5px;"><input id="toggleTexturePlaneV" type="checkbox" checked /> Vertical plane (V)</label>
+    </div>
+
+    <div class="ctx-panel" id="ctx-npc-spawn" style="display:none">
+      <div style="font-size:11px;color:rgba(255,255,255,0.45);margin-bottom:4px;">NPC Type</div>
+      <select id="npcTypeSelect" style="width:100%;background:#2a2a2a;color:#fff;border:1px solid #555;border-radius:4px;padding:5px 6px;font-size:12px;"></select>
+      <label style="margin-top:8px;font-size:11px;color:rgba(255,255,255,0.45);">Wander Range <span id="wanderRangeLabel">3</span></label>
+      <input id="wanderRangeSlider" type="range" min="0" max="15" step="1" value="3" style="width:100%;margin-top:3px;" />
+      <div class="hint" style="margin-top:6px;">Click to place · Shift+Click to remove<br>Click existing spawn to select · Delete to remove</div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.45);margin-top:10px;border-top:1px solid #444;padding-top:8px;">Spawns <span id="npcSpawnCount">0</span></div>
+      <div id="npcSpawnList" style="max-height:200px;overflow-y:auto;margin-top:4px;"></div>
     </div>
   `
   uiRoot.appendChild(sidebar)
@@ -586,7 +736,8 @@ let brushRadius = 3.2
     [ToolMode.PAINT]: sidebar.querySelector('#toolPaint'),
     [ToolMode.PLACE]: sidebar.querySelector('#toolPlace'),
     [ToolMode.SELECT]: sidebar.querySelector('#toolSelect'),
-    [ToolMode.TEXTURE_PLANE]: sidebar.querySelector('#toolTexturePlane')
+    [ToolMode.TEXTURE_PLANE]: sidebar.querySelector('#toolTexturePlane'),
+    [ToolMode.NPC_SPAWN]: sidebar.querySelector('#toolNpcSpawn')
   }
 
   toolButtons[ToolMode.TERRAIN]?.addEventListener('click', () => setTool(ToolMode.TERRAIN))
@@ -594,6 +745,88 @@ let brushRadius = 3.2
   toolButtons[ToolMode.PLACE]?.addEventListener('click', () => setTool(ToolMode.PLACE))
   toolButtons[ToolMode.SELECT]?.addEventListener('click', () => setTool(ToolMode.SELECT))
   toolButtons[ToolMode.TEXTURE_PLANE]?.addEventListener('click', () => setTool(ToolMode.TEXTURE_PLANE))
+  toolButtons[ToolMode.NPC_SPAWN]?.addEventListener('click', () => setTool(ToolMode.NPC_SPAWN))
+
+  // --- NPC Spawn: fetch defs + wire sidebar controls (must be after sidebar is created) ---
+  fetch('/data/npcs.json')
+    .then(r => r.json())
+    .then(defs => {
+      npcDefs = defs
+      const sel = sidebar.querySelector('#npcTypeSelect')
+      if (sel) {
+        sel.innerHTML = defs.map(d => `<option value="${d.id}">${d.name} (ID ${d.id}) — HP ${d.health}</option>`).join('')
+        const first = defs[0]
+        if (first) {
+          const slider = sidebar.querySelector('#wanderRangeSlider')
+          if (slider) { slider.value = first.wanderRange; sidebar.querySelector('#wanderRangeLabel').textContent = first.wanderRange }
+        }
+      }
+    })
+    .catch(e => console.warn('Failed to load NPC defs:', e))
+
+  sidebar.querySelector('#npcTypeSelect')?.addEventListener('change', (e) => {
+    const def = npcDefs.find(d => d.id === parseInt(e.target.value))
+    if (def) {
+      const slider = sidebar.querySelector('#wanderRangeSlider')
+      if (slider) { slider.value = def.wanderRange; sidebar.querySelector('#wanderRangeLabel').textContent = def.wanderRange }
+    }
+  })
+
+  sidebar.querySelector('#wanderRangeSlider')?.addEventListener('input', (e) => {
+    sidebar.querySelector('#wanderRangeLabel').textContent = e.target.value
+    if (selectedNpcSpawn) {
+      selectedNpcSpawn.wanderRange = parseInt(e.target.value)
+      rebuildNpcSpawnMeshes()
+      refreshNpcSpawnList()
+    }
+  })
+
+  // --- Texture plane rotation panel ---
+  const _rad2deg = r => Math.round(r * 180 / Math.PI)
+  const _deg2rad = d => d * Math.PI / 180
+
+  function syncPlaneRotationUI() {
+    if (!selectedTexturePlane) return
+    const r = selectedTexturePlane.rotation
+    sidebar.querySelector('#planeRotX').value = r.x ?? 0
+    sidebar.querySelector('#planeRotY').value = r.y ?? 0
+    sidebar.querySelector('#planeRotZ').value = r.z ?? 0
+    sidebar.querySelector('#planeRotXNum').value = _rad2deg(r.x ?? 0)
+    sidebar.querySelector('#planeRotYNum').value = _rad2deg(r.y ?? 0)
+    sidebar.querySelector('#planeRotZNum').value = _rad2deg(r.z ?? 0)
+  }
+
+  for (const btn of sidebar.querySelectorAll('.plane-preset-btn')) {
+    btn.addEventListener('click', () => {
+      if (!selectedTexturePlane) return
+      selectedTexturePlane.rotation.x = parseFloat(btn.dataset.rx)
+      selectedTexturePlane.rotation.y = parseFloat(btn.dataset.ry)
+      selectedTexturePlane.rotation.z = parseFloat(btn.dataset.rz)
+      updateTexturePlaneMeshTransform(selectedTexturePlane)
+      updateSelectionHelper()
+      syncPlaneRotationUI()
+    })
+  }
+
+  for (const axis of ['X', 'Y', 'Z']) {
+    const slider = sidebar.querySelector(`#planeRot${axis}`)
+    const num = sidebar.querySelector(`#planeRot${axis}Num`)
+    slider?.addEventListener('input', () => {
+      if (!selectedTexturePlane) return
+      selectedTexturePlane.rotation[axis.toLowerCase()] = parseFloat(slider.value)
+      updateTexturePlaneMeshTransform(selectedTexturePlane)
+      updateSelectionHelper()
+      num.value = _rad2deg(parseFloat(slider.value))
+    })
+    num?.addEventListener('change', () => {
+      if (!selectedTexturePlane) return
+      const rad = _deg2rad(parseFloat(num.value) || 0)
+      selectedTexturePlane.rotation[axis.toLowerCase()] = rad
+      slider.value = rad
+      updateTexturePlaneMeshTransform(selectedTexturePlane)
+      updateSelectionHelper()
+    })
+  }
 
   const smoothModeBtn = sidebar.querySelector('#toggleSmoothMode')
   const levelModeBtn = sidebar.querySelector('#toggleLevelMode')
@@ -628,7 +861,7 @@ let brushRadius = 3.2
       pushUndoState()
       scaleObjectToTiles(selectedPlacedObject, tiles)
       updateSelectionHelper()
-      markTerrainDirty()
+      invalidateShadowCache()
     })
   }
   const customTileSizeInput = sidebar.querySelector('#customTileSize')
@@ -640,7 +873,7 @@ let brushRadius = 3.2
     pushUndoState()
     scaleObjectToTiles(selectedPlacedObject, tiles)
     updateSelectionHelper()
-    markTerrainDirty()
+    invalidateShadowCache()
   })
 
   // Trigger metadata handlers
@@ -813,7 +1046,7 @@ let brushRadius = 3.2
     }
     if (texturePlaneGroup) {
       for (const mesh of texturePlaneGroup.getChildMeshes()) {
-        const plane = mesh.userData?.texturePlane
+        const plane = mesh.metadata?.texturePlane
         if (!plane) continue
         const layer = layers.find((l) => l.id === (plane.layerId || 'layer_0'))
         mesh.isVisible = layer ? layer.visible : true
@@ -961,8 +1194,9 @@ let brushRadius = 3.2
       [ToolMode.PLACE]: 'ctx-place',
       [ToolMode.SELECT]: 'ctx-select',
       [ToolMode.TEXTURE_PLANE]: 'ctx-texture',
+      [ToolMode.NPC_SPAWN]: 'ctx-npc-spawn',
     }
-    for (const id of ['ctx-terrain', 'ctx-paint', 'ctx-place', 'ctx-select', 'ctx-texture']) {
+    for (const id of ['ctx-terrain', 'ctx-paint', 'ctx-place', 'ctx-select', 'ctx-texture', 'ctx-npc-spawn']) {
       const el = sidebar.querySelector(`#${id}`)
       if (el) el.style.display = 'none'
     }
@@ -1022,6 +1256,12 @@ let brushRadius = 3.2
       status += ' · Level Mode'
       if (state.levelHeight !== null) status += ` @ ${state.levelHeight.toFixed(2)}`
     }
+    if (state.tool === ToolMode.NPC_SPAWN) {
+      const sel = sidebar.querySelector('#npcTypeSelect')
+      const npcName = sel?.options[sel.selectedIndex]?.text || ''
+      if (npcName) status += ` · ${npcName}`
+      if (selectedNpcSpawn) status += ' · Spawn selected'
+    }
     if (selectedTexturePlane) status += ` · Plane: ${selectedTexturePlane.textureId}`
     if (selectedPlacedObject) status += ' · Object selected'
 
@@ -1045,6 +1285,12 @@ let brushRadius = 3.2
           sidebar.querySelector('#triggerEntryZ').value = t.entryZ ?? ''
         }
       }
+    }
+    const planeRotationRow = sidebar.querySelector('#planeRotationRow')
+    if (planeRotationRow) {
+      const showPlaneRot = (state.tool === ToolMode.SELECT || state.tool === ToolMode.TEXTURE_PLANE) && selectedTexturePlane
+      planeRotationRow.style.display = showPlaneRot ? 'block' : 'none'
+      if (showPlaneRot) syncPlaneRotationUI()
     }
     const layerAssignRow = sidebar.querySelector('#layerAssignRow')
     if (layerAssignRow) {
@@ -1113,6 +1359,11 @@ let brushRadius = 3.2
   function setTool(mode) {
     state.tool = mode
     if (hoverEdgeHelper) { hoverEdgeHelper.dispose(); hoverEdgeHelper = null }
+    npcSpawnGroup.setEnabled(mode === ToolMode.NPC_SPAWN)
+    if (mode === ToolMode.NPC_SPAWN) {
+      rebuildNpcSpawnMeshes()
+      refreshNpcSpawnList()
+    }
     updateToolUI()
     updatePreviewObject().catch(console.error)
   }
@@ -1169,7 +1420,7 @@ let brushRadius = 3.2
     if (selectedTexturePlane && texturePlaneGroup) {
       const color = selectedTexturePlanes.length > 1 ? new Color3(1.0, 0.67, 0.27) : new Color3(0.4, 0.8, 1.0)
       selectionHelper = selectedTexturePlanes.map((plane) => {
-        const mesh = texturePlaneGroup.getChildMeshes().find((c) => c.userData?.texturePlane?.id === plane.id)
+        const mesh = texturePlaneGroup.getChildMeshes().find((c) => c.metadata?.texturePlane?.id === plane.id)
         if (!mesh) return null
         return createBoundingBoxHelper(mesh, color)
       }).filter(Boolean)
@@ -1206,13 +1457,15 @@ let brushRadius = 3.2
   async function rebuildPlacedObjectsFromData(placedObjectsData) {
     clearPlacedModels()
 
-    // Pre-load all unique models in parallel so cache is warm before sequential cloning
+    // Pre-load all unique models in parallel so cache is warm before sequential cloning.
+    // Dispose the returned instances — we only need the cache warmed, not extra scene nodes.
     const uniquePaths = [...new Set(
       (placedObjectsData || [])
         .map((p) => assetRegistry.find((a) => a.id === p.assetId)?.path)
         .filter(Boolean)
     )]
-    await Promise.all(uniquePaths.map((path) => loadAssetModel(path).catch(() => {})))
+    const preloaded = await Promise.all(uniquePaths.map((path) => loadAssetModel(path).catch(() => null)))
+    for (const inst of preloaded) { if (inst) inst.dispose() }
 
     for (const placed of placedObjectsData || []) {
       const asset = assetRegistry.find((a) => a.id === placed.assetId)
@@ -1239,7 +1492,8 @@ let brushRadius = 3.2
       map: map.toJSON(),
       placedObjects: serializePlacedObjects(),
       layers: JSON.parse(JSON.stringify(layers)),
-      activeLayerId
+      activeLayerId,
+      npcSpawns: serializeNpcSpawns()
     }
   }
 
@@ -1295,13 +1549,14 @@ let brushRadius = 3.2
     refreshLayersPanel()
 
     await rebuildPlacedObjectsFromData(data.placedObjects || [])
+    loadNpcSpawns(data.npcSpawns)
 
     mapWidthInput.value = map.width
     mapHeightInput.value = map.height
     worldOffsetX.value = map.worldOffset.x
     worldOffsetZ.value = map.worldOffset.z
     applyMapType()
-    markTerrainDirty()
+    markTerrainDirty({ rebuildTexturePlanes: true, rebuildTextureOverlays: true })
     updateSelectionHelper()
     updateToolUI()
   }
@@ -1338,7 +1593,8 @@ let brushRadius = 3.2
         .map((p) => assetRegistry.find((a) => a.id === p.assetId)?.path)
         .filter(Boolean)
     )]
-    await Promise.all(_importPaths.map((path) => loadAssetModel(path).catch(() => {})))
+    const _importPreloaded = await Promise.all(_importPaths.map((path) => loadAssetModel(path).catch(() => null)))
+    for (const inst of _importPreloaded) { if (inst) inst.dispose() }
 
     for (const placed of data.placedObjects || []) {
       const asset = assetRegistry.find((a) => a.id === placed.assetId)
@@ -1357,18 +1613,27 @@ let brushRadius = 3.2
       addPlacedModel(model)
     }
 
-    markTerrainDirty()
+    // Import NPC spawns shifted by offset
+    for (const s of data.npcSpawns || []) {
+      addNpcSpawn(s.npcId, s.x + offsetX, s.z + offsetZ, s.wanderRange ?? 3)
+    }
+    rebuildNpcSpawnMeshes()
+    refreshNpcSpawnList()
+
+    markTerrainDirty({ rebuildTexturePlanes: true, rebuildTextureOverlays: true })
     updateToolUI()
   }
 
   function captureSnapshot() {
     return {
       map: JSON.parse(JSON.stringify(map.toJSON())),
-      placedObjects: serializePlacedObjects()
+      placedObjects: serializePlacedObjects(),
+      npcSpawns: JSON.parse(JSON.stringify(serializeNpcSpawns()))
     }
   }
 
   async function applySnapshot(snapshot) {
+    const prevTerrainGen = map.terrainGeneration
     map = MapData.fromJSON(snapshot.map)
     selectedPlacedObject = null
     selectedPlacedObjects = []
@@ -1381,10 +1646,19 @@ let brushRadius = 3.2
     state.levelHeight = null
 
     await rebuildPlacedObjectsFromData(snapshot.placedObjects || [])
+    loadNpcSpawns(snapshot.npcSpawns)
 
     mapWidthInput.value = map.width
     mapHeightInput.value = map.height
-    markTerrainDirty()
+
+    if (map.terrainGeneration !== prevTerrainGen) {
+      // Terrain geometry changed — full rebuild required
+      markTerrainDirty({ rebuildTexturePlanes: true, rebuildTextureOverlays: true })
+    } else {
+      // Only objects/planes/spawns changed — skip expensive terrain rebuild
+      rebuildTexturePlanesOnly()
+      rebuildTextureOverlaysOnly()
+    }
     updateSelectionHelper()
     updateToolUI()
   }
@@ -1548,19 +1822,30 @@ let brushRadius = 3.2
       const shadowInf = _shadowInfluencesCache ?? buildObjectShadowInfluences()
       _shadowInfluencesCache = shadowInf
       if (updateTerrainLandHeights(map, shadowInf, _heightsOnlyRegion.x1, _heightsOnlyRegion.z1, _heightsOnlyRegion.x2, _heightsOnlyRegion.z2)) {
+        // Build new meshes (created hidden by build functions)
+        const newCliffs = buildCliffMeshes(map, scene)
+        const wg = terrainGroup ? buildWaterMeshes(map, waterTexture, scene) : null
+        const newWaterChildren = wg ? [...wg.getChildren()] : []
+        if (wg) {
+          for (const child of newWaterChildren) { child.setEnabled(false); child.parent = terrainGroup }
+          wg.dispose()
+        }
+
+        // Dispose old cliffs and water
         disposeGroup(cliffs)
-        cliffs = buildCliffMeshes(map, scene)
-        // Rebuild water meshes so water appears immediately during sculpting
         if (terrainGroup) {
           for (const child of [...terrainGroup.getChildMeshes()]) {
-            if (child.name === 'terrain-water' || child.name === 'terrain-surface-water') {
+            if ((child.name === 'terrain-water' || child.name === 'terrain-surface-water') && !newWaterChildren.includes(child)) {
               child.dispose()
             }
           }
-          const wg = buildWaterMeshes(map, waterTexture, scene)
-          for (const child of [...wg.getChildren()]) { child.parent = terrainGroup }
-          wg.dispose() // dispose empty group shell
         }
+
+        // Enable new meshes
+        if (newCliffs) newCliffs.setEnabled(true)
+        for (const child of newWaterChildren) child.setEnabled(true)
+        cliffs = newCliffs
+
         if (state.showSplitLines) {
           if (splitLines) splitLines.dispose()
           splitLines = buildSplitLines()
@@ -1575,41 +1860,82 @@ let brushRadius = 3.2
       // Partial update not available — fall through to full rebuild.
     }
 
-    disposeGroup(terrainGroup)
-    disposeGroup(cliffs)
-    if (splitLines) splitLines.dispose()
-    if (tileGrid) tileGrid.dispose()
-    if (!skipTextureOverlays && textureOverlayGroup) { textureOverlayGroup.dispose(); textureOverlayGroup = null }
-    if (!skipTexturePlanes && texturePlaneGroup) { texturePlaneGroup.dispose(); texturePlaneGroup = null }
-
     map.selectedTexturePlaneId = selectedTexturePlane ? selectedTexturePlane.id : null
 
     if (!skipShadows) _shadowInfluencesCache = null
     const shadowInf = _shadowInfluencesCache ?? buildObjectShadowInfluences()
     _shadowInfluencesCache = shadowInf
 
-    terrainGroup = buildTerrainMeshes(map, waterTexture, shadowInf, scene)
-    cliffs = buildCliffMeshes(map, scene)
-    splitLines = buildSplitLines()
-    tileGrid = buildTileGrid()
-    if (!skipTextureOverlays) textureOverlayGroup = buildTextureOverlays(map, textureRegistry, textureCache, scene)
+    // Build new meshes (all created hidden inside their build functions)
+    const newTerrain = buildTerrainMeshes(map, waterTexture, shadowInf, scene)
+    const newCliffs = buildCliffMeshes(map, scene)
+    const newSplitLines = buildSplitLines()
+    const newTileGrid = buildTileGrid()
+    const newOverlays = !skipTextureOverlays ? buildTextureOverlays(map, textureRegistry, textureCache, scene) : null
+    const newPlanes = !skipTexturePlanes ? buildTexturePlanes(map, textureRegistry, textureCache, scene) : null
 
-    if (!skipTexturePlanes) {
-      texturePlaneGroup = buildTexturePlanes(map, textureRegistry, textureCache, scene)
-    }
+    // Dispose old meshes
+    disposeGroup(terrainGroup)
+    disposeGroup(cliffs)
+    if (splitLines) splitLines.dispose()
+    if (tileGrid) tileGrid.dispose()
+    if (!skipTextureOverlays && textureOverlayGroup) textureOverlayGroup.dispose()
+    if (!skipTexturePlanes && texturePlaneGroup) texturePlaneGroup.dispose()
+
+    // Enable and swap in new meshes
+    if (newTerrain) newTerrain.setEnabled(true)
+    if (newCliffs) newCliffs.setEnabled(true)
+    if (newOverlays) newOverlays.setEnabled(true)
+    if (newPlanes) newPlanes.setEnabled(true)
+
+    terrainGroup = newTerrain
+    cliffs = newCliffs
+    splitLines = newSplitLines
+    tileGrid = newTileGrid
+    if (!skipTextureOverlays) textureOverlayGroup = newOverlays
+    if (!skipTexturePlanes) texturePlaneGroup = newPlanes
 
     updateSelectionHelper()
     applyLayerVisibility()
   }
 
+  function rebuildTexturePlanesOnly() {
+    const newPlanes = buildTexturePlanes(map, textureRegistry, textureCache, scene)
+    if (texturePlaneGroup) texturePlaneGroup.dispose()
+    if (newPlanes) newPlanes.setEnabled(true)
+    texturePlaneGroup = newPlanes
+    updateSelectionHelper()
+  }
+
+  function appendTexturePlane(plane) {
+    if (!texturePlaneGroup) {
+      texturePlaneGroup = new TransformNode('texture-planes', scene)
+    }
+    const mesh = buildSingleTexturePlane(plane, textureRegistry, textureCache, scene, true)
+    if (mesh) mesh.parent = texturePlaneGroup
+    updateSelectionHelper()
+  }
+
+  function removeTexturePlaneMesh(plane) {
+    if (!texturePlaneGroup) return
+    const mesh = texturePlaneGroup.getChildMeshes().find((m) => m.metadata?.texturePlane === plane)
+    if (mesh) mesh.dispose()
+  }
+
+  function rebuildTextureOverlaysOnly() {
+    const newOverlays = buildTextureOverlays(map, textureRegistry, textureCache, scene)
+    if (textureOverlayGroup) textureOverlayGroup.dispose()
+    if (newOverlays) newOverlays.setEnabled(true)
+    textureOverlayGroup = newOverlays
+  }
+
   function updateTexturePlaneMeshTransform(plane) {
     if (!texturePlaneGroup) return
-    const mesh = texturePlaneGroup.getChildMeshes().find((m) => m.userData?.texturePlane === plane)
+    const mesh = texturePlaneGroup.getChildMeshes().find((m) => m.metadata?.texturePlane === plane)
     if (!mesh) return
     mesh.position.set(plane.position.x, plane.position.y, plane.position.z)
     mesh.rotation.set(plane.rotation?.x ?? 0, plane.rotation?.y ?? 0, plane.rotation?.z ?? 0)
-    mesh.scale.set(plane.scale?.x ?? 1, plane.scale?.y ?? 1, plane.scale?.z ?? 1)
-
+    mesh.scaling.set(plane.scale?.x ?? 1, plane.scale?.y ?? 1, plane.scale?.z ?? 1)
   }
 
   function updateMouse(event) {
@@ -1752,7 +2078,8 @@ let brushRadius = 3.2
       .map((p) => assetRegistry.find((a) => a.id === p.assetId)?.path)
       .filter(Boolean)
   )]
-  await Promise.all(_mergeUniquePaths.map((path) => loadAssetModel(path).catch(() => {})))
+  const _mergePreloaded = await Promise.all(_mergeUniquePaths.map((path) => loadAssetModel(path).catch(() => null)))
+  for (const inst of _mergePreloaded) { if (inst) inst.dispose() }
 
   for (const placed of data.placedObjects || []) {
     const asset = assetRegistry.find((a) => a.id === placed.assetId)
@@ -1776,7 +2103,7 @@ let brushRadius = 3.2
     addPlacedModel(model)
   }
 
-  markTerrainDirty()
+  markTerrainDirty({ rebuildTexturePlanes: true, rebuildTextureOverlays: true })
   updateSelectionHelper()
   updateToolUI()
 }
@@ -1960,7 +2287,7 @@ let brushRadius = 3.2
   function snapSelectedThingNow() {
     if (selectedTexturePlane) {
       snapThingPositionToGrid(selectedTexturePlane.position, 0.5)
-      markTerrainDirty()
+      updateTexturePlaneMeshTransform(selectedTexturePlane)
       updateSelectionHelper()
       updateToolUI()
       return
@@ -2120,7 +2447,7 @@ let brushRadius = 3.2
       selectedTexturePlane.rotation.x = snapAngleToQuarterIfClose(selectedTexturePlane.rotation.x)
       selectedTexturePlane.rotation.y = snapAngleToQuarterIfClose(selectedTexturePlane.rotation.y)
       selectedTexturePlane.rotation.z = snapAngleToQuarterIfClose(selectedTexturePlane.rotation.z)
-      markTerrainDirty()
+      updateTexturePlaneMeshTransform(selectedTexturePlane)
     }
 
     if (selectedPlacedObject) {
@@ -2287,7 +2614,7 @@ function applyToolAtTile(tile, eventLike = null) {
         if (isErase) map.clearTextureTile(tile.x, tile.z)
         else map.paintTextureTile(tile.x, tile.z, paintTabTextureId, textureRotation, textureScale, textureWorldUV)
       }
-      markTerrainDirty({ skipTexturePlanes: true, skipShadows: true })
+      rebuildTextureOverlaysOnly()
       return
     }
 
@@ -2388,6 +2715,7 @@ function applyToolAtTile(tile, eventLike = null) {
     }
 
     previewObject = makeGhostMaterial(model)
+    model.dispose() // dispose the source instance — ghost is a separate clone
     previewObject.rotation.y = previewRotation
     previewObject.userData.assetId = asset.id
     // previewObject is already in the scene from makeGhostMaterial
@@ -2440,7 +2768,7 @@ function applyToolAtTile(tile, eventLike = null) {
     model.userData.type = 'asset'
     model.userData.layerId = activeLayerId
     addPlacedModel(model)
-    markTerrainDirty({ skipTexturePlanes: true })
+    invalidateShadowCache()
   }
 
   function replaceSelectedTexturesWith(textureId) {
@@ -2448,8 +2776,9 @@ function applyToolAtTile(tile, eventLike = null) {
     pushUndoState()
     for (const plane of selectedTexturePlanes) {
       plane.textureId = textureId
+      removeTexturePlaneMesh(plane)
+      appendTexturePlane(plane)
     }
-    markTerrainDirty()
     updateSelectionHelper()
     updateToolUI()
   }
@@ -2477,7 +2806,7 @@ function applyToolAtTile(tile, eventLike = null) {
     }
     selectedPlacedObjects = replacements
     selectedPlacedObject = replacements[replacements.length - 1] || null
-    markTerrainDirty()
+    invalidateShadowCache()
     updateSelectionHelper()
     updateToolUI()
   }
@@ -2519,7 +2848,7 @@ function applyToolAtTile(tile, eventLike = null) {
         selectedTexturePlanes = newPlanes
         selectedTexturePlane = newPlanes[newPlanes.length - 1]
         selectedPlacedObject = null
-        markTerrainDirty()
+        for (const p of newPlanes) appendTexturePlane(p)
         updateSelectionHelper()
         updateToolUI()
         return
@@ -2538,7 +2867,7 @@ function applyToolAtTile(tile, eventLike = null) {
       selectedTexturePlane = clone
       selectedTexturePlanes = [clone]
       selectedPlacedObject = null
-      markTerrainDirty()
+      appendTexturePlane(clone)
       updateSelectionHelper()
       updateToolUI()
       return
@@ -2592,7 +2921,7 @@ function applyToolAtTile(tile, eventLike = null) {
         selectedPlacedObjects = [...newModels]
         selectedTexturePlane = null
       selectedTexturePlanes = []
-        markTerrainDirty()
+        invalidateShadowCache()
         updateSelectionHelper()
         updateToolUI()
       }
@@ -2638,7 +2967,7 @@ function applyToolAtTile(tile, eventLike = null) {
       selectedPlacedObjects = [model]
       selectedTexturePlane = null
       selectedTexturePlanes = []
-      markTerrainDirty()
+      invalidateShadowCache()
       updateSelectionHelper()
       updateToolUI()
     }
@@ -2693,7 +3022,7 @@ function applyToolAtTile(tile, eventLike = null) {
       selectedTexturePlane.scale = { ...transformStart.scale }
       selectedTexturePlane.width = transformStart.width
       selectedTexturePlane.height = transformStart.height
-      markTerrainDirty()
+      updateTexturePlaneMeshTransform(selectedTexturePlane)
     }
 
     if (selectedPlacedObject) {
@@ -2783,70 +3112,40 @@ function applyToolAtTile(tile, eventLike = null) {
 
   // --- Thumbnail system ---
   const thumbnailCache = new Map()
-  let thumbRenderer = null
-  let thumbScene = null
-  let thumbCamera = null
 
-  function initThumbRenderer() {
-    if (thumbRenderer) return
-    const thumbCanvas = document.createElement('canvas')
-    thumbCanvas.width = 80
-    thumbCanvas.height = 80
-    thumbRenderer = new Engine(thumbCanvas, true, { antialias: true })
+  function generateThumbnail(asset) {
+    if (thumbnailCache.has(asset.id)) return Promise.resolve(thumbnailCache.get(asset.id))
 
-    thumbScene = new Scene(thumbRenderer)
-    thumbScene.useRightHandedSystem = true
-    thumbScene.clearColor = new Color4(0.118, 0.133, 0.188, 1.0) // 0x1e2230
-    new HemisphericLight('thumbAmbient', new Vector3(0, 1, 0), thumbScene).intensity = 0.75
-    const dirLight = new DirectionalLight('thumbDir', new Vector3(-0.5, -1, -0.65), thumbScene)
-    dirLight.intensity = 1.3
+    const cvs = document.createElement('canvas')
+    cvs.width = 80
+    cvs.height = 80
+    const ctx = cvs.getContext('2d')
 
-    thumbCamera = new ArcRotateCamera('thumbCam', 0.78, 0.9, 5, Vector3.Zero(), thumbScene)
-    thumbCamera.fov = 40 * Math.PI / 180
-    thumbCamera.minZ = 0.001
-    thumbCamera.maxZ = 10000
-    thumbCamera.inputs.clear()
-  }
-
-  async function generateThumbnail(asset) {
-    if (thumbnailCache.has(asset.id)) return thumbnailCache.get(asset.id)
-
-    initThumbRenderer()
-
-    let model
-    try {
-      model = await loadAssetModel(asset.path)
-    } catch {
-      return null
-    }
-
-    // Generate a simple colored placeholder thumbnail via canvas
-    if (model) model.dispose()
-    const thumbCanvas = document.createElement('canvas')
-    thumbCanvas.width = 80
-    thumbCanvas.height = 80
-    const ctx = thumbCanvas.getContext('2d')
-    // Color based on asset category
     const pathLower = asset.path?.toLowerCase() || ''
     if (pathLower.includes('white')) ctx.fillStyle = '#889'
     else if (pathLower.includes('wood')) ctx.fillStyle = '#654'
     else if (pathLower.includes('dark stone')) ctx.fillStyle = '#433'
     else if (pathLower.includes('stone')) ctx.fillStyle = '#776'
-    else if (pathLower.includes('tree')) ctx.fillStyle = '#264'
+    else if (pathLower.includes('tree') || pathLower.includes('bush') || pathLower.includes('grass')) ctx.fillStyle = '#264'
     else if (pathLower.includes('rock')) ctx.fillStyle = '#554'
+    else if (pathLower.includes('fence') || pathLower.includes('gate')) ctx.fillStyle = '#543'
+    else if (pathLower.includes('roof')) ctx.fillStyle = '#744'
     else ctx.fillStyle = '#445'
     ctx.fillRect(0, 0, 80, 80)
+
     ctx.fillStyle = '#fff'
-    ctx.font = '10px sans-serif'
+    ctx.font = 'bold 11px sans-serif'
     ctx.textAlign = 'center'
     const name = asset.name || asset.id || '?'
     const words = name.split(/\s+/)
-    for (let i = 0; i < words.length && i < 4; i++) {
-      ctx.fillText(words[i], 40, 30 + i * 14)
+    const startY = 40 - (words.length - 1) * 7
+    for (let i = 0; i < Math.min(words.length, 5); i++) {
+      ctx.fillText(words[i], 40, startY + i * 14)
     }
-    const dataUrl = thumbCanvas.toDataURL()
+
+    const dataUrl = cvs.toDataURL()
     thumbnailCache.set(asset.id, dataUrl)
-    return dataUrl
+    return Promise.resolve(dataUrl)
   }
 
   function refreshAssetList() {
@@ -3249,6 +3548,120 @@ function applyToolAtTile(tile, eventLike = null) {
     await loadSaveData(JSON.parse(raw))
   })
 
+  // --- Server map integration ---
+  const SERVER_API = '/api/editor'
+  const serverMapSelect = topBar.querySelector('#serverMapSelect')
+  const serverLoadBtn = topBar.querySelector('#serverLoadBtn')
+  const serverSaveBtn = topBar.querySelector('#serverSaveBtn')
+  const serverReloadBtn = topBar.querySelector('#serverReloadBtn')
+
+  async function refreshServerMapList() {
+    try {
+      const res = await fetch(`${SERVER_API}/maps`)
+      const data = await res.json()
+      if (data.ok && data.maps) {
+        serverMapSelect.innerHTML = data.maps.map(m => `<option value="${m.id}">${m.name || m.id} (${m.width}x${m.height})</option>`).join('')
+      }
+    } catch {
+      serverMapSelect.innerHTML = '<option>Server offline</option>'
+    }
+  }
+  refreshServerMapList()
+
+  serverLoadBtn.addEventListener('click', async () => {
+    const mapId = serverMapSelect.value
+    if (!mapId) return
+    try {
+      const res = await fetch(`${SERVER_API}/export-map?mapId=${encodeURIComponent(mapId)}`)
+      const data = await res.json()
+      if (!data.ok) { statusText.textContent = `Load failed: ${data.error}`; return }
+
+      const mapData = JSON.parse(data.files['map.json'])
+      const meta = JSON.parse(data.files['meta.json'])
+      const spawns = JSON.parse(data.files['spawns.json'])
+
+      // Convert server format to editor save format
+      const saveData = {
+        map: mapData.map || mapData,
+        placedObjects: mapData.placedObjects || [],
+        layers: mapData.layers || [{ id: 'layer_0', name: 'Layer 1', visible: true }],
+        activeLayerId: mapData.activeLayerId || 'layer_0',
+        npcSpawns: (spawns.npcs || []).map((s, i) => ({ id: i + 1, npcId: s.npcId, x: s.x, z: s.z, wanderRange: s.wanderRange ?? 3 }))
+      }
+      await loadSaveData(saveData)
+      statusText.textContent = `Loaded "${mapId}" from server`
+    } catch (e) {
+      statusText.textContent = `Server error: ${e.message}`
+    }
+  })
+
+  serverSaveBtn.addEventListener('click', async () => {
+    const mapId = serverMapSelect.value
+    if (!mapId) return
+    if (!confirm(`Overwrite "${mapId}" on the game server?`)) return
+
+    const saveData = buildSaveData()
+    const meta = {
+      id: mapId,
+      name: mapId.charAt(0).toUpperCase() + mapId.slice(1),
+      width: map.width,
+      height: map.height,
+      waterLevel: map.waterLevel,
+      spawnPoint: { x: Math.floor(map.width / 2) + 0.5, z: Math.floor(map.height / 2) + 0.5 },
+      fogColor: map.mapType === 'dungeon' ? [0.05, 0.02, 0.1] : [0.4, 0.6, 0.9],
+      fogStart: map.mapType === 'dungeon' ? 5 : 30,
+      fogEnd: map.mapType === 'dungeon' ? 25 : 50,
+      transitions: []
+    }
+
+    // Build spawns from editor NPC spawns
+    const spawns = {
+      npcs: npcSpawns.map(s => ({ npcId: s.npcId, x: s.x, z: s.z, wanderRange: s.wanderRange })),
+      objects: []
+    }
+
+    // Build KCMapFile
+    const mapFile = {
+      map: saveData.map,
+      placedObjects: saveData.placedObjects,
+      layers: saveData.layers,
+      activeLayerId: saveData.activeLayerId
+    }
+
+    try {
+      const res = await fetch(`${SERVER_API}/save-map`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mapId, meta, spawns, mapData: mapFile })
+      })
+      const data = await res.json()
+      if (data.ok) {
+        statusText.textContent = `Saved "${mapId}" to server`
+        refreshServerMapList()
+      } else {
+        statusText.textContent = `Save failed: ${data.error}`
+      }
+    } catch (e) {
+      statusText.textContent = `Server error: ${e.message}`
+    }
+  })
+
+  serverReloadBtn.addEventListener('click', async () => {
+    const mapId = serverMapSelect.value
+    if (!mapId) return
+    try {
+      const res = await fetch(`${SERVER_API}/reload-map`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mapId })
+      })
+      const data = await res.json()
+      statusText.textContent = data.ok ? `Reloaded "${mapId}" in game` : `Reload failed: ${data.error}`
+    } catch (e) {
+      statusText.textContent = `Server error: ${e.message}`
+    }
+  })
+
   loadMapInput.addEventListener('change', async (event) => {
     const file = event.target.files?.[0]
     if (!file) return
@@ -3294,17 +3707,17 @@ function applyToolAtTile(tile, eventLike = null) {
       scene.fogColor = new Color3(0, 0, 0)
       scene.fogStart = 18
       scene.fogEnd = 48
-      sun.intensity = 0.3
+      sun.intensity = 0.1
       sun.diffuse = new Color3(0.42, 0.29, 0.13)
-      fill.intensity = 0.25
+      fill.intensity = 0.05
       fill.diffuse = new Color3(0.29, 0.19, 0.06)
       ambient.diffuse = new Color3(0.48, 0.38, 0.25)
-      ambient.intensity = 0.85
+      ambient.intensity = 0.55
     } else {
-      scene.clearColor = new Color4(0.039, 0.071, 0.020, 1)
-      scene.fogColor = new Color3(0.039, 0.071, 0.020)
-      scene.fogStart = 22
-      scene.fogEnd = 72
+      scene.clearColor = new Color4(0.4, 0.6, 0.9, 1.0)
+      scene.fogColor = new Color3(0.4, 0.6, 0.9)
+      scene.fogStart = 80
+      scene.fogEnd = 200
       sun.intensity = 1.1
       sun.diffuse = new Color3(1.0, 0.84, 0.54)
       fill.intensity = 0.65
@@ -3347,7 +3760,7 @@ function applyToolAtTile(tile, eventLike = null) {
     transformLift = 0
     movePlaneStart = null
 
-    markTerrainDirty()
+    rebuildTexturePlanesOnly()
     updateSelectionHelper()
     updateToolUI()
   })
@@ -3419,7 +3832,6 @@ function applyToolAtTile(tile, eventLike = null) {
 
   rotateTextureBtn.addEventListener('click', () => {
     textureRotation = (textureRotation + 1) % 4
-    markTerrainDirty()
     updateToolUI()
   })
 
@@ -3429,7 +3841,8 @@ function applyToolAtTile(tile, eventLike = null) {
     if (textureScaleVal) textureScaleVal.textContent = textureScale
     if (selectedTexturePlane) {
       selectedTexturePlane.uvRepeat = textureScale
-      markTerrainDirty()
+      removeTexturePlaneMesh(selectedTexturePlane)
+      appendTexturePlane(selectedTexturePlane)
     }
   })
 
@@ -3642,7 +4055,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
     if (state.tool === ToolMode.SELECT && !transformMode) {
       const picked = pickClosestSelectTarget(event)
       if (picked?.type === 'plane') {
-        const plane = picked.object.userData.texturePlane
+        const plane = picked.object.metadata?.texturePlane
         if (plane) {
           if (event.shiftKey) {
             const idx = selectedTexturePlanes.indexOf(plane)
@@ -3699,7 +4112,6 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
 
     if (transformMode) {
       confirmTransform()
-      markTerrainDirty({ skipTexturePlanes: !selectedTexturePlane })
       updateSelectionHelper()
       return
     }
@@ -3724,9 +4136,9 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
 
       plane.uvRepeat = textureScale
       selectedTexturePlane = plane
+      selectedTexturePlanes = [plane]
       selectedPlacedObject = null
-      markTerrainDirty()
-      updateSelectionHelper()
+      appendTexturePlane(plane)
       updateToolUI()
       return
     }
@@ -3734,6 +4146,46 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
 
     if (state.tool === ToolMode.PLACE) {
       await placeSelectedAsset(tile, event)
+      return
+    }
+
+    if (state.tool === ToolMode.NPC_SPAWN) {
+      // Shift+click = remove spawn at cursor
+      if (event.shiftKey) {
+        const picked = pickNpcSpawn(event)
+        if (picked) {
+          pushUndoState()
+          removeNpcSpawn(picked)
+          rebuildNpcSpawnMeshes()
+          refreshNpcSpawnList()
+          updateToolUI()
+        }
+        return
+      }
+      // Normal click: check if clicking existing spawn first
+      const picked = pickNpcSpawn(event)
+      if (picked) {
+        selectedNpcSpawn = picked
+        // Update UI to reflect selected spawn
+        const sel = sidebar.querySelector('#npcTypeSelect')
+        if (sel) sel.value = picked.npcId
+        const slider = sidebar.querySelector('#wanderRangeSlider')
+        if (slider) { slider.value = picked.wanderRange; sidebar.querySelector('#wanderRangeLabel').textContent = picked.wanderRange }
+        rebuildNpcSpawnMeshes()
+        refreshNpcSpawnList()
+        updateToolUI()
+        return
+      }
+      // Place new spawn
+      const npcId = parseInt(sidebar.querySelector('#npcTypeSelect')?.value)
+      const wanderRange = parseInt(sidebar.querySelector('#wanderRangeSlider')?.value) || 3
+      if (!npcId) return
+      pushUndoState()
+      const spawn = addNpcSpawn(npcId, tile.x + 0.5, tile.z + 0.5, wanderRange)
+      selectedNpcSpawn = spawn
+      rebuildNpcSpawnMeshes()
+      refreshNpcSpawnList()
+      updateToolUI()
       return
     }
 
@@ -3758,7 +4210,9 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
       state.historyCapturedThisStroke = false
 
       if (wasPainting && paintingTool) {
-        markTerrainDirty({ skipTexturePlanes: true, skipShadows: false })
+        // Shadow cache is stale after terrain edits, but a full rebuild is expensive.
+        // Just invalidate the cache so the NEXT rebuild (e.g. from undo) picks it up.
+        invalidateShadowCache()
       }
 
       if (isDragSelecting && dragSelectStart) {
@@ -3820,7 +4274,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
     }
     if (texturePlaneGroup) {
       for (const mesh of texturePlaneGroup.getChildMeshes()) {
-        const plane = mesh.userData.texturePlane
+        const plane = mesh.metadata?.texturePlane
         if (!plane) continue
         const layer = layers.find((l) => l.id === (plane.layerId || 'layer_0'))
         const layerVisible = layer ? layer.visible : true
@@ -3844,9 +4298,10 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
   }
 
   function panCamera(deltaX, deltaY) {
-    // Compute forward/right from yaw
-    const fx = Math.sin(yaw), fz = Math.cos(yaw)
-    const rx = Math.cos(yaw), rz = -Math.sin(yaw)
+    // Camera is at alpha = yaw + PI/2, so forward in XZ = (sin(yaw), 0, -cos(yaw))
+    // and right in XZ = (cos(yaw), 0, sin(yaw))
+    const fx = Math.sin(yaw), fz = -Math.cos(yaw)
+    const rx = Math.cos(yaw), rz = Math.sin(yaw)
 
     const panScale = distance * 0.0025
     target.x += -deltaX * panScale * rx + deltaY * panScale * fx
@@ -3891,11 +4346,11 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
     if (transformMode === 'rotate') {
       e.preventDefault()
 
-      // Translate unified axis convention → Three.js axis
-      // X=east-west(X), Y=north-south(Z), Z=vertical(Y), all=vertical(Y)
-      const threeAxis = (transformAxis === 'height' || transformAxis === 'all') ? 'y'
-        : transformAxis === 'ground-z' ? 'z'
-        : 'x'
+      // Translate unified axis convention → Babylon.js rotation axis
+      // X key = tilt sideways (Z rot), Y key = spin (Y rot), Z key = tilt upward (X rot)
+      const threeAxis = (transformAxis === 'height' || transformAxis === 'all') ? 'x'
+        : transformAxis === 'ground-z' ? 'y'
+        : 'z'
 
       if (selectedTexturePlane) {
         if (e.shiftKey) {
@@ -3959,7 +4414,8 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
           selectedTexturePlane.scale.z = Math.max(0.1, selectedTexturePlane.scale.z + delta)
         }
 
-        markTerrainDirty()
+        removeTexturePlaneMesh(selectedTexturePlane)
+        appendTexturePlane(selectedTexturePlane)
         return
       }
 
@@ -3981,6 +4437,22 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
         updateSelectionHelper()
         return
       }
+    }
+
+    // Quick-rotate selected texture plane without entering transform mode
+    // Scroll = tilt up/down, Ctrl+Scroll = spin, Shift = fine
+    if (selectedTexturePlane && !transformMode && (state.tool === ToolMode.SELECT || state.tool === ToolMode.TEXTURE_PLANE)) {
+      e.preventDefault()
+      const fine = e.shiftKey
+      const step = fine ? 0.05 : Math.PI / 12
+      const delta = e.deltaY > 0 ? step : -step
+      const axis = e.ctrlKey ? 'y' : 'x'  // ctrl = spin, default = tilt up/down
+      selectedTexturePlane.rotation[axis] += delta
+      if (!fine) selectedTexturePlane.rotation[axis] = snapAngleToQuarterIfClose(selectedTexturePlane.rotation[axis], 0.08)
+      updateTexturePlaneMeshTransform(selectedTexturePlane)
+      updateSelectionHelper()
+      syncPlaneRotationUI()
+      return
     }
 
     distance += e.deltaY * 0.01
@@ -4012,12 +4484,20 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
     }
 
     if (key === 'delete' || key === 'backspace') {
+      if (selectedNpcSpawn && state.tool === ToolMode.NPC_SPAWN) {
+        pushUndoState()
+        removeNpcSpawn(selectedNpcSpawn)
+        rebuildNpcSpawnMeshes()
+        refreshNpcSpawnList()
+        updateToolUI()
+        return
+      }
       if (selectedTexturePlane) {
         pushUndoState()
+        removeTexturePlaneMesh(selectedTexturePlane)
         map.texturePlanes = map.texturePlanes.filter((p) => p.id !== selectedTexturePlane.id)
         selectedTexturePlane = null
-      selectedTexturePlanes = []
-        markTerrainDirty()
+        selectedTexturePlanes = []
         updateSelectionHelper()
         updateToolUI()
         return
@@ -4028,7 +4508,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
         for (const obj of selectedPlacedObjects) removePlacedModel(obj)
         selectedPlacedObject = null
         selectedPlacedObjects = []
-        markTerrainDirty()
+        invalidateShadowCache()
         updateSelectionHelper()
         updateToolUI()
         return
@@ -4104,7 +4584,7 @@ if (key === 'e') {
     if (key === 'f') {
       pushUndoState()
       map.flipTileSplit(x, z)
-      markTerrainDirty()
+      rebuildTextureOverlaysOnly()
       return
     }
 
@@ -4113,6 +4593,7 @@ if (key === 'e') {
     if (key === '3') return setTool(ToolMode.PLACE)
     if (key === '4') return setTool(ToolMode.SELECT)
     if (key === '5') return setTool(ToolMode.TEXTURE_PLANE)
+    if (key === '6') return setTool(ToolMode.NPC_SPAWN)
 
     if (key === 'v') {
       texturePlaneVertical = !texturePlaneVertical
@@ -4136,8 +4617,8 @@ if (key === 'e') {
       if (!selectedTexturePlane && !selectedPlacedObject) {
         if (texturePlaneGroup) {
           const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m.isDescendantOf(texturePlaneGroup))
-          if (pick.hit && pick.pickedMesh?.userData?.texturePlane) {
-            selectedTexturePlane = pick.pickedMesh.userData.texturePlane
+          if (pick.hit && pick.pickedMesh?.metadata?.texturePlane) {
+            selectedTexturePlane = pick.pickedMesh.metadata?.texturePlane
             selectedPlacedObject = null
             const rep = selectedTexturePlane.uvRepeat || 1
             textureScale = rep
@@ -4176,7 +4657,6 @@ if (key === 'e') {
 
       if (state.tool === ToolMode.TEXTURE_PLANE || (state.tool === ToolMode.PAINT && paintTabTextureId && paintTabTextureId !== '__erase__')) {
         textureRotation = (textureRotation + 1) % 4
-        markTerrainDirty()
         updateToolUI()
         return
       }
@@ -4276,7 +4756,7 @@ if (key === 'e') {
       selectedTextureId = filteredTextures[0]?.id || null
       refreshTexturePalette()
       refreshPaintTexturePalette()
-      markTerrainDirty()
+      markTerrainDirty({ rebuildTexturePlanes: true, rebuildTextureOverlays: true })
       updateToolUI()
     } catch (err) {
       console.error('initTextures failed:', err)
@@ -4290,25 +4770,29 @@ if (key === 'e') {
     }
   }
 
-  markTerrainDirty()
   buildGroundSwatches()
   refreshLayersPanel()
   updateToolUI()
-  pushUndoState()
 
   async function initDefaultSave() {
     const params = new URLSearchParams(window.location.search)
     const mapParam = params.get('map')
-    if (!mapParam) return
-
-    try {
-      const res = await fetch(`/worldsave/${encodeURIComponent(mapParam)}.json`)
-      if (!res.ok) return
-      const data = await res.json()
-      await loadSaveData(data)
-    } catch (e) {
-      console.warn('Could not load default save:', e)
+    if (mapParam) {
+      try {
+        const res = await fetch(`/worldsave/${encodeURIComponent(mapParam)}.json`)
+        if (res.ok) {
+          const data = await res.json()
+          await loadSaveData(data)
+          pushUndoState()
+          return
+        }
+      } catch (e) {
+        console.warn('Could not load default save:', e)
+      }
     }
+    // No map loaded — build the default empty terrain
+    markTerrainDirty({ rebuildTexturePlanes: true, rebuildTextureOverlays: true })
+    pushUndoState()
   }
 
   Promise.all([initAssets(), initTextures()]).then(() => initDefaultSave())

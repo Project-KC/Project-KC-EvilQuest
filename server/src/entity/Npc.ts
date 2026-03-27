@@ -17,17 +17,31 @@ export class Npc extends Entity {
   dead: boolean = false;
   respawnTimer: number = 0;
 
+  // Hero points: tracks damage per attacker for kill credit
+  private heroPoints: Map<number, number> = new Map();
+
+  // Single-combat timer: tick when last attacked (8-tick lockout)
+  lastCombatTick: number = 0;
+  lastAttackerId: number = -1;
+
   // OSRS-style leash: retreat max range (how far NPC can be from spawn in combat)
   static readonly RETREAT_MAX_RANGE = 7;
   // Retreat interaction range: if target is this far from spawn, NPC drops combat
   static readonly RETREAT_INTERACTION_RANGE = 18;
 
-  constructor(def: NpcDef, x: number, z: number) {
+  readonly wanderRangeOverride?: number;
+
+  constructor(def: NpcDef, x: number, z: number, wanderRange?: number) {
     super(def.name, x, z, def.health);
     this.npcId = def.id;
     this.def = def;
     this.spawnX = x;
     this.spawnZ = z;
+    this.wanderRangeOverride = wanderRange;
+  }
+
+  get wanderRange(): number {
+    return this.wanderRangeOverride ?? this.def.wanderRange;
   }
 
   processAI(isBlocked: (x: number, z: number) => boolean, isWallBlocked?: (fx: number, fz: number, tx: number, tz: number) => boolean): void {
@@ -109,7 +123,7 @@ export class Npc extends Entity {
     }
 
     // Wander behavior (only when not in combat)
-    if (this.def.wanderRange > 0) {
+    if (this.wanderRange > 0) {
       this.wanderCooldown--;
       if (this.wanderCooldown <= 0) {
         this.wanderCooldown = 5 + Math.floor(Math.random() * 10); // 5-15 ticks
@@ -130,8 +144,8 @@ export class Npc extends Entity {
         const dzSpawn = nz - this.spawnZ;
         const wallBlock = isWallBlocked ? isWallBlocked(this.position.x, this.position.y, nx, nz) : false;
         if (
-          Math.abs(dxSpawn) <= this.def.wanderRange &&
-          Math.abs(dzSpawn) <= this.def.wanderRange &&
+          Math.abs(dxSpawn) <= this.wanderRange &&
+          Math.abs(dzSpawn) <= this.wanderRange &&
           !isBlocked(nx, nz) && !wallBlock
         ) {
           this.position.x = nx;
@@ -205,6 +219,9 @@ export class Npc extends Entity {
     this.attackCooldown = 0;
     this.wanderCooldown = 0;
     this.returning = false;
+    this.heroPoints.clear();
+    this.lastCombatTick = 0;
+    this.lastAttackerId = -1;
   }
 
   tickRespawn(): boolean {
@@ -215,5 +232,20 @@ export class Npc extends Entity {
       return true; // Respawned
     }
     return false;
+  }
+
+  /** Track damage dealt by each attacker for kill credit */
+  addHeroPoints(attackerId: number, damage: number): void {
+    this.heroPoints.set(attackerId, (this.heroPoints.get(attackerId) ?? 0) + damage);
+  }
+
+  /** Get the attacker who dealt the most total damage (kill credit) */
+  getTopDamager(): number | null {
+    let topId: number | null = null;
+    let topDmg = 0;
+    for (const [id, dmg] of this.heroPoints) {
+      if (dmg > topDmg) { topId = id; topDmg = dmg; }
+    }
+    return topId;
   }
 }

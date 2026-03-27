@@ -3,6 +3,7 @@ export class MapData {
     this.width = width
     this.height = height
 
+    this.terrainGeneration = 0   // incremented on terrain/tile/height changes — used by undo to skip rebuilds
     this.mapType = 'overworld'   // 'overworld' | 'dungeon'
     this.worldOffset = { x: 0, z: 0 }  // world-space origin of this chunk
     this.waterLevel = -2.5
@@ -56,11 +57,13 @@ export class MapData {
   setVertexHeight(x, z, value) {
     if (x < 0 || z < 0 || x > this.width || z > this.height) return
     this.heights[z][x] = value
+    this.terrainGeneration++
   }
 
   adjustVertexHeight(x, z, delta) {
     if (x < 0 || z < 0 || x > this.width || z > this.height) return
     this.heights[z][x] += delta
+    this.terrainGeneration++
   }
 
   getTileCornerHeights(x, z) {
@@ -168,10 +171,10 @@ export class MapData {
   paintTile(x, z, groundType) {
     const tile = this.getTile(x, z)
     if (!tile) return
-
     tile.ground = groundType
     tile.groundB = null
     if (groundType !== 'water') tile.waterPainted = false
+    this.terrainGeneration++
   }
 
   paintTileFirst(x, z, groundType) {
@@ -180,36 +183,42 @@ export class MapData {
     if (tile.groundB === null) tile.groundB = tile.ground
     tile.ground = groundType
     if (groundType !== 'water') tile.waterPainted = false
+    this.terrainGeneration++
   }
 
   paintTileSecond(x, z, groundType) {
     const tile = this.getTile(x, z)
     if (!tile) return
     tile.groundB = groundType
+    this.terrainGeneration++
   }
 
   paintWaterTile(x, z) {
     const tile = this.getTile(x, z)
     if (!tile) return
     tile.waterPainted = true
+    this.terrainGeneration++
   }
 
   clearWaterPaint(x, z) {
     const tile = this.getTile(x, z)
     if (!tile) return
     tile.waterPainted = false
+    this.terrainGeneration++
   }
 
   paintWaterSurface(x, z) {
     const tile = this.getTile(x, z)
     if (!tile) return
     tile.waterSurface = true
+    this.terrainGeneration++
   }
 
   clearWaterSurface(x, z) {
     const tile = this.getTile(x, z)
     if (!tile) return
     tile.waterSurface = false
+    this.terrainGeneration++
   }
 
   paintTextureTile(x, z, textureId, rotation = 0, scale = 1, worldUV = false) {
@@ -281,6 +290,7 @@ export class MapData {
     const tile = this.getTile(x, z)
     if (!tile) return
     tile.split = tile.split === 'forward' ? 'back' : 'forward'
+    this.terrainGeneration++
   }
 
   addTexturePlane(textureId, x, y, z, width = 1, height = 1, vertical = true) {
@@ -338,7 +348,8 @@ export class MapData {
       selectedTexturePlaneId: this.selectedTexturePlaneId,
       texturePlanes: this.texturePlanes,
       tiles: this.tiles,
-      heights: this.heights
+      heights: this.heights,
+      terrainGeneration: this.terrainGeneration
     }
   }
 
@@ -404,6 +415,7 @@ export class MapData {
       }
     }
 
+    map.terrainGeneration = data.terrainGeneration ?? 0
     return map
   }
 }

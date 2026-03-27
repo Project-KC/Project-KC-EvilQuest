@@ -52,7 +52,7 @@ export class GameDatabase {
         account_id INTEGER PRIMARY KEY REFERENCES accounts(id),
         x REAL DEFAULT 32.5,
         z REAL DEFAULT 32.5,
-        map_level TEXT DEFAULT 'overworld',
+        map_level TEXT DEFAULT 'kcmap',
         skills TEXT DEFAULT '{}',
         inventory TEXT DEFAULT '[]',
         equipment TEXT DEFAULT '{}',
@@ -215,7 +215,7 @@ export class GameDatabase {
     return {
       x: row.x,
       z: row.z,
-      mapLevel: row.map_level || 'overworld',
+      mapLevel: row.map_level || 'kcmap',
       skills,
       inventory,
       equipment,

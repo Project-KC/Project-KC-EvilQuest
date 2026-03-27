@@ -8,7 +8,7 @@ export abstract class Entity {
   name: string;
   health: number;
   maxHealth: number;
-  currentMapLevel: string = 'overworld';
+  currentMapLevel: string = 'kcmap';
   currentFloor: number = 0;
 
   constructor(name: string, x: number, z: number, maxHealth: number) {

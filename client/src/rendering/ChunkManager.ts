@@ -131,6 +131,9 @@ export class ChunkManager {
   private waterTexture: Texture | null = null;
   private waterStartTime: number = 0;
 
+  // Object shadow influences (vertex grid, 1.0 = full brightness, 0.0 = full shadow)
+  private shadowInf: Float32Array | null = null;
+
   // Placed objects and texture planes from KC editor
   private placedObjectNodes: TransformNode[] = [];
   private texturePlaneMeshes: Mesh[] = [];
@@ -532,6 +535,14 @@ export class ChunkManager {
           const avgAO = (this.getVertexAO(x, z) + this.getVertexAO(x + 1, z) + this.getVertexAO(x, z + 1) + this.getVertexAO(x + 1, z + 1)) / 4;
           cA.r *= avgAO; cA.g *= avgAO; cA.b *= avgAO;
           cB.r *= avgAO; cB.g *= avgAO; cB.b *= avgAO;
+          // Object shadows on split tiles
+          if (this.shadowInf) {
+            const shadowableA = tileType === 'grass' || tileType === 'dirt' || tileType === 'path';
+            const shadowableB = groundBType === 'grass' || groundBType === 'dirt' || groundBType === 'path';
+            const avgShadow = (this.getShadowAt(x, z) + this.getShadowAt(x + 1, z) + this.getShadowAt(x, z + 1) + this.getShadowAt(x + 1, z + 1)) / 4;
+            if (shadowableA) { cA.r *= avgShadow; cA.g *= avgShadow; cA.b *= avgShadow; }
+            if (shadowableB) { cB.r *= avgShadow; cB.g *= avgShadow; cB.b *= avgShadow; }
+          }
 
           if (splitDir === 'forward') {
             // Triangle A (CCW): TL, TR, BL
@@ -606,6 +617,18 @@ export class ChunkManager {
           cTR.r *= aoTR; cTR.g *= aoTR; cTR.b *= aoTR;
           cBL.r *= aoBL; cBL.g *= aoBL; cBL.b *= aoBL;
           cBR.r *= aoBR; cBR.g *= aoBR; cBR.b *= aoBR;
+        }
+
+        // Object shadows (grass, dirt, path only)
+        if (this.shadowInf && (tileType === 'grass' || tileType === 'dirt' || tileType === 'path')) {
+          const sTL = this.getShadowAt(x, z);
+          const sTR = this.getShadowAt(x + 1, z);
+          const sBL = this.getShadowAt(x, z + 1);
+          const sBR = this.getShadowAt(x + 1, z + 1);
+          cTL.r *= sTL; cTL.g *= sTL; cTL.b *= sTL;
+          cTR.r *= sTR; cTR.g *= sTR; cTR.b *= sTR;
+          cBL.r *= sBL; cBL.g *= sBL; cBL.b *= sBL;
+          cBR.r *= sBR; cBR.g *= sBR; cBR.b *= sBR;
         }
 
         // Emit quad (4 vertices)
@@ -1643,6 +1666,63 @@ export class ChunkManager {
       loaded++;
     }
     console.log(`[ChunkManager] Loaded ${loaded}/${objects.length} placed objects`);
+    this.buildShadowInfluences();
+  }
+
+  private buildShadowInfluences(): void {
+    if (!this.mapWidth || !this.mapHeight) return;
+    const w = this.mapWidth + 1;
+    const h = this.mapHeight + 1;
+    const inf = new Float32Array(w * h);
+    inf.fill(1.0);
+
+    for (const node of this.placedObjectNodes) {
+      const cx = node.position.x;
+      const cz = node.position.z;
+
+      // Estimate footprint from bounding box
+      let footprint = 1.0;
+      try {
+        const bounds = node.getHierarchyBoundingVectors(true);
+        const sx = bounds.max.x - bounds.min.x;
+        const sz = bounds.max.z - bounds.min.z;
+        footprint = Math.max(sx, sz) * 0.5;
+      } catch { /* use default */ }
+
+      // Determine if this is a tree-like object (larger shadow)
+      const name = node.name.toLowerCase();
+      const isLarge = name.includes('tree') || name.includes('modular') || name.includes('wall') || name.includes('house') || name.includes('bush');
+      const shadowR = footprint + (isLarge ? 2.8 : 1.0);
+      const maxDark = isLarge ? 0.82 : 0.42;
+
+      // Iterate vertices in shadow range
+      const vx0 = Math.max(0, Math.floor(cx - shadowR));
+      const vx1 = Math.min(w - 1, Math.ceil(cx + shadowR));
+      const vz0 = Math.max(0, Math.floor(cz - shadowR));
+      const vz1 = Math.min(h - 1, Math.ceil(cz + shadowR));
+
+      for (let vz = vz0; vz <= vz1; vz++) {
+        for (let vx = vx0; vx <= vx1; vx++) {
+          const dx = vx - cx;
+          const dz = vz - cz;
+          const dist = Math.sqrt(dx * dx + dz * dz);
+          if (dist >= shadowR) continue;
+          const t = 1.0 - dist / shadowR;
+          const factor = 1.0 - t * t * maxDark;
+          const idx = vz * w + vx;
+          if (factor < inf[idx]) inf[idx] = factor;
+        }
+      }
+    }
+
+    this.shadowInf = inf;
+    console.log(`[ChunkManager] Built shadow influences for ${this.placedObjectNodes.length} objects`);
+  }
+
+  private getShadowAt(vx: number, vz: number): number {
+    if (!this.shadowInf || !this.mapWidth) return 1.0;
+    if (vx < 0 || vz < 0 || vx > this.mapWidth || vz > this.mapHeight) return 1.0;
+    return this.shadowInf[vz * (this.mapWidth + 1) + vx];
   }
 
   private getOrLoadTexture(textureId: string): Texture | null {
