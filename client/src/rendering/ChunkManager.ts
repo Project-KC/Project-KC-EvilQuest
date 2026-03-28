@@ -8,6 +8,7 @@ import { Vector3, Quaternion } from '@babylonjs/core/Maths/math.vector';
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode';
 import { Texture } from '@babylonjs/core/Materials/Textures/texture';
 import { SceneLoader } from '@babylonjs/core/Loading/sceneLoader';
+import { AnimationGroup } from '@babylonjs/core/Animations/animationGroup';
 import '@babylonjs/loaders/glTF';
 import { CHUNK_SIZE, CHUNK_LOAD_RADIUS, TILE_SIZE, TileType, BLOCKING_TILES, WallEdge, DEFAULT_WALL_HEIGHT, groundTypeToTileType, shouldTileRenderWater } from '@projectrs/shared';
 import type { MapMeta, WallsFile, StairData, RoofData, FloorLayerData, KCMapFile, KCMapData, KCTile, GroundType, PlacedObject, TexturePlane } from '@projectrs/shared';
@@ -64,6 +65,7 @@ interface FloorMeshSet {
 interface ChunkMeshes {
   ground: Mesh;
   water: Mesh | null;
+  paddyWater: Mesh | null;
   cliff: Mesh | null;
   wall: Mesh | null;
   roof: Mesh | null;
@@ -124,6 +126,7 @@ export class ChunkManager {
   private roofMat: StandardMaterial | null = null;
   private floorMat: StandardMaterial | null = null;
   private stairMat: StandardMaterial | null = null;
+  private paddyWaterMat: StandardMaterial | null = null;
 
   private loaded: boolean = false;
 
@@ -139,6 +142,8 @@ export class ChunkManager {
   private texturePlaneMeshes: Mesh[] = [];
   private assetRegistry: Map<string, { path: string }> = new Map();
   private loadedModelCache: Map<string, TransformNode | null> = new Map();
+  private modelAnimationGroups: Map<string, AnimationGroup[]> = new Map();
+  private activeAnimationGroups: AnimationGroup[] = [];
   private textureCache: Map<string, Texture> = new Map();
   private textureRegistry: Map<string, { path: string }> = new Map();
 
@@ -281,21 +286,35 @@ export class ChunkManager {
       this.stairMat = new StandardMaterial('chunkStairMat', this.scene);
       this.stairMat.specularColor = new Color3(0.05, 0.05, 0.05);
     }
+    if (!this.paddyWaterMat) {
+      this.paddyWaterMat = new StandardMaterial('chunkPaddyWaterMat', this.scene);
+      this.paddyWaterMat.specularColor = new Color3(0.1, 0.1, 0.1);
+      this.paddyWaterMat.diffuseColor = new Color3(0.88, 0.96, 0.97);
+      this.paddyWaterMat.alpha = 0.25;
+      this.paddyWaterMat.backFaceCulling = false;
+      this.paddyWaterMat.zOffset = -2;
+      if (this.waterTexture) {
+        const paddyTex = this.waterTexture.clone();
+        paddyTex.wrapU = Texture.WRAP_ADDRESSMODE;
+        paddyTex.wrapV = Texture.WRAP_ADDRESSMODE;
+        this.paddyWaterMat.diffuseTexture = paddyTex;
+      }
+    }
 
     // Load asset/texture registry before marking loaded so chunk texture overlays work immediately
     await this.loadAssetRegistry();
+
+    // Register horizontal texture planes as walkable floors (bridges, platforms)
+    this.registerTexturePlaneFloors();
+
+    // Load KC placed objects and texture planes (must complete before marking loaded so shadows are ready)
+    await this.loadPlacedObjects(mapFile.placedObjects || []);
+    this.loadTexturePlanes(this.mapData!.texturePlanes || []);
 
     this.loaded = true;
     this.lastChunkX = -999;
     this.lastChunkZ = -999;
     console.log(`[ChunkManager] Loaded map '${mapId}': ${this.mapWidth}x${this.mapHeight}, tiles: ${this.mapData?.tiles?.length}, heights: ${this.mapData?.heights?.length}, waterLevel: ${this.mapData?.waterLevel}`);
-
-    // Register horizontal texture planes as walkable floors (bridges, platforms)
-    this.registerTexturePlaneFloors();
-
-    // Load KC placed objects and texture planes
-    this.loadPlacedObjects(mapFile.placedObjects || []);
-    this.loadTexturePlanes(this.mapData!.texturePlanes || []);
   }
 
   // --- KC data accessors ---
@@ -448,6 +467,7 @@ export class ChunkManager {
       if (!desired.has(key)) {
         meshes.ground.dispose();
         meshes.water?.dispose();
+        meshes.paddyWater?.dispose();
         meshes.cliff?.dispose();
         meshes.wall?.dispose();
         meshes.roof?.dispose();
@@ -483,6 +503,7 @@ export class ChunkManager {
     this.buildTextureOverlays(chunkX, chunkZ, startX, startZ, endX, endZ);
     console.log(`[ChunkManager] Ground mesh vertices: ${ground.getTotalVertices()}`);
     const water = this.buildWaterMesh(chunkX, chunkZ, startX, startZ, endX, endZ);
+    const paddyWater = this.buildPaddyWaterMesh(chunkX, chunkZ, startX, startZ, endX, endZ);
     const cliff = this.buildCliffMesh(chunkX, chunkZ, startX, startZ, endX, endZ);
     // Wall meshes disabled — collision walls are invisible barriers, GLB models provide visuals
     const wall = null;
@@ -499,7 +520,7 @@ export class ChunkManager {
       }
     }
 
-    return { ground, water, cliff, wall, roof, floor, stairs, upperFloors };
+    return { ground, water, paddyWater, cliff, wall, roof, floor, stairs, upperFloors };
   }
 
   // --- Ground mesh with KC editor shading ---
@@ -708,6 +729,54 @@ export class ChunkManager {
     mesh.material = this.waterMat;
     mesh.isPickable = false;
     mesh.renderingGroupId = 1; // Render before texture planes (group 2) so planes appear on top
+    return mesh;
+  }
+
+  // --- Paddy/surface water mesh (terrain-following shallow water) ---
+
+  private buildPaddyWaterMesh(chunkX: number, chunkZ: number, startX: number, startZ: number, endX: number, endZ: number): Mesh | null {
+    const positions: number[] = [];
+    const indices: number[] = [];
+    const normals: number[] = [];
+    const uvs: number[] = [];
+    let vertexIndex = 0;
+    let hasWater = false;
+
+    const WATER_UV_SCALE = 5;
+    const LIFT = 0.05;
+
+    for (let x = startX; x < endX; x++) {
+      for (let z = startZ; z < endZ; z++) {
+        const tile = this.getTileRaw(x, z);
+        if (!tile?.waterSurface) continue;
+        hasWater = true;
+
+        const tl = this.getVertexHeight(x, z) + LIFT;
+        const tr = this.getVertexHeight(x + 1, z) + LIFT;
+        const bl = this.getVertexHeight(x, z + 1) + LIFT;
+        const br = this.getVertexHeight(x + 1, z + 1) + LIFT;
+
+        positions.push(x, tl, z, x + 1, tr, z, x + 1, br, z + 1, x, bl, z + 1);
+        const u0 = x / WATER_UV_SCALE, u1 = (x + 1) / WATER_UV_SCALE;
+        const v0 = z / WATER_UV_SCALE, v1 = (z + 1) / WATER_UV_SCALE;
+        uvs.push(u0, v0, u1, v0, u1, v1, u0, v1);
+        for (let i = 0; i < 4; i++) normals.push(0, 1, 0);
+        indices.push(vertexIndex, vertexIndex + 1, vertexIndex + 2, vertexIndex, vertexIndex + 2, vertexIndex + 3);
+        vertexIndex += 4;
+      }
+    }
+
+    if (!hasWater) return null;
+    const mesh = new Mesh(`paddywater_${chunkX}_${chunkZ}`, this.scene);
+    const vertexData = new VertexData();
+    vertexData.positions = positions;
+    vertexData.indices = indices;
+    vertexData.normals = normals;
+    vertexData.uvs = uvs;
+    vertexData.applyToMesh(mesh);
+    mesh.material = this.paddyWaterMat;
+    mesh.isPickable = false;
+    mesh.renderingGroupId = 1;
     return mesh;
   }
 
@@ -1645,6 +1714,14 @@ export class ChunkManager {
 
       template.setEnabled(false);
       this.loadedModelCache.set(assetId, template);
+
+      // Store animation groups from the GLB for cloning later
+      if (result.animationGroups && result.animationGroups.length > 0) {
+        // Stop template animations (template is disabled)
+        for (const ag of result.animationGroups) ag.stop();
+        this.modelAnimationGroups.set(assetId, result.animationGroups);
+      }
+
       return template;
     } catch (e) {
       console.warn(`[ChunkManager] Failed to load model ${assetId}:`, e);
@@ -1686,6 +1763,37 @@ export class ChunkManager {
         .multiply(Quaternion.RotationAxis(new Vector3(0, 0, 1), orz));
       instance.scaling = new Vector3(obj.scale.x, obj.scale.y, obj.scale.z);
       this.placedObjectNodes.push(instance);
+
+      // Clone and play animations from the template
+      const templateAnims = this.modelAnimationGroups.get(obj.assetId);
+      if (templateAnims) {
+        // Build name mapping: source node name → cloned node
+        const clonedNodes = new Map<string, any>();
+        instance.getChildMeshes(false).forEach(m => clonedNodes.set(m.name, m));
+        instance.getChildTransformNodes(false).forEach(n => clonedNodes.set(n.name, n));
+        clonedNodes.set(instance.name, instance);
+
+        for (const srcGroup of templateAnims) {
+          const clonedGroup = new AnimationGroup(`${srcGroup.name}_placed_${loaded}`, this.scene);
+          for (const ta of srcGroup.targetedAnimations) {
+            const srcName = ta.target?.name as string;
+            // Find the cloned node matching this target
+            const clonedTarget = srcName
+              ? clonedNodes.get(`placed_${loaded}_${srcName}`)
+              : null;
+            if (clonedTarget) {
+              clonedGroup.addTargetedAnimation(ta.animation, clonedTarget);
+            }
+          }
+          if (clonedGroup.targetedAnimations.length > 0) {
+            clonedGroup.play(true); // loop
+            this.activeAnimationGroups.push(clonedGroup);
+          } else {
+            clonedGroup.dispose();
+          }
+        }
+      }
+
       loaded++;
     }
     console.log(`[ChunkManager] Loaded ${loaded}/${objects.length} placed objects`);
@@ -1775,8 +1883,14 @@ export class ChunkManager {
         height: plane.height,
         sideOrientation: plane.doubleSided ? Mesh.DOUBLESIDE : Mesh.FRONTANDBACKSIDE,
       }, this.scene);
+      const texClone = tex.clone();
+      const uvScale = plane.uvRepeat ? 1 / plane.uvRepeat : 1;
+      texClone.uScale = uvScale;
+      texClone.vScale = uvScale;
+      texClone.wrapU = Texture.WRAP_ADDRESSMODE;
+      texClone.wrapV = Texture.WRAP_ADDRESSMODE;
       const mat = new StandardMaterial(`texplane_mat_${plane.id}`, this.scene);
-      mat.diffuseTexture = tex;
+      mat.diffuseTexture = texClone;
       mat.specularColor = new Color3(0, 0, 0);
       mat.useAlphaFromDiffuseTexture = true;
       mat.backFaceCulling = !plane.doubleSided;
@@ -1809,6 +1923,13 @@ export class ChunkManager {
   }
 
   disposeAll(): void {
+    // Dispose animations
+    for (const ag of this.activeAnimationGroups) ag.dispose();
+    this.activeAnimationGroups = [];
+    for (const [, groups] of this.modelAnimationGroups) {
+      for (const ag of groups) ag.dispose();
+    }
+    this.modelAnimationGroups.clear();
     // Dispose placed objects and texture planes
     for (const n of this.placedObjectNodes) n.dispose();
     this.placedObjectNodes = [];
@@ -1822,6 +1943,7 @@ export class ChunkManager {
     for (const [, meshes] of this.chunks) {
       meshes.ground.dispose();
       meshes.water?.dispose();
+      meshes.paddyWater?.dispose();
       meshes.cliff?.dispose();
       meshes.wall?.dispose();
       meshes.roof?.dispose();

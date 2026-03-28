@@ -293,6 +293,15 @@ export class MapData {
     this.terrainGeneration++
   }
 
+  setTileSplit(x, z, direction) {
+    const tile = this.getTile(x, z)
+    if (!tile) return
+    if (tile.split !== direction) {
+      tile.split = direction
+      this.terrainGeneration++
+    }
+  }
+
   addTexturePlane(textureId, x, y, z, width = 1, height = 1, vertical = true) {
     const plane = {
       id: `plane_${Date.now()}_${Math.floor(Math.random() * 100000)}`,

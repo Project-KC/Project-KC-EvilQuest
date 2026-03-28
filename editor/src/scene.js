@@ -160,7 +160,7 @@ function tuneModelLighting(model) {
   let filteredAssets = []
   let selectedAssetId = ''
   let previewObject = null
-  let previewRotation = 0
+  let previewRotation = { x: 0, y: 0, z: 0 }
   let hoverEdgeHelper = null
 
   let assetSectionFilter = 'all'
@@ -648,7 +648,7 @@ let brushRadius = 3.2
   uiRoot.appendChild(compass)
 
   function updateCompass() {
-    const angleDeg = (Math.PI / 2 - yaw) * (180 / Math.PI)
+    const angleDeg = (-yaw) * (180 / Math.PI)
     document.getElementById('compass-needle').style.transform = `rotate(${angleDeg}deg)`
   }
 
@@ -731,7 +731,7 @@ let brushRadius = 3.2
         X Y Z axis lock · click confirm · Esc cancel<br>
         Q/E raise/lower while moving · Shift snap<br>
         Alt free move (bypass snap) · K snap to grid<br>
-        Shift+D / Ctrl+Shift+D dup right · Ctrl+D left · Alt+D forward · Alt+A back<br>
+        D dup in-place · Shift+D right · Ctrl+D left · Alt+D forward · Alt+A back<br>
         Shift+A stack upward<br>
         Delete / Backspace remove selected
       </div>
@@ -912,7 +912,7 @@ let brushRadius = 3.2
       <b>Transform:</b> G move · R rotate · S scale · X/Y/Z axis · click confirm · Esc cancel<br>
       <b>While moving:</b> Q raise · E lower · Shift snap to grid · Alt disable edge snap<br>
       <b>Terrain:</b> Q/E raise/lower hovered · L level mode · F flip tile split<br>
-      <b>Duplicate:</b> Shift+D / Ctrl+Shift+D right · Ctrl+D left · Alt+D forward · Alt+A back · Shift+A stack up<br>
+      <b>Duplicate:</b> D in-place · Shift+D right · Ctrl+D left · Alt+D forward · Alt+A back · Shift+A stack up<br>
       <b>Other:</b> K snap to grid · V toggle plane vertical/horizontal · Del remove selected
     </div>
   `
@@ -1790,11 +1790,18 @@ let brushRadius = 3.2
 
   function serializePlacedObjects() {
     return placedGroup.getChildren().map((obj) => {
+      // When rotationQuaternion is set (after X/Z rotation), obj.rotation is stale.
+      // Convert quaternion back to euler for serialization.
+      let rx = obj.rotation.x, ry = obj.rotation.y, rz = obj.rotation.z
+      if (obj.rotationQuaternion) {
+        const euler = obj.rotationQuaternion.toEulerAngles()
+        rx = euler.x; ry = euler.y; rz = euler.z
+      }
       const out = {
         assetId: obj.userData.assetId || null,
         layerId: obj.userData.layerId || 'layer_0',
         position: { x: obj.position.x, y: obj.position.y, z: obj.position.z },
-        rotation: { x: obj.rotation.x, y: obj.rotation.y, z: obj.rotation.z },
+        rotation: { x: rx, y: ry, z: rz },
         scale: { x: obj.scale.x, y: obj.scale.y, z: obj.scale.z }
       }
       if (obj.userData.trigger) out.trigger = { ...obj.userData.trigger }
@@ -1823,6 +1830,7 @@ let brushRadius = 3.2
       tuneModelLighting(model, asset.path)
 
       model.position.set(placed.position.x, placed.position.y, placed.position.z)
+      model.rotationQuaternion = null
       model.rotation.set(placed.rotation.x, placed.rotation.y, placed.rotation.z)
       model.scale.set(placed.scale.x, placed.scale.y, placed.scale.z)
       model.userData.assetId = asset.id
@@ -1952,6 +1960,7 @@ let brushRadius = 3.2
       const model = await loadAssetModel(asset.path)
       tuneModelLighting(model, asset.path)
       model.position.set(placed.position.x + offsetX, placed.position.y, placed.position.z + offsetZ)
+      model.rotationQuaternion = null
       model.rotation.set(placed.rotation.x, placed.rotation.y, placed.rotation.z)
       model.scale.set(placed.scale.x, placed.scale.y, placed.scale.z)
       model.userData.assetId = asset.id
@@ -2013,6 +2022,8 @@ let brushRadius = 3.2
     }
     // Reapply xray if collision tool is active (objects were just rebuilt)
     if (state.tool === ToolMode.COLLISION) setPlacedObjectsXray(true)
+    // Reapply height cull so undo doesn't unhide culled objects
+    if (heightCullLevel > 0) applyHeightCull()
     updateSelectionHelper()
     updateToolUI()
   }
@@ -2337,13 +2348,14 @@ let brushRadius = 3.2
     // Pick terrain
     const terrainPick = scene.pickWithRay(ray, (mesh) => isTerrainMesh(mesh))
 
-    // Pick placed objects (filter upward-facing)
+    // Pick placed objects (filter upward-facing, skip height-culled)
     const placedPick = scene.pickWithRay(ray, (mesh) => {
       if (!mesh.isDescendantOf(placedGroup)) return false
-      if (!mesh.isVisible) return false
+      if (!mesh.isVisible || !mesh.isEnabled()) return false
       // Walk up to find root placed object
       let node = mesh
       while (node.parent && node.parent !== placedGroup) node = node.parent
+      if (!node.isEnabled()) return false
       return !excludeObjects.includes(node)
     })
 
@@ -2382,7 +2394,7 @@ let brushRadius = 3.2
   function pickPlacedObject(event) {
     updateMouse(event)
     const pick = scene.pick(scene.pointerX, scene.pointerY, (mesh) => {
-      return mesh.isDescendantOf(placedGroup) && mesh.isVisible
+      return mesh.isDescendantOf(placedGroup) && mesh.isVisible && mesh.isEnabled()
     })
     if (!pick.hit) return null
 
@@ -2447,6 +2459,7 @@ let brushRadius = 3.2
       placed.position.y,
       placed.position.z + offsetZ
     )
+    model.rotationQuaternion = null
     model.rotation.set(placed.rotation.x, placed.rotation.y, placed.rotation.z)
     model.scale.set(placed.scale.x, placed.scale.y, placed.scale.z)
     model.userData.assetId = asset.id
@@ -2477,11 +2490,11 @@ let brushRadius = 3.2
     const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, Matrix.Identity(), camera)
 
     const placedPick = scene.pickWithRay(ray, (mesh) => {
-      return mesh.isDescendantOf(placedGroup) && mesh.isVisible
+      return mesh.isDescendantOf(placedGroup) && mesh.isVisible && mesh.isEnabled()
     })
 
     const planePick = texturePlaneGroup ? scene.pickWithRay(ray, (mesh) => {
-      return mesh.isDescendantOf(texturePlaneGroup) && mesh.isVisible
+      return mesh.isDescendantOf(texturePlaneGroup) && mesh.isVisible && mesh.isEnabled()
     }) : null
 
     const bestPlaced = placedPick?.hit ? placedPick : null
@@ -2951,12 +2964,14 @@ function applyToolAtTile(tile, eventLike = null) {
         map.paintTextureTileFirst(tile.x, tile.z, paintTabTextureId, textureRotation, textureScale)
         map.paintTextureTileSecond(tile.x, tile.z, paintTabTextureIdB, textureRotation, textureScale)
       } else if (state.halfPaint) {
-        // Single slot or erase: paint/erase whichever half the cursor is on
-        const tileData = map.getTile(tile.x, tile.z)
-        const splitDir = tileData?.split || 'forward'
+        // Auto-set split based on cursor corner, then paint/erase that half
         const u = tile.u ?? 0.5
         const v = tile.v ?? 0.5
-        const isFirst = splitDir === 'forward' ? (u + v < 1) : (v >= u)
+        const nearLeft = u < 0.5
+        const nearTop = v < 0.5
+        const needForward = nearLeft === nearTop // TL or BR → forward, TR or BL → back
+        map.setTileSplit(tile.x, tile.z, needForward ? 'forward' : 'back')
+        const isFirst = nearTop
         if (isFirst) {
           if (isErase) map.clearTextureTileFirst(tile.x, tile.z)
           else map.paintTextureTileFirst(tile.x, tile.z, paintTabTextureId, textureRotation, textureScale)
@@ -2975,18 +2990,30 @@ function applyToolAtTile(tile, eventLike = null) {
     if (state.paintType === 'water') {
       map.paintWaterTile(tile.x, tile.z)
     } else if (state.halfPaint) {
-      const tileData = map.getTile(tile.x, tile.z)
-      const splitDir = tileData?.split || 'forward'
       const u = tile.u ?? 0.5
       const v = tile.v ?? 0.5
-      const isFirst = splitDir === 'forward' ? (u + v < 1) : (v >= u)
-      if (isFirst) map.paintTileFirst(tile.x, tile.z, state.paintType)
-      else map.paintTileSecond(tile.x, tile.z, state.paintType)
+      // Auto-set split direction based on which corner the cursor is nearest,
+      // then paint the triangle that covers that corner.
+      // TL corner: forward split, first half    TR corner: back split, first half
+      // BL corner: back split, second half      BR corner: forward split, second half
+      const nearLeft = u < 0.5
+      const nearTop = v < 0.5
+      if (nearLeft === nearTop) {
+        // TL or BR corner → forward split (diagonal TL→BR)
+        map.setTileSplit(tile.x, tile.z, 'forward')
+        if (nearTop) map.paintTileFirst(tile.x, tile.z, state.paintType)
+        else map.paintTileSecond(tile.x, tile.z, state.paintType)
+      } else {
+        // TR or BL corner → back split (diagonal TR→BL)
+        map.setTileSplit(tile.x, tile.z, 'back')
+        if (nearTop) map.paintTileFirst(tile.x, tile.z, state.paintType)
+        else map.paintTileSecond(tile.x, tile.z, state.paintType)
+      }
     } else {
       map.paintTile(tile.x, tile.z, state.paintType)
     }
 
-    markTerrainDirty({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true })
+    markTerrainDirty({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true, heightsOnly: true, region: { x1: tile.x, z1: tile.z, x2: tile.x, z2: tile.z } })
     return
   }
 
@@ -3070,7 +3097,8 @@ function applyToolAtTile(tile, eventLike = null) {
 
     previewObject = makeGhostMaterial(model)
     model.dispose() // dispose the source instance — ghost is a separate clone
-    previewObject.rotation.y = previewRotation
+    previewObject.rotationQuaternion = null // use euler rotation instead of quaternion
+    previewObject.rotation.set(previewRotation.x, previewRotation.y, previewRotation.z)
     previewObject.userData.assetId = asset.id
     // previewObject is already in the scene from makeGhostMaterial
 
@@ -3102,9 +3130,6 @@ function applyToolAtTile(tile, eventLike = null) {
       const snap = getWallEdgeSnap(tile)
       if (snap) {
         pos.x = snap.x; pos.z = snap.z
-        // Auto-set wall collision on the snapped edge
-        const current = getWallAt(tile.x, tile.z)
-        setWallAt(tile.x, tile.z, current | snap.edge)
       }
     }
     if (event) {
@@ -3122,7 +3147,8 @@ function applyToolAtTile(tile, eventLike = null) {
       pos.z = Math.round(pos.z)
     }
     model.position.copyFrom(pos)
-    model.rotation.y = previewRotation
+    model.rotationQuaternion = null // use euler rotation
+    model.rotation.set(previewRotation.x, previewRotation.y, previewRotation.z)
     model.userData.assetId = asset.id
     model.userData.type = 'asset'
     model.userData.layerId = activeLayerId
@@ -3152,7 +3178,12 @@ function applyToolAtTile(tile, eventLike = null) {
       const model = await loadAssetModel(newAsset.path)
       tuneModelLighting(model, newAsset.path)
       model.position.copyFrom(obj.position)
-      model.rotation.copyFrom(obj.rotation)
+      if (obj.rotationQuaternion) {
+        model.rotationQuaternion = obj.rotationQuaternion.clone()
+      } else {
+        model.rotationQuaternion = null
+        model.rotation.copyFrom(obj.rotation)
+      }
       model.scale.copyFrom(obj.scale)
       model.userData.assetId = newAsset.id
       model.userData.type = 'asset'
@@ -3177,7 +3208,7 @@ function applyToolAtTile(tile, eventLike = null) {
       if (selectedTexturePlanes.length > 1) {
         // Compute offset from primary plane then apply it to all
         let offsetX = 0, offsetZ = 0, offsetY = 0
-        if (mode !== 'stack') {
+        if (mode !== 'stack' && mode !== 'inplace') {
           const primaryClone = JSON.parse(JSON.stringify(selectedTexturePlane))
           if (mode === 'forward' || mode === 'back') {
             snapPlaneFlushAlong(primaryClone, selectedTexturePlane, mode)
@@ -3216,7 +3247,9 @@ function applyToolAtTile(tile, eventLike = null) {
       const clone = JSON.parse(JSON.stringify(selectedTexturePlane))
       clone.id = `plane_${Date.now()}_${Math.floor(Math.random() * 100000)}`
 
-      if (mode === 'stack') {
+      if (mode === 'inplace') {
+        // keep same position
+      } else if (mode === 'stack') {
         stackPlaneAbove(clone, selectedTexturePlane)
       } else {
         snapPlaneFlushAlong(clone, selectedTexturePlane, mode === 'forward' || mode === 'back' ? mode : (mode === 'left' ? 'left' : 'right'))
@@ -3255,7 +3288,12 @@ function applyToolAtTile(tile, eventLike = null) {
 
         const model = await loadAssetModel(asset.path)
         tuneModelLighting(model, asset.path)
-        model.rotation.copyFrom(src.rotation)
+        if (src.rotationQuaternion) {
+          model.rotationQuaternion = src.rotationQuaternion.clone()
+        } else {
+          model.rotationQuaternion = null
+          model.rotation.copyFrom(src.rotation)
+        }
         model.scale.copyFrom(src.scale)
         model.userData.assetId = asset.id
         model.userData.type = 'asset'
@@ -3263,7 +3301,9 @@ function applyToolAtTile(tile, eventLike = null) {
         addPlacedModel(model)
         model.computeWorldMatrix(true)
 
-        if (mode === 'stack') {
+        if (mode === 'inplace') {
+          model.position.copyFrom(src.position)
+        } else if (mode === 'stack') {
           const srcFootprint = getObjectFootprint(src)
           const cloneFootprint = getObjectFootprint(model)
           model.position.copyFrom(src.position)
@@ -3296,7 +3336,12 @@ function applyToolAtTile(tile, eventLike = null) {
 
       const targetFootprint = getObjectFootprint(selectedPlacedObject)
 
-      model.rotation.copyFrom(selectedPlacedObject.rotation)
+      if (selectedPlacedObject.rotationQuaternion) {
+        model.rotationQuaternion = selectedPlacedObject.rotationQuaternion.clone()
+      } else {
+        model.rotationQuaternion = null
+        model.rotation.copyFrom(selectedPlacedObject.rotation)
+      }
       model.scale.copyFrom(selectedPlacedObject.scale)
       model.userData.assetId = asset.id
       model.userData.type = 'asset'
@@ -3307,7 +3352,9 @@ function applyToolAtTile(tile, eventLike = null) {
 
       const sourceFootprint = getObjectFootprint(model)
 
-      if (mode === 'stack') {
+      if (mode === 'inplace') {
+        model.position.copyFrom(selectedPlacedObject.position)
+      } else if (mode === 'stack') {
         model.position.copyFrom(selectedPlacedObject.position)
         model.position.y += (targetFootprint.height + sourceFootprint.height) * 0.5
       } else {
@@ -3351,20 +3398,25 @@ function applyToolAtTile(tile, eventLike = null) {
         height: selectedTexturePlane.height
       }))
     } else if (selectedPlacedObject) {
+      const _getRotEuler = (o) => {
+        if (o.rotationQuaternion) {
+          const e = o.rotationQuaternion.toEulerAngles()
+          return { x: e.x, y: e.y, z: e.z }
+        }
+        return { x: o.rotation.x, y: o.rotation.y, z: o.rotation.z }
+      }
       transformStart = {
         position: selectedPlacedObject.position.clone(),
-        rotation: {
-          x: selectedPlacedObject.rotation.x,
-          y: selectedPlacedObject.rotation.y,
-          z: selectedPlacedObject.rotation.z
-        },
+        rotation: _getRotEuler(selectedPlacedObject),
+        quaternion: selectedPlacedObject.rotationQuaternion?.clone() || null,
         scale: selectedPlacedObject.scale.clone(),
         groupStarts: selectedPlacedObjects
           .filter((o) => o !== selectedPlacedObject)
           .map((o) => ({
             obj: o,
             position: o.position.clone(),
-            rotation: { x: o.rotation.x, y: o.rotation.y, z: o.rotation.z }
+            rotation: _getRotEuler(o),
+            quaternion: o.rotationQuaternion?.clone() || null
           }))
       }
     }
@@ -3386,17 +3438,27 @@ function applyToolAtTile(tile, eventLike = null) {
 
     if (selectedPlacedObject) {
       selectedPlacedObject.position.copyFrom(transformStart.position)
-      selectedPlacedObject.rotation.set(
-        transformStart.rotation.x,
-        transformStart.rotation.y,
-        transformStart.rotation.z
-      )
+      if (transformStart.quaternion) {
+        selectedPlacedObject.rotationQuaternion = transformStart.quaternion.clone()
+      } else {
+        selectedPlacedObject.rotationQuaternion = null
+        selectedPlacedObject.rotation.set(
+          transformStart.rotation.x,
+          transformStart.rotation.y,
+          transformStart.rotation.z
+        )
+      }
       selectedPlacedObject.scale.copyFrom(transformStart.scale)
 
       if (transformStart.groupStarts?.length) {
-        for (const { obj, position, rotation } of transformStart.groupStarts) {
+        for (const { obj, position, rotation, quaternion } of transformStart.groupStarts) {
           obj.position.copyFrom(position)
-          if (rotation) obj.rotation.set(rotation.x, rotation.y, rotation.z)
+          if (quaternion) {
+            obj.rotationQuaternion = quaternion.clone()
+          } else if (rotation) {
+            obj.rotationQuaternion = null
+            obj.rotation.set(rotation.x, rotation.y, rotation.z)
+          }
         }
       }
 
@@ -4782,17 +4844,17 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
     if (transformMode === 'rotate') {
       e.preventDefault()
 
-      // Translate unified axis convention → Babylon.js rotation axis
-      // X key = tilt sideways (Z rot), Y key = spin (Y rot), Z key = tilt upward (X rot)
-      const threeAxis = (transformAxis === 'height' || transformAxis === 'all') ? 'x'
+      // X key → X rotation, Y key → Y rotation, Z key → Z rotation, default → Y
+      const threeAxis = transformAxis === 'x' ? 'x'
         : transformAxis === 'ground-z' ? 'y'
-        : 'z'
+        : transformAxis === 'height' ? 'z'
+        : 'y'
 
       if (selectedTexturePlane) {
         if (e.shiftKey) {
-          selectedTexturePlane.rotation[threeAxis] += (e.deltaY > 0 ? 1 : -1) * 0.1
+          selectedTexturePlane.rotation[threeAxis] += (e.deltaY > 0 ? 1 : -1) * (Math.PI / 180) // 1° steps
         } else {
-          const step = Math.PI / 12
+          const step = Math.PI / 12 // 15° steps
           selectedTexturePlane.rotation[threeAxis] += e.deltaY > 0 ? step : -step
           selectedTexturePlane.rotation[threeAxis] = snapAngleToQuarterIfClose(selectedTexturePlane.rotation[threeAxis], 0.08)
         }
@@ -4803,28 +4865,39 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
       }
 
       if (selectedPlacedObject) {
-        const delta = e.shiftKey ? (e.deltaY > 0 ? 1 : -1) * 0.1 : (e.deltaY > 0 ? 1 : -1) * (Math.PI / 12)
+        const delta = (e.deltaY > 0 ? 1 : -1) * (e.shiftKey ? Math.PI / 180 : Math.PI / 12) // Shift = 1°, normal = 15°
+        const worldAxis = threeAxis === 'x' ? new Vector3(1, 0, 0)
+          : threeAxis === 'y' ? new Vector3(0, 1, 0)
+          : new Vector3(0, 0, 1)
+        const q = Quaternion.RotationAxis(worldAxis, delta)
 
-        const applyRotation = (obj) => {
-          if (threeAxis === 'y') {
-            // Vertical spin: Euler is fine, no gimbal issue, snap supported
-            obj.rotation.y += delta
-            if (!e.shiftKey) obj.rotation.y = snapAngleToQuarterIfClose(obj.rotation.y, 0.08)
-          } else {
-            // X/Z: rotate around absolute world axis to avoid gimbal lock from GLTF baked rotations
-            const worldAxis = threeAxis === 'x' ? new Vector3(1, 0, 0) : new Vector3(0, 0, 1)
-            { // rotateOnWorldAxis equivalent
-              const q = Quaternion.RotationAxis(worldAxis, delta)
-              if (!obj.rotationQuaternion) obj.rotationQuaternion = Quaternion.FromEulerAngles(obj.rotation.x, obj.rotation.y, obj.rotation.z)
-              obj.rotationQuaternion = q.multiply(obj.rotationQuaternion)
-            }
+        if (selectedPlacedObjects.length > 1) {
+          // Multi-select: rotate all objects around the group center
+          let cx = 0, cy = 0, cz = 0
+          for (const obj of selectedPlacedObjects) {
+            cx += obj.position.x; cy += obj.position.y; cz += obj.position.z
           }
-        }
+          cx /= selectedPlacedObjects.length
+          cy /= selectedPlacedObjects.length
+          cz /= selectedPlacedObjects.length
 
-        applyRotation(selectedPlacedObject)
-        for (const obj of selectedPlacedObjects) {
-          if (obj === selectedPlacedObject) continue
-          applyRotation(obj)
+          for (const obj of selectedPlacedObjects) {
+            // Orbit position around group center
+            const rel = new Vector3(obj.position.x - cx, obj.position.y - cy, obj.position.z - cz)
+            const m = new Matrix()
+            q.toRotationMatrix(m)
+            const rotated = Vector3.TransformCoordinates(rel, m)
+            obj.position.x = cx + rotated.x
+            obj.position.y = cy + rotated.y
+            obj.position.z = cz + rotated.z
+            // Rotate own orientation
+            if (!obj.rotationQuaternion) obj.rotationQuaternion = Quaternion.FromEulerAngles(obj.rotation.x, obj.rotation.y, obj.rotation.z)
+            obj.rotationQuaternion = q.multiply(obj.rotationQuaternion)
+          }
+        } else {
+          // Single object: rotate in place
+          if (!selectedPlacedObject.rotationQuaternion) selectedPlacedObject.rotationQuaternion = Quaternion.FromEulerAngles(selectedPlacedObject.rotation.x, selectedPlacedObject.rotation.y, selectedPlacedObject.rotation.z)
+          selectedPlacedObject.rotationQuaternion = q.multiply(selectedPlacedObject.rotationQuaternion)
         }
 
         updateSelectionHelper()
@@ -5053,7 +5126,7 @@ if (key === 'e') {
       // If nothing is selected, try to pick whatever is under the cursor
       if (!selectedTexturePlane && !selectedPlacedObject) {
         if (texturePlaneGroup) {
-          const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m.isDescendantOf(texturePlaneGroup))
+          const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m.isDescendantOf(texturePlaneGroup) && m.isVisible)
           if (pick.hit && pick.pickedMesh?.metadata?.texturePlane) {
             selectedTexturePlane = pick.pickedMesh.metadata?.texturePlane
             selectedPlacedObject = null
@@ -5067,7 +5140,7 @@ if (key === 'e') {
         }
 
         if (!selectedTexturePlane) {
-          const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m.isDescendantOf(placedGroup))
+          const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m.isDescendantOf(placedGroup) && m.isEnabled())
           if (pick.hit) {
             let obj = pick.pickedMesh
             while (obj.parent && obj.parent !== placedGroup) obj = obj.parent
@@ -5098,8 +5171,16 @@ if (key === 'e') {
         return
       }
 
-      previewRotation += Math.PI / 2
-      if (previewObject) previewObject.rotation.y = previewRotation
+      // Rotate preview: X key→X axis, Y key→Y axis, Z key→Z axis, default→Y
+      const previewAxis = transformAxis === 'x' ? 'x'
+        : transformAxis === 'ground-z' ? 'y'
+        : transformAxis === 'height' ? 'z'
+        : 'y'
+      previewRotation[previewAxis] += Math.PI / 2
+      if (previewObject) {
+        previewObject.rotationQuaternion = null
+        previewObject.rotation.set(previewRotation.x, previewRotation.y, previewRotation.z)
+      }
       return
     }
 
@@ -5131,6 +5212,11 @@ if (key === 'e') {
 
     if (key === 'd' && event.altKey) {
       await duplicateSelected('forward')
+      return
+    }
+
+    if (key === 'd' && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+      await duplicateSelected('inplace')
       return
     }
 

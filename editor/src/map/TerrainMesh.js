@@ -763,8 +763,16 @@ export function updateTerrainLandHeights(map, shadowInf, x1, z1, x2, z2) {
       const h = map.getTileCornerHeights(x, z)
       const landType = map.getBaseGroundType(x, z)
 
+      // Determine how many vertices were allocated for this tile at build time
+      const tileIdx = z * map.width + x
+      const nextOff = (tileIdx + 1 < map.width * map.height) ? _landTileOff[tileIdx + 1] : (_landPosBuf.length / 3)
+      const allocatedVerts = nextOff - off
+
       tmpV.length = 0; tmpC.length = 0; tmpU.length = 0; tmpI.length = 0
       const vertCount = addTileGeometry(tmpV, tmpC, tmpU, tmpI, 0, landType, h, x, z, map, shadowInf)
+
+      // If vertex count changed (e.g. single→split ground), need full rebuild
+      if (vertCount !== allocatedVerts) return false
 
       // Update position buffer (3 components per vertex)
       const posBase = off * 3
@@ -865,8 +873,8 @@ export function buildSingleTexturePlane(plane, textureRegistry, textureCache, sc
 
   texture.wrapU = Texture.WRAP_ADDRESSMODE
   texture.wrapV = Texture.WRAP_ADDRESSMODE
-  texture.uScale = scale
-  texture.vScale = scale
+  texture.uScale = 1 / scale
+  texture.vScale = 1 / scale
 
   const mesh = MeshBuilder.CreatePlane(`texplane_${plane.id}`, {
     width: Math.max(0.01, plane.width || 1),

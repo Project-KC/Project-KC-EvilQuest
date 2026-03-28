@@ -233,6 +233,7 @@ export interface KCTile {
   textureRotationB: number;
   textureScaleB: number;
   waterPainted: boolean;
+  waterSurface: boolean;
 }
 
 export interface TexturePlane {
@@ -296,6 +297,7 @@ export function defaultKCTile(ground: GroundType = 'grass'): KCTile {
     textureRotationB: 0,
     textureScaleB: 1,
     waterPainted: false,
+    waterSurface: false,
   };
 }
 

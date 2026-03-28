@@ -1546,6 +1546,12 @@ export class GameManager {
     if (this.keysDown.has('d') || this.keysDown.has('arrowright')) cam.alpha += camSpeed;
     if (this.keysDown.has('w') || this.keysDown.has('arrowup')) cam.beta = Math.max(0.2, cam.beta - camSpeed);
     if (this.keysDown.has('s') || this.keysDown.has('arrowdown')) cam.beta = Math.min(Math.PI / 2.2, cam.beta + camSpeed);
+    // Escape resets camera rotation to default
+    if (this.keysDown.has('escape')) {
+      cam.alpha = -Math.PI / 4;
+      cam.beta = Math.PI / 3.2;
+      this.keysDown.delete('escape');
+    }
 
     // Update attack animations on all sprites
     if (this.localPlayer) this.localPlayer.updateAnimation(dt);
