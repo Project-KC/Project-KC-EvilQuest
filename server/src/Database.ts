@@ -50,7 +50,7 @@ export class GameDatabase {
 
       CREATE TABLE IF NOT EXISTS player_state (
         account_id INTEGER PRIMARY KEY REFERENCES accounts(id),
-        x REAL DEFAULT 32.5,
+        x REAL DEFAULT 17.5,
         z REAL DEFAULT 32.5,
         map_level TEXT DEFAULT 'kcmap',
         skills TEXT DEFAULT '{}',
@@ -85,8 +85,12 @@ export class GameDatabase {
     const result = this.db.query('INSERT INTO accounts (username, password_hash) VALUES (?, ?)').run(username, passwordHash);
     const accountId = Number(result.lastInsertRowid);
 
-    // Create initial player state
-    this.db.query('INSERT INTO player_state (account_id) VALUES (?)').run(accountId);
+    // Create initial player state with starter tools
+    const starterInventory = JSON.stringify([
+      { itemId: 31, quantity: 1 },
+      { itemId: 33, quantity: 1 }
+    ]);
+    this.db.query('INSERT INTO player_state (account_id, inventory) VALUES (?, ?)').run(accountId, starterInventory);
 
     // Create session
     const token = this.createSession(accountId);

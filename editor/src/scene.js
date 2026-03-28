@@ -335,6 +335,99 @@ function tuneModelLighting(model) {
     return pick.pickedMesh.metadata.npcSpawn
   }
 
+  // --- Item Spawn system ---
+  let itemSpawns = []         // { id, itemId, x, z, quantity }
+  let _itemSpawnNextId = 1
+  let itemDefs = []            // loaded from server
+  const itemSpawnGroup = new TransformNode('itemSpawnGroup', scene)
+
+  async function loadItemDefs() {
+    try {
+      const res = await fetch('/data/items.json')
+      itemDefs = await res.json()
+      const sel = sidebar.querySelector('#itemTypeSelect')
+      if (sel) {
+        sel.innerHTML = itemDefs.map(d => `<option value="${d.id}">${d.name} (${d.id})</option>`).join('')
+      }
+    } catch (e) {
+      console.warn('Failed to load item definitions:', e)
+    }
+  }
+  loadItemDefs()
+
+  function addItemSpawn(itemId, x, z, quantity = 1, id) {
+    const spawn = { id: id || _itemSpawnNextId++, itemId, x, z, quantity }
+    if (id && id >= _itemSpawnNextId) _itemSpawnNextId = id + 1
+    itemSpawns.push(spawn)
+    return spawn
+  }
+
+  function removeItemSpawn(spawn) {
+    const idx = itemSpawns.indexOf(spawn)
+    if (idx >= 0) itemSpawns.splice(idx, 1)
+  }
+
+  function serializeItemSpawns() {
+    return itemSpawns.map(s => ({ id: s.id, itemId: s.itemId, x: s.x, z: s.z, quantity: s.quantity }))
+  }
+
+  function loadItemSpawns(data) {
+    itemSpawns = []
+    _itemSpawnNextId = 1
+    for (const s of data || []) {
+      addItemSpawn(s.itemId, s.x, s.z, s.quantity ?? 1, s.id)
+    }
+    rebuildItemSpawnMeshes()
+    refreshItemSpawnList()
+  }
+
+  function rebuildItemSpawnMeshes() {
+    for (const child of [...itemSpawnGroup.getChildren()]) child.dispose()
+    for (const spawn of itemSpawns) {
+      const def = itemDefs.find(d => d.id === spawn.itemId)
+      const name = def?.name || `Item ${spawn.itemId}`
+      const marker = MeshBuilder.CreateBox(`itemSpawn_${spawn.id}`, { width: 0.4, height: 0.3, depth: 0.4 }, scene)
+      const mat = new StandardMaterial(`itemSpawnMat_${spawn.id}`, scene)
+      mat.diffuseColor = new Color3(0.9, 0.75, 0.2)
+      mat.emissiveColor = new Color3(0.4, 0.35, 0.1)
+      mat.specularColor = new Color3(0, 0, 0)
+      marker.material = mat
+      const y = map.getAverageTileHeight(Math.floor(spawn.x), Math.floor(spawn.z))
+      marker.position = new Vector3(spawn.x, y + 0.15, spawn.z)
+      marker.metadata = { itemSpawn: spawn }
+      marker.parent = itemSpawnGroup
+    }
+    itemSpawnGroup.setEnabled(state.tool === ToolMode.ITEM_SPAWN)
+  }
+
+  function refreshItemSpawnList() {
+    const listEl = sidebar.querySelector('#itemSpawnList')
+    const countEl = sidebar.querySelector('#itemSpawnCount')
+    if (!listEl) return
+    if (countEl) countEl.textContent = itemSpawns.length
+    listEl.innerHTML = ''
+    for (const spawn of itemSpawns) {
+      const def = itemDefs.find(d => d.id === spawn.itemId)
+      const name = def?.name || `Item ${spawn.itemId}`
+      const row = document.createElement('div')
+      row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:3px 5px;font-size:11px;cursor:pointer;border-radius:3px;margin-bottom:2px;background:#222;'
+      row.innerHTML = `<span>${name} <span style="opacity:0.5;">(${spawn.x.toFixed(1)}, ${spawn.z.toFixed(1)})</span></span>`
+      row.addEventListener('click', () => {
+        camera.target = new Vector3(spawn.x, map.getAverageTileHeight(Math.floor(spawn.x), Math.floor(spawn.z)), spawn.z)
+      })
+      listEl.appendChild(row)
+    }
+  }
+
+  function pickItemSpawn(event) {
+    updateMouse(event)
+    const pick = scene.pick(scene.pointerX, scene.pointerY, (mesh) => {
+      return mesh.isDescendantOf(itemSpawnGroup) && mesh.metadata?.itemSpawn
+    })
+    if (!pick.hit) return null
+    return pick.pickedMesh.metadata.itemSpawn
+  }
+
   // --- Collision / Wall system ---
   // Stores wall edges, blocked tiles, floors, stairs per floor level
   const collisionData = {
@@ -664,6 +757,7 @@ let brushRadius = 3.2
       <button id="toolTexturePlane" class="tool-btn" title="Texture Plane (5)">T.Plane</button>
       <button id="toolNpcSpawn" class="tool-btn" title="NPC Spawn (6)">NPCs</button>
       <button id="toolCollision" class="tool-btn" title="Collision (7)">Collision</button>
+      <button id="toolItemSpawn" class="tool-btn" title="Item Spawn (8)">Items</button>
       <button id="layersToggleBtn" class="tool-btn" title="Toggle Layers panel">Layers</button>
       <button id="heightCullBtn" class="tool-btn" title="Hide objects above camera height (H)">Height Cull</button>
     </div>
@@ -838,6 +932,14 @@ let brushRadius = 3.2
       <div id="npcSpawnList" style="max-height:200px;overflow-y:auto;margin-top:4px;"></div>
     </div>
 
+    <div class="ctx-panel" id="ctx-item-spawn" style="display:none">
+      <div style="font-size:11px;color:rgba(255,255,255,0.45);margin-bottom:4px;">Item Type</div>
+      <select id="itemTypeSelect" style="width:100%;background:#2a2a2a;color:#fff;border:1px solid #555;border-radius:4px;padding:5px 6px;font-size:12px;"></select>
+      <div class="hint" style="margin-top:6px;">Click to place · Shift+Click to remove</div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.45);margin-top:10px;border-top:1px solid #444;padding-top:8px;">Item Spawns <span id="itemSpawnCount">0</span></div>
+      <div id="itemSpawnList" style="max-height:200px;overflow-y:auto;margin-top:4px;"></div>
+    </div>
+
     <div class="ctx-panel" id="ctx-collision" style="display:none">
       <div style="font-size:11px;color:rgba(255,255,255,0.45);margin-bottom:4px;">Mode</div>
       <div style="display:flex;gap:3px;margin-bottom:8px;">
@@ -929,7 +1031,8 @@ let brushRadius = 3.2
     [ToolMode.SELECT]: sidebar.querySelector('#toolSelect'),
     [ToolMode.TEXTURE_PLANE]: sidebar.querySelector('#toolTexturePlane'),
     [ToolMode.NPC_SPAWN]: sidebar.querySelector('#toolNpcSpawn'),
-    [ToolMode.COLLISION]: sidebar.querySelector('#toolCollision')
+    [ToolMode.COLLISION]: sidebar.querySelector('#toolCollision'),
+    [ToolMode.ITEM_SPAWN]: sidebar.querySelector('#toolItemSpawn')
   }
 
   toolButtons[ToolMode.TERRAIN]?.addEventListener('click', () => setTool(ToolMode.TERRAIN))
@@ -939,6 +1042,7 @@ let brushRadius = 3.2
   toolButtons[ToolMode.TEXTURE_PLANE]?.addEventListener('click', () => setTool(ToolMode.TEXTURE_PLANE))
   toolButtons[ToolMode.NPC_SPAWN]?.addEventListener('click', () => setTool(ToolMode.NPC_SPAWN))
   toolButtons[ToolMode.COLLISION]?.addEventListener('click', () => setTool(ToolMode.COLLISION))
+  toolButtons[ToolMode.ITEM_SPAWN]?.addEventListener('click', () => setTool(ToolMode.ITEM_SPAWN))
 
   // --- NPC Spawn: fetch defs + wire sidebar controls (must be after sidebar is created) ---
   fetch('/data/npcs.json')
@@ -1505,8 +1609,9 @@ let brushRadius = 3.2
       [ToolMode.TEXTURE_PLANE]: 'ctx-texture',
       [ToolMode.NPC_SPAWN]: 'ctx-npc-spawn',
       [ToolMode.COLLISION]: 'ctx-collision',
+      [ToolMode.ITEM_SPAWN]: 'ctx-item-spawn',
     }
-    for (const id of ['ctx-terrain', 'ctx-paint', 'ctx-place', 'ctx-select', 'ctx-texture', 'ctx-npc-spawn', 'ctx-collision']) {
+    for (const id of ['ctx-terrain', 'ctx-paint', 'ctx-place', 'ctx-select', 'ctx-texture', 'ctx-npc-spawn', 'ctx-item-spawn', 'ctx-collision']) {
       const el = sidebar.querySelector(`#${id}`)
       if (el) el.style.display = 'none'
     }
@@ -1671,6 +1776,7 @@ let brushRadius = 3.2
     state.tool = mode
     if (hoverEdgeHelper) { hoverEdgeHelper.dispose(); hoverEdgeHelper = null }
     npcSpawnGroup.setEnabled(mode === ToolMode.NPC_SPAWN)
+    itemSpawnGroup.setEnabled(mode === ToolMode.ITEM_SPAWN)
     collisionGroup.setEnabled(mode === ToolMode.COLLISION)
     if (mode === ToolMode.COLLISION) rebuildCollisionMeshes()
     if (mode === ToolMode.NPC_SPAWN) {
@@ -1850,6 +1956,7 @@ let brushRadius = 3.2
       layers: JSON.parse(JSON.stringify(layers)),
       activeLayerId,
       npcSpawns: serializeNpcSpawns(),
+      itemSpawns: serializeItemSpawns(),
       collisionData: serializeCollisionData()
     }
   }
@@ -1907,6 +2014,7 @@ let brushRadius = 3.2
 
     await rebuildPlacedObjectsFromData(data.placedObjects || [])
     loadNpcSpawns(data.npcSpawns)
+    loadItemSpawns(data.itemSpawns)
     loadCollisionData(data.collisionData)
 
     mapWidthInput.value = map.width
@@ -1988,6 +2096,7 @@ let brushRadius = 3.2
       map: JSON.parse(JSON.stringify(map.toJSON())),
       placedObjects: serializePlacedObjects(),
       npcSpawns: JSON.parse(JSON.stringify(serializeNpcSpawns())),
+      itemSpawns: JSON.parse(JSON.stringify(serializeItemSpawns())),
       collisionData: serializeCollisionData()
     }
   }
@@ -2007,6 +2116,7 @@ let brushRadius = 3.2
 
     await rebuildPlacedObjectsFromData(snapshot.placedObjects || [])
     loadNpcSpawns(snapshot.npcSpawns)
+    loadItemSpawns(snapshot.itemSpawns)
     loadCollisionData(snapshot.collisionData)
 
     mapWidthInput.value = map.width
@@ -2292,6 +2402,93 @@ let brushRadius = 3.2
     if (textureOverlayGroup) textureOverlayGroup.dispose()
     if (newOverlays) newOverlays.setEnabled(true)
     textureOverlayGroup = newOverlays
+  }
+
+  /** Fast single-tile texture overlay update — avoids full map rebuild */
+  function updateTileTextureOverlay(tx, tz) {
+    if (!textureOverlayGroup) {
+      textureOverlayGroup = new TransformNode('texture-overlays', scene)
+    }
+    // Remove existing overlay meshes for this tile
+    const prefix = `texoverlay_${tx}_${tz}`
+    for (const child of [...textureOverlayGroup.getChildMeshes()]) {
+      if (child.name === prefix) child.dispose()
+    }
+
+    const tile = map.getTile(tx, tz)
+    if (!tile || (!tile.textureId && !tile.textureIdB)) return
+
+    const h = map.getTileCornerHeights(tx, tz)
+    const overlayOffset = 0.008
+    const positions = [
+      tx, h.tl + overlayOffset, tz,
+      tx + 1, h.tr + overlayOffset, tz,
+      tx, h.bl + overlayOffset, tz + 1,
+      tx + 1, h.br + overlayOffset, tz + 1
+    ]
+    const fwd = tile.split === 'forward'
+    const firstIndices  = fwd ? [0, 2, 1]       : [0, 2, 3]
+    const secondIndices = fwd ? [2, 3, 1]       : [0, 3, 1]
+    const fullIndices   = fwd ? [0, 2, 1, 2, 3, 1] : [0, 2, 3, 0, 3, 1]
+
+    const makeUVs = (rotation, scale, worldUV) => {
+      if (worldUV) {
+        const s = Math.max(0.1, scale)
+        return [tx/s, tz/s, (tx+1)/s, tz/s, tx/s, (tz+1)/s, (tx+1)/s, (tz+1)/s]
+      }
+      const base = [[0,0],[1,0],[0,1],[1,1]]
+      const s = Math.max(0.1, scale)
+      const r = rotation % 4
+      const uvs = []
+      for (const [u, v] of base) {
+        const su = (u - 0.5) / s + 0.5, sv = (v - 0.5) / s + 0.5
+        let ru = su, rv = sv
+        if (r === 1) { ru = -(sv - 0.5) + 0.5; rv = (su - 0.5) + 0.5 }
+        else if (r === 2) { ru = -(su - 0.5) + 0.5; rv = -(sv - 0.5) + 0.5 }
+        else if (r === 3) { ru = (sv - 0.5) + 0.5; rv = -(su - 0.5) + 0.5 }
+        uvs.push(ru, rv)
+      }
+      return uvs
+    }
+
+    const addOverlay = (textureId, rotation, scale, worldUV, idxs) => {
+      const textureInfo = textureRegistry.find((t) => t.id === textureId)
+      if (!textureInfo) return
+      const texture = textureCache.get(textureInfo.id)
+      if (!texture) return
+      texture.wrapU = Texture.WRAP_ADDRESSMODE
+      texture.wrapV = Texture.WRAP_ADDRESSMODE
+
+      const mesh = new Mesh(prefix, scene)
+      const vd = new VertexData()
+      vd.positions = positions
+      vd.uvs = makeUVs(rotation, scale, worldUV)
+      vd.indices = idxs
+      const normals = []
+      VertexData.ComputeNormals(positions, idxs, normals)
+      vd.normals = normals
+      vd.applyToMesh(mesh)
+
+      const mat = new StandardMaterial(`texoverlay_mat_${tx}_${tz}`, scene)
+      mat.diffuseTexture = texture
+      mat.diffuseColor = new Color3(0.82, 0.82, 0.82)
+      mat.emissiveTexture = texture
+      mat.emissiveColor = new Color3(0.18, 0.18, 0.18)
+      mat.specularColor = new Color3(0, 0, 0)
+      mat.useAlphaFromDiffuseTexture = true
+      mat.transparencyMode = 1
+      mat.backFaceCulling = false
+      mat.zOffset = -2
+      mesh.material = mat
+      mesh.parent = textureOverlayGroup
+    }
+
+    if (tile.textureHalfMode) {
+      if (tile.textureId) addOverlay(tile.textureId, tile.textureRotation, tile.textureScale, tile.textureWorldUV, firstIndices)
+      if (tile.textureIdB) addOverlay(tile.textureIdB, tile.textureRotationB, tile.textureScaleB, false, secondIndices)
+    } else if (tile.textureId) {
+      addOverlay(tile.textureId, tile.textureRotation, tile.textureScale, tile.textureWorldUV, fullIndices)
+    }
   }
 
   function updateTexturePlaneMeshTransform(plane) {
@@ -2983,7 +3180,7 @@ function applyToolAtTile(tile, eventLike = null) {
         if (isErase) map.clearTextureTile(tile.x, tile.z)
         else map.paintTextureTile(tile.x, tile.z, paintTabTextureId, textureRotation, textureScale, textureWorldUV)
       }
-      rebuildTextureOverlaysOnly()
+      updateTileTextureOverlay(tile.x, tile.z)
       return
     }
 
@@ -3395,8 +3592,18 @@ function applyToolAtTile(tile, eventLike = null) {
         rotation: selectedTexturePlane.rotation,
         scale: selectedTexturePlane.scale,
         width: selectedTexturePlane.width,
-        height: selectedTexturePlane.height
+        height: selectedTexturePlane.height,
+        groupStarts: selectedTexturePlanes
+          .filter((p) => p !== selectedTexturePlane)
+          .map((p) => ({ plane: p, position: { ...p.position }, rotation: { ...p.rotation } }))
       }))
+      // Re-attach plane references (JSON.parse loses them)
+      if (transformStart.groupStarts) {
+        const others = selectedTexturePlanes.filter((p) => p !== selectedTexturePlane)
+        for (let i = 0; i < transformStart.groupStarts.length; i++) {
+          transformStart.groupStarts[i].plane = others[i]
+        }
+      }
     } else if (selectedPlacedObject) {
       const _getRotEuler = (o) => {
         if (o.rotationQuaternion) {
@@ -3434,6 +3641,13 @@ function applyToolAtTile(tile, eventLike = null) {
       selectedTexturePlane.width = transformStart.width
       selectedTexturePlane.height = transformStart.height
       updateTexturePlaneMeshTransform(selectedTexturePlane)
+      if (transformStart.groupStarts?.length) {
+        for (const { plane, position, rotation } of transformStart.groupStarts) {
+          plane.position = { ...position }
+          plane.rotation = { ...rotation }
+          updateTexturePlaneMeshTransform(plane)
+        }
+      }
     }
 
     if (selectedPlacedObject) {
@@ -4009,6 +4223,7 @@ function applyToolAtTile(tile, eventLike = null) {
         layers: mapData.layers || [{ id: 'layer_0', name: 'Layer 1', visible: true }],
         activeLayerId: mapData.activeLayerId || 'layer_0',
         npcSpawns: (spawns.npcs || []).map((s, i) => ({ id: i + 1, npcId: s.npcId, x: s.x, z: s.z, wanderRange: s.wanderRange ?? 3 })),
+        itemSpawns: (spawns.items || []).map((s, i) => ({ id: i + 1, itemId: s.itemId, x: s.x, z: s.z, quantity: s.quantity ?? 1 })),
         collisionData: walls
       }
       await loadSaveData(saveData)
@@ -4037,10 +4252,11 @@ function applyToolAtTile(tile, eventLike = null) {
       transitions: []
     }
 
-    // Build spawns from editor NPC spawns
+    // Build spawns from editor NPC + item spawns
     const spawns = {
       npcs: npcSpawns.map(s => ({ npcId: s.npcId, x: s.x, z: s.z, wanderRange: s.wanderRange })),
-      objects: []
+      objects: [],
+      items: itemSpawns.map(s => ({ itemId: s.itemId, x: s.x, z: s.z, quantity: s.quantity }))
     }
 
     // Build KCMapFile
@@ -4349,43 +4565,74 @@ function applyToolAtTile(tile, eventLike = null) {
       }
 
       updateTexturePlaneMeshTransform(selectedTexturePlane)
+
+      // Move group members by the same delta
+      if (transformStart?.groupStarts?.length) {
+        const dx = selectedTexturePlane.position.x - transformStart.position.x
+        const dy = selectedTexturePlane.position.y - transformStart.position.y
+        const dz = selectedTexturePlane.position.z - transformStart.position.z
+        for (const { plane, position } of transformStart.groupStarts) {
+          plane.position.x = position.x + dx
+          plane.position.y = position.y + dy
+          plane.position.z = position.z + dz
+          updateTexturePlaneMeshTransform(plane)
+        }
+      }
+
       updateSelectionHelper()
       return
     }
 
     if (transformMode === 'move' && selectedPlacedObject) {
-      const movePoint = pickHorizontalPlane(event, selectedPlacedObject.position.y)
-      if (!movePoint) return
-
-      const _movingAsset = assetRegistry.find((a) => a.id === selectedPlacedObject.userData.assetId)
-      const movingIsWallModular = isModularAsset(selectedPlacedObject.userData.assetId)
-        && _movingAsset?.name?.toLowerCase().includes('wall')
-
-      let snappedX, snappedZ
-      if (movingIsWallModular && !event.altKey) {
-        const snap = findModularEdgeSnap(selectedPlacedObject, movePoint.x, movePoint.z)
-        snappedX = snap.x
-        snappedZ = snap.z
-      } else {
-        snappedX = event.shiftKey ? snapValue(movePoint.x, 0.5) : movePoint.x
-        snappedZ = event.shiftKey ? snapValue(movePoint.z, 0.5) : movePoint.z
-      }
-
-      if (transformAxis === 'x') {
-        selectedPlacedObject.position.x = snappedX
-      } else if (transformAxis === 'ground-z') {
-        selectedPlacedObject.position.z = snappedZ
-      } else if (transformAxis === 'height') {
+      if (transformAxis === 'height') {
+        // Vertical: mouse Y delta
         if (!movePlaneStart) {
-          movePlaneStart = {
-            mouseY: event.clientY,
-            value: selectedPlacedObject.position.y
-          }
+          movePlaneStart = { mouseY: event.clientY, value: selectedPlacedObject.position.y }
         }
-
         const deltaY = (movePlaneStart.mouseY - event.clientY) * 0.02
         selectedPlacedObject.position.y = movePlaneStart.value + deltaY
+      } else if (transformAxis === 'x' || transformAxis === 'ground-z') {
+        // Single axis: delta-based so movement is predictable
+        if (!movePlaneStart) {
+          const initPick = pickHorizontalPlane(event, selectedPlacedObject.position.y)
+          movePlaneStart = {
+            pickX: initPick?.x ?? selectedPlacedObject.position.x,
+            pickZ: initPick?.z ?? selectedPlacedObject.position.z
+          }
+        }
+        const movePoint = pickHorizontalPlane(event, selectedPlacedObject.position.y)
+        if (!movePoint) return
+        const dx = movePoint.x - movePlaneStart.pickX
+        const dz = movePoint.z - movePlaneStart.pickZ
+        if (transformAxis === 'x') {
+          selectedPlacedObject.position.x = event.shiftKey
+            ? snapValue(transformStart.position.x + dx, 0.5)
+            : transformStart.position.x + dx
+        } else {
+          selectedPlacedObject.position.z = event.shiftKey
+            ? snapValue(transformStart.position.z + dz, 0.5)
+            : transformStart.position.z + dz
+        }
       } else {
+        // Unconstrained: object follows cursor on terrain
+        const movePoint = pickHorizontalPlane(event, selectedPlacedObject.position.y)
+        if (!movePoint) return
+
+        const _movingAsset = assetRegistry.find((a) => a.id === selectedPlacedObject.userData.assetId)
+        const movingIsWallModular = isModularAsset(selectedPlacedObject.userData.assetId)
+          && _movingAsset?.name?.toLowerCase().includes('wall')
+
+        let newX, newZ
+        if (movingIsWallModular && !event.altKey) {
+          const snap = findModularEdgeSnap(selectedPlacedObject, movePoint.x, movePoint.z)
+          newX = snap.x; newZ = snap.z
+        } else if (event.shiftKey) {
+          newX = snapValue(movePoint.x, 0.5)
+          newZ = snapValue(movePoint.z, 0.5)
+        } else {
+          newX = movePoint.x; newZ = movePoint.z
+        }
+
         let targetY
         if (transformLift !== 0) {
           targetY = selectedPlacedObject.position.y
@@ -4395,7 +4642,7 @@ function applyToolAtTile(tile, eventLike = null) {
         } else {
           targetY = terrainPoint?.y ?? selectedPlacedObject.position.y
         }
-        selectedPlacedObject.position.set(snappedX, targetY, snappedZ)
+        selectedPlacedObject.position.set(newX, targetY, newZ)
       }
 
       // Move group members by the same delta as the primary
@@ -4588,6 +4835,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
       )
 
       plane.uvRepeat = textureScale
+      plane.texRotation = textureRotation
       selectedTexturePlane = plane
       selectedTexturePlanes = [plane]
       selectedPlacedObject = null
@@ -4639,6 +4887,26 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
       rebuildNpcSpawnMeshes()
       refreshNpcSpawnList()
       updateToolUI()
+      return
+    }
+
+    if (state.tool === ToolMode.ITEM_SPAWN) {
+      if (event.shiftKey) {
+        const picked = pickItemSpawn(event)
+        if (picked) {
+          pushUndoState()
+          removeItemSpawn(picked)
+          rebuildItemSpawnMeshes()
+          refreshItemSpawnList()
+        }
+        return
+      }
+      const itemId = parseInt(sidebar.querySelector('#itemTypeSelect')?.value)
+      if (!itemId) return
+      pushUndoState()
+      addItemSpawn(itemId, tile.x + 0.5, tile.z + 0.5)
+      rebuildItemSpawnMeshes()
+      refreshItemSpawnList()
       return
     }
 
@@ -4729,6 +4997,8 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
           if (!event.shiftKey) {
             selectedPlacedObjects = []
             selectedPlacedObject = null
+            selectedTexturePlanes = []
+            selectedTexturePlane = null
           }
 
           for (const obj of placedGroup.getChildren()) {
@@ -4738,9 +5008,20 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
             }
           }
 
+          // Also select texture planes within the drag box
+          if (texturePlaneGroup) {
+            for (const mesh of texturePlaneGroup.getChildMeshes()) {
+              const plane = mesh.metadata?.texturePlane
+              if (!plane) continue
+              const s = worldToScreen(new Vector3(plane.position.x, plane.position.y, plane.position.z))
+              if (s.x >= left && s.x <= right && s.y >= top && s.y <= bottom) {
+                if (!selectedTexturePlanes.includes(plane)) selectedTexturePlanes.push(plane)
+              }
+            }
+          }
+
           selectedPlacedObject = selectedPlacedObjects[selectedPlacedObjects.length - 1] ?? null
-          selectedTexturePlane = null
-      selectedTexturePlanes = []
+          selectedTexturePlane = selectedTexturePlanes[selectedTexturePlanes.length - 1] ?? null
           updateSelectionHelper()
           updateToolUI()
         }
@@ -5045,6 +5326,17 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
       if (key === 'q' || key === 'e') {
         const delta = key === 'q' ? 0.1 : -0.1
         transformLift += delta
+        if (selectedTexturePlane) {
+          selectedTexturePlane.position.y += delta
+          updateTexturePlaneMeshTransform(selectedTexturePlane)
+          if (transformStart?.groupStarts?.length) {
+            for (const { plane } of transformStart.groupStarts) {
+              plane.position.y += delta
+              updateTexturePlaneMeshTransform(plane)
+            }
+          }
+          updateSelectionHelper()
+        }
         if (selectedPlacedObject) {
           selectedPlacedObject.position.y += delta
           if (transformStart?.groupStarts?.length) {
@@ -5093,7 +5385,8 @@ if (key === 'e') {
     if (key === 'f') {
       pushUndoState()
       map.flipTileSplit(x, z)
-      rebuildTextureOverlaysOnly()
+      updateTileTextureOverlay(x, z)
+      markTerrainDirty({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true, heightsOnly: true, region: { x1: x, z1: z, x2: x, z2: z } })
       return
     }
 
@@ -5104,6 +5397,7 @@ if (key === 'e') {
     if (key === '5') return setTool(ToolMode.TEXTURE_PLANE)
     if (key === '6') return setTool(ToolMode.NPC_SPAWN)
     if (key === '7') return setTool(ToolMode.COLLISION)
+    if (key === '8') return setTool(ToolMode.ITEM_SPAWN)
 
     if (key === 'v') {
       texturePlaneVertical = !texturePlaneVertical
@@ -5117,6 +5411,9 @@ if (key === 'e') {
       if (key === 'x') transformAxis = 'x'
       else if (key === 'y') transformAxis = 'ground-z'
       else if (key === 'z') transformAxis = 'height'
+
+      // Reset move start so delta recomputes for new axis constraint
+      if (transformMode === 'move') movePlaneStart = null
 
       updateToolUI()
       return

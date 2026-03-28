@@ -315,7 +315,8 @@ export class MapData {
         ? { x: 0, y: 0, z: 0 }
         : { x: -Math.PI / 2, y: 0, z: 0 },
       scale: { x: 1, y: 1, z: 1 },
-      uvRepeat: 1
+      uvRepeat: 1,
+      texRotation: 0
     }
 
     this.texturePlanes.push(plane)

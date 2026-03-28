@@ -24,6 +24,7 @@ export class Player extends Entity {
   stance: MeleeStance = 'accurate';
   moveQueue: { x: number; z: number }[] = [];
   moveSpeed: number = 1;
+  pendingPickup: number = -1;
 
   // Chunk tracking
   currentChunkX: number = -1;

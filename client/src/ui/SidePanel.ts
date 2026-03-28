@@ -1,31 +1,9 @@
 import {
   INVENTORY_SIZE, ClientOpcode, encodePacket,
   ALL_SKILLS, SKILL_NAMES, SKILL_COLORS, xpForLevel,
-  type SkillId, type MeleeStance,
+  type SkillId, type MeleeStance, type ItemDef,
 } from '@projectrs/shared';
 import type { NetworkManager } from '../managers/NetworkManager';
-
-// Item definitions (client-side mirror)
-const ITEM_NAMES: Record<number, string> = {
-  1: 'Bones', 2: 'Copper Dagger', 3: 'Copper Sword', 4: 'Copper Shield',
-  5: 'Iron Sword', 6: 'Iron Battleaxe', 7: 'Leather Body', 8: 'Leather Legs',
-  9: 'Copper Helm', 10: 'Coins', 11: 'Raw Chicken', 12: 'Cooked Chicken',
-  13: 'Bread', 14: 'Raw Rat Meat', 15: 'Cooked Meat', 16: 'Iron Shield',
-  17: 'Chainmail', 18: 'Iron Helm', 19: 'Feather', 20: 'Big Bones',
-  21: 'Iron Legs', 22: 'Amulet of Power',
-};
-
-const ITEM_COLORS: Record<number, string> = {
-  1: '#ccc', 2: '#b87333', 3: '#b87333', 4: '#b87333',
-  5: '#888', 6: '#888', 7: '#8b5e3c', 8: '#8b5e3c',
-  9: '#b87333', 10: '#fd0', 11: '#f88', 12: '#da5',
-  13: '#da5', 14: '#c44', 15: '#a52', 16: '#888',
-  17: '#888', 18: '#888', 19: '#fff', 20: '#ddd',
-  21: '#888', 22: '#a4e',
-};
-
-const EQUIPPABLE_IDS = new Set([2, 3, 4, 5, 6, 7, 8, 9, 16, 17, 18, 21, 22]);
-const EDIBLE_IDS = new Set([12, 13, 15]);
 
 const EQUIP_SLOT_NAMES = ['Weapon', 'Shield', 'Head', 'Body', 'Legs', 'Neck', 'Ring', 'Hands', 'Feet', 'Cape'];
 
@@ -57,6 +35,9 @@ export class SidePanel {
   // Stance
   private currentStance: MeleeStance = 'accurate';
   private stanceButtons: HTMLDivElement[] = [];
+
+  // Item definitions
+  private itemDefs: Map<number, ItemDef> = new Map();
 
   // Tab content areas
   private tabContents: Map<string, HTMLDivElement> = new Map();
@@ -364,6 +345,11 @@ export class SidePanel {
 
   // === Inventory methods ===
 
+  setItemDefs(defs: Map<number, ItemDef>): void {
+    this.itemDefs = defs;
+    for (let i = 0; i < this.invSlots.length; i++) this.renderInvSlot(i);
+  }
+
   updateInvSlot(index: number, itemId: number, quantity: number): void {
     if (index < 0 || index >= INVENTORY_SIZE) return;
     this.invSlots[index] = itemId === 0 ? null : { itemId, quantity };
@@ -380,12 +366,17 @@ export class SidePanel {
       return;
     }
 
-    const name = ITEM_NAMES[slot.itemId] || `Item ${slot.itemId}`;
-    const color = ITEM_COLORS[slot.itemId] || '#aaa';
+    const def = this.itemDefs.get(slot.itemId);
+    const name = def?.name || `Item ${slot.itemId}`;
+    const sprite = (def as any)?.sprite;
+
+    const iconHtml = sprite
+      ? `<img src="/sprites/items/${sprite}" style="width:28px;height:28px;image-rendering:pixelated;object-fit:contain;" />`
+      : `<div style="width:24px;height:24px;background:#aaa;border-radius:3px;"></div>`;
 
     el.innerHTML = `
-      <div style="width: 24px; height: 24px; background: ${color}; border-radius: 3px; margin-bottom: 2px;"></div>
-      <div style="font-size: 9px; color: #ccc; text-align: center; line-height: 1;">${name.substring(0, 8)}</div>
+      ${iconHtml}
+      <div style="font-size: 9px; color: #ccc; text-align: center; line-height: 1;">${name.length > 10 ? name.substring(0, 9) + '..' : name}</div>
       ${slot.quantity > 1 ? `<div style="position: absolute; top: 1px; left: 3px; font-size: 9px; color: #fd0;">${slot.quantity}</div>` : ''}
     `;
     el.style.borderColor = '#5a4a35';
@@ -394,9 +385,8 @@ export class SidePanel {
   private onInvSlotClick(index: number): void {
     const slot = this.invSlots[index];
     if (!slot) return;
-
-    // Left-click: eat food
-    if (EDIBLE_IDS.has(slot.itemId)) {
+    const def = this.itemDefs.get(slot.itemId);
+    if (def?.healAmount) {
       this.network.sendRaw(encodePacket(ClientOpcode.PLAYER_EAT_ITEM, index));
     }
   }
@@ -405,7 +395,8 @@ export class SidePanel {
     const slot = this.invSlots[index];
     if (!slot) return;
 
-    const name = ITEM_NAMES[slot.itemId] || 'Item';
+    const def = this.itemDefs.get(slot.itemId);
+    const name = def?.name || 'Item';
     const menu = document.createElement('div');
     menu.style.cssText = `
       position: fixed; left: ${event.clientX}px; top: ${event.clientY}px;
@@ -416,14 +407,14 @@ export class SidePanel {
 
     const options: { label: string; action: () => void }[] = [];
 
-    if (EQUIPPABLE_IDS.has(slot.itemId)) {
+    if (def?.equippable) {
       options.push({
         label: `Equip ${name}`,
         action: () => this.network.sendRaw(encodePacket(ClientOpcode.PLAYER_EQUIP_ITEM, index)),
       });
     }
 
-    if (EDIBLE_IDS.has(slot.itemId)) {
+    if (def?.healAmount) {
       options.push({
         label: `Eat ${name}`,
         action: () => this.network.sendRaw(encodePacket(ClientOpcode.PLAYER_EAT_ITEM, index)),
@@ -550,10 +541,10 @@ export class SidePanel {
 
     const itemId = this.equipment.get(slotIndex);
     if (itemId) {
-      const name = ITEM_NAMES[itemId] || `Item ${itemId}`;
-      const color = ITEM_COLORS[itemId] || '#aaa';
+      const def = this.itemDefs.get(itemId);
+      const name = def?.name || `Item ${itemId}`;
       itemEl.textContent = name;
-      itemEl.style.color = color;
+      itemEl.style.color = '#cda';
     } else {
       itemEl.textContent = '—';
       itemEl.style.color = '#555';

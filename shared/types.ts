@@ -50,6 +50,12 @@ export interface ItemDef {
   magicDefence?: number;
   // Food
   healAmount?: number;
+  // Tool properties (axes, pickaxes)
+  toolType?: 'axe' | 'pickaxe';
+  toolLevel?: number;
+  toolBonus?: number;
+  // Visual
+  sprite?: string;
   value: number;
 }
 
@@ -247,6 +253,7 @@ export interface TexturePlane {
   rotation: { x: number; y: number; z: number };
   scale: { x: number; y: number; z: number };
   uvRepeat: number;
+  texRotation: number;
 }
 
 export interface PlacedObject {

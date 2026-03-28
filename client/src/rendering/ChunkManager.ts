@@ -146,6 +146,7 @@ export class ChunkManager {
   private activeAnimationGroups: AnimationGroup[] = [];
   private textureCache: Map<string, Texture> = new Map();
   private textureRegistry: Map<string, { path: string }> = new Map();
+  private overlayMatCache: Map<string, StandardMaterial> = new Map();
 
   constructor(scene: Scene) {
     this.scene = scene;
@@ -924,12 +925,16 @@ export class ChunkManager {
           vd.normals = normals;
           vd.applyToMesh(mesh);
 
-          const mat = new StandardMaterial(`texoverlay_mat_${x}_${z}`, this.scene);
-          mat.diffuseTexture = tex;
-          mat.diffuseColor = new Color3(0.82, 0.82, 0.82);
-          mat.specularColor = new Color3(0, 0, 0);
-          mat.useAlphaFromDiffuseTexture = true;
-          mat.backFaceCulling = false;
+          let mat = this.overlayMatCache.get(textureId);
+          if (!mat) {
+            mat = new StandardMaterial(`texoverlay_mat_${textureId}`, this.scene);
+            mat.diffuseTexture = tex;
+            mat.diffuseColor = new Color3(0.82, 0.82, 0.82);
+            mat.specularColor = new Color3(0, 0, 0);
+            mat.useAlphaFromDiffuseTexture = true;
+            mat.backFaceCulling = false;
+            this.overlayMatCache.set(textureId, mat);
+          }
           mesh.material = mat;
           mesh.isPickable = false;
           this.texturePlaneMeshes.push(mesh); // reuse disposal list
@@ -1478,6 +1483,39 @@ export class ChunkManager {
     return !layer.floors.has(idx) && !layer.stairs.has(idx);
   }
 
+  getPlacedObjectCount(): number { return this.placedObjectNodes.length; }
+
+  /** Check if a node is a root placed object node */
+  isPlacedObjectNode(node: TransformNode): boolean {
+    return this.placedObjectNodes.includes(node);
+  }
+
+  /** Check if any placed GLB object exists near a world position */
+  hasPlacedObjectNear(x: number, z: number, radius: number): boolean {
+    return this.findPlacedObjectNear(x, z, radius) !== null;
+  }
+
+  /** Tree asset names that can be linked to server world objects */
+  private static readonly TREE_ASSET_NAMES = ['sTree', 'stree', 'oaktree', 'willow', 'maple', 'DeadTree'];
+
+  /** Find the nearest placed tree GLB object to a world position */
+  findPlacedObjectNear(x: number, z: number, radius: number): TransformNode | null {
+    let best: TransformNode | null = null;
+    let bestDist = radius;
+    for (const node of this.placedObjectNodes) {
+      // Only match tree assets
+      if (!ChunkManager.TREE_ASSET_NAMES.some(n => node.name.includes(n))) continue;
+      const dx = node.position.x - x;
+      const dz = node.position.z - z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = node;
+      }
+    }
+    return best;
+  }
+
   isWallBlockedOnFloor(fromX: number, fromZ: number, toX: number, toZ: number, floor: number): boolean {
     if (floor === 0) return this.isWallBlocked(fromX, fromZ, toX, toZ);
     const layer = this.floorLayerData.get(floor);
@@ -1887,6 +1925,7 @@ export class ChunkManager {
       const uvScale = plane.uvRepeat ? 1 / plane.uvRepeat : 1;
       texClone.uScale = uvScale;
       texClone.vScale = uvScale;
+      texClone.wAng = (plane.texRotation || 0) * Math.PI / 2;
       texClone.wrapU = Texture.WRAP_ADDRESSMODE;
       texClone.wrapV = Texture.WRAP_ADDRESSMODE;
       const mat = new StandardMaterial(`texplane_mat_${plane.id}`, this.scene);
@@ -1939,6 +1978,8 @@ export class ChunkManager {
     this.loadedModelCache.clear();
     for (const [, t] of this.textureCache) t.dispose();
     this.textureCache.clear();
+    for (const [, m] of this.overlayMatCache) m.dispose();
+    this.overlayMatCache.clear();
 
     for (const [, meshes] of this.chunks) {
       meshes.ground.dispose();

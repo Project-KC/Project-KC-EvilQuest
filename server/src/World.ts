@@ -68,31 +68,109 @@ export class World {
     console.log(`Hot-reloading map '${mapId}'...`);
     const gameMap = new GameMap(mapId);
     this.maps.set(mapId, gameMap);
-    // Recreate chunk manager but preserve entity registrations
-    this.chunkManagers.set(mapId, new ServerChunkManager(gameMap.width, gameMap.height));
-    // Re-register entities that are on this map
-    for (const [id, player] of this.players) {
-      if (player.currentMapLevel === mapId) {
-        this.chunkManagers.get(mapId)!.addEntity(id, player.position.x, player.position.y);
-      }
-    }
+    const cm = new ServerChunkManager(gameMap.width, gameMap.height);
+    this.chunkManagers.set(mapId, cm);
+
+    // Remove old NPCs and world objects for this map
     for (const [id, npc] of this.npcs) {
-      if (npc.currentMapLevel === mapId) {
-        this.chunkManagers.get(mapId)!.addEntity(id, npc.position.x, npc.position.y);
-      }
+      if (npc.currentMapLevel === mapId) this.npcs.delete(id);
     }
     for (const [id, obj] of this.worldObjects) {
-      if (obj.currentMapLevel === mapId) {
-        this.chunkManagers.get(mapId)!.addEntity(id, obj.position.x, obj.position.y);
+      if (obj.mapLevel === mapId) {
+        this.blockedObjectTiles.delete(`${mapId}:${Math.floor(obj.x)},${Math.floor(obj.z)}`);
+        this.worldObjects.delete(id);
       }
     }
-    // Force all connected players on this map to reload by sending MAP_CHANGE
+
+    // Re-spawn NPCs and world objects from spawns.json + placed trees from map.json
+    const spawns = this.data.loadSpawns(mapId);
+    for (const spawn of spawns.npcs ?? []) {
+      const npcDef = this.data.getNpc(spawn.npcId);
+      if (!npcDef) continue;
+      const npc = new Npc(npcDef, spawn.x, spawn.z, spawn.wanderRange);
+      npc.currentMapLevel = mapId;
+      this.npcs.set(npc.id, npc);
+      cm.addEntity(npc.id, spawn.x, spawn.z);
+    }
+    // Derive tree world objects from placed objects
+    for (const placed of gameMap.placedObjects) {
+      const defId = World.TREE_ASSET_TO_DEF[placed.assetId];
+      if (defId != null) {
+        if (!spawns.objects) spawns.objects = [];
+        spawns.objects.push({ objectId: defId, x: placed.position.x, z: placed.position.z });
+      }
+    }
+    for (const spawn of spawns.objects ?? []) {
+      const objDef = this.data.getObject(spawn.objectId);
+      if (!objDef) continue;
+      const obj = new WorldObject(objDef, spawn.x, spawn.z, mapId);
+      this.worldObjects.set(obj.id, obj);
+      if (objDef.blocking) {
+        this.blockedObjectTiles.add(`${mapId}:${Math.floor(spawn.x)},${Math.floor(spawn.z)}`);
+      }
+      cm.addEntity(obj.id, spawn.x, spawn.z);
+    }
+
+    // Re-spawn ground items for this map
+    for (const [id, item] of this.groundItems) {
+      if (item.mapLevel === mapId) this.groundItems.delete(id);
+    }
+    for (const item of (spawns as any).items ?? []) {
+      const groundItem: GroundItem = {
+        id: nextGroundItemId++,
+        itemId: item.itemId,
+        quantity: item.quantity ?? 1,
+        x: item.x,
+        z: item.z,
+        mapLevel: mapId,
+        despawnTimer: -1,
+      };
+      this.groundItems.set(groundItem.id, groundItem);
+    }
+
+    // Re-register players on this map
+    for (const [id, player] of this.players) {
+      if (player.currentMapLevel === mapId) {
+        cm.addEntity(id, player.position.x, player.position.y);
+      }
+    }
+    // Send MAP_CHANGE to all players — entity data will be sent when client responds with MAP_READY
     for (const [, player] of this.players) {
       if (player.currentMapLevel === mapId) {
         this.sendMapChange(player, mapId);
       }
     }
     console.log(`Map '${mapId}' reloaded: ${gameMap.width}x${gameMap.height}`);
+  }
+
+  /** Client finished loading the map — send all entity data now */
+  handleMapReady(playerId: number): void {
+    const player = this.players.get(playerId);
+    if (!player) return;
+    const mapId = player.currentMapLevel;
+    for (const [, other] of this.players) {
+      if (other.id !== player.id && other.currentMapLevel === mapId && this.isNearby(player, other.position.x, other.position.y)) {
+        this.sendPlayerUpdate(player, other);
+      }
+    }
+    for (const [, npc] of this.npcs) {
+      if (!npc.dead && npc.currentMapLevel === mapId && this.isNearby(player, npc.position.x, npc.position.y)) {
+        this.sendNpcUpdate(player, npc);
+      }
+    }
+    for (const [, obj] of this.worldObjects) {
+      if (obj.mapLevel === mapId && this.isNearby(player, obj.x, obj.z)) {
+        this.sendWorldObjectUpdate(player, obj);
+      }
+    }
+    for (const [, item] of this.groundItems) {
+      if (item.mapLevel === mapId && this.isNearby(player, item.x, item.z)) {
+        this.sendGroundItemUpdate(player, item);
+      }
+    }
+    this.sendSkills(player);
+    this.sendInventory(player);
+    this.sendEquipment(player);
   }
 
   getMap(mapId: string): GameMap {
@@ -128,10 +206,30 @@ export class World {
     console.log(`Total NPCs: ${this.npcs.size}`);
   }
 
+  /** Map placed object asset IDs to world object definition IDs */
+  private static readonly TREE_ASSET_TO_DEF: Record<string, number> = {
+    'sTree 1': 1, 'sTree 2': 1, 'stree 3': 1, 'sTree4': 1, 'stree autumn': 1,
+    'oaktree2': 2,
+    'willow tree': 9,
+    'DeadTreeLam': 10,
+  };
+
   private spawnWorldObjects(): void {
     for (const [mapId] of this.maps) {
+      // Spawn objects from spawns.json
       const spawns = this.data.loadSpawns(mapId);
-      if (!spawns.objects) continue;
+      if (!spawns.objects) spawns.objects = [];
+
+      // Also derive tree world objects from placed objects in map.json
+      const gameMap = this.maps.get(mapId)!;
+      const placedObjects = gameMap.placedObjects ?? [];
+      for (const placed of placedObjects) {
+        const defId = World.TREE_ASSET_TO_DEF[placed.assetId];
+        if (defId != null) {
+          spawns.objects.push({ objectId: defId, x: placed.position.x, z: placed.position.z });
+        }
+      }
+
       for (const spawn of spawns.objects) {
         const objDef = this.data.getObject(spawn.objectId);
         if (!objDef) {
@@ -147,6 +245,26 @@ export class World {
       console.log(`Spawned objects for map '${mapId}'`);
     }
     console.log(`Total world objects: ${this.worldObjects.size}`);
+
+    // Spawn ground items from spawns.json
+    let itemCount = 0;
+    for (const [mapId] of this.maps) {
+      const spawns = this.data.loadSpawns(mapId);
+      for (const item of (spawns as any).items ?? []) {
+        const groundItem: GroundItem = {
+          id: nextGroundItemId++,
+          itemId: item.itemId,
+          quantity: item.quantity ?? 1,
+          x: item.x,
+          z: item.z,
+          mapLevel: mapId,
+          despawnTimer: -1, // permanent spawn
+        };
+        this.groundItems.set(groundItem.id, groundItem);
+        itemCount++;
+      }
+    }
+    if (itemCount > 0) console.log(`Spawned ${itemCount} ground items from spawns`);
   }
 
   start(): void {
@@ -285,6 +403,27 @@ export class World {
   }
 
   /** Check if a world position is within chunk load radius of a player */
+  /** Find the best tool of a given type that the player can use (checks equipped weapon + inventory) */
+  private findBestTool(player: Player, toolType: string, playerSkillLevel: number): ItemDef | null {
+    let best: ItemDef | null = null;
+    const check = (itemId: number) => {
+      const def = this.data.getItem(itemId);
+      if (!def || (def as any).toolType !== toolType) return;
+      const toolLvl = (def as any).toolLevel ?? 1;
+      if (toolLvl > playerSkillLevel) return;
+      const bonus = (def as any).toolBonus ?? 0;
+      if (!best || bonus > ((best as any).toolBonus ?? 0)) best = def;
+    };
+    // Check equipped weapon
+    const weaponId = player.equipment.get('weapon' as EquipSlot);
+    if (weaponId) check(weaponId);
+    // Check inventory
+    for (const slot of player.inventory) {
+      if (slot) check(slot.itemId);
+    }
+    return best;
+  }
+
   private isNearby(player: Player, worldX: number, worldZ: number): boolean {
     const cx = Math.floor(worldX / CHUNK_SIZE);
     const cz = Math.floor(worldZ / CHUNK_SIZE);
@@ -356,9 +495,18 @@ export class World {
     if (!player || !item) return;
     if (item.mapLevel !== player.currentMapLevel) return;
 
+    // Walk to item if not in range
     const dx = Math.abs(player.position.x - item.x);
     const dz = Math.abs(player.position.y - item.z);
-    if (dx > 1.5 || dz > 1.5) return;
+    if (dx > 1.5 || dz > 1.5) {
+      const map = this.getPlayerMap(player);
+      const path = map.findPathOnFloor(player.position.x, player.position.y, item.x, item.z, player.currentFloor);
+      if (path.length > 0) {
+        player.moveQueue = path;
+        player.pendingPickup = groundItemId;
+      }
+      return;
+    }
 
     if (player.addItem(item.itemId, item.quantity)) {
       this.groundItems.delete(groundItemId);
@@ -447,11 +595,27 @@ export class World {
         return;
       }
 
+      // Tool check: forestry requires an axe, mining requires a pickaxe
+      const requiredTool = obj.def.category === 'tree' ? 'axe' : obj.def.category === 'rock' ? 'pickaxe' : null;
+      let toolBonus = 0;
+      if (requiredTool) {
+        const bestTool = this.findBestTool(player, requiredTool, playerLevel);
+        if (!bestTool) {
+          // No suitable tool — notify via chat socket
+          return;
+        }
+        toolBonus = bestTool.toolBonus ?? 0;
+      }
+
+      // Harvest time reduced by tool bonus (minimum 2 ticks)
+      const baseTime = obj.def.harvestTime ?? 4;
+      const harvestTime = Math.max(2, baseTime - toolBonus);
+
       // Start skilling action
       this.skillingActions.set(playerId, {
         objectId: obj.id,
         action,
-        ticksLeft: obj.def.harvestTime ?? 4,
+        ticksLeft: harvestTime,
       });
 
       // Notify client of skilling start
@@ -579,10 +743,16 @@ export class World {
   private tick(): void {
     this.currentTick++;
 
-    // Process player movement + update chunk tracking
-    for (const [, player] of this.players) {
+    // Process player movement + update chunk tracking + pending pickups
+    for (const [playerId, player] of this.players) {
       player.processMovement();
       this.updateEntityChunk(player);
+      // Check pending pickup after movement
+      if (player.pendingPickup >= 0 && player.moveQueue.length === 0) {
+        const pickupId = player.pendingPickup;
+        player.pendingPickup = -1;
+        this.handlePlayerPickup(playerId, pickupId);
+      }
     }
 
     // Process NPC AI
@@ -875,8 +1045,9 @@ export class World {
       }
     }
 
-    // Despawn ground items
+    // Despawn ground items (negative timer = permanent, never despawn)
     for (const [id, item] of this.groundItems) {
+      if (item.despawnTimer < 0) continue;
       item.despawnTimer--;
       if (item.despawnTimer <= 0) {
         this.groundItems.delete(id);

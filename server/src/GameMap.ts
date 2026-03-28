@@ -17,6 +17,9 @@ export class GameMap {
   /** KC map data (tiles, heights, water levels) */
   private mapData: KCMapData;
 
+  /** Placed objects from the editor (for deriving world object spawns) */
+  readonly placedObjects: { assetId: string; position: { x: number; y: number; z: number } }[] = [];
+
   /** Cached tile types for fast collision checks */
   private tileTypes: Uint8Array;
 
@@ -56,6 +59,9 @@ export class GameMap {
     // Load KC map data
     const mapFile: KCMapFile = JSON.parse(readFileSync(resolve(dir, 'map.json'), 'utf-8'));
     this.mapData = mapFile.map;
+    this.placedObjects = (mapFile.placedObjects ?? []).map(o => ({
+      assetId: o.assetId, position: o.position
+    }));
 
     // Build height cache (flat Float32Array for fast access)
     const vw = this.width + 1;

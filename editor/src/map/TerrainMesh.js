@@ -875,6 +875,7 @@ export function buildSingleTexturePlane(plane, textureRegistry, textureCache, sc
   texture.wrapV = Texture.WRAP_ADDRESSMODE
   texture.uScale = 1 / scale
   texture.vScale = 1 / scale
+  texture.wAng = (plane.texRotation || 0) * Math.PI / 2
 
   const mesh = MeshBuilder.CreatePlane(`texplane_${plane.id}`, {
     width: Math.max(0.01, plane.width || 1),

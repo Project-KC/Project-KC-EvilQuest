@@ -19,7 +19,7 @@ import { SidePanel } from '../ui/SidePanel';
 import { ChatPanel } from '../ui/ChatPanel';
 import { Minimap } from '../ui/Minimap';
 import { StatsPanel } from '../ui/StatsPanel';
-import { ServerOpcode, ClientOpcode, encodePacket, ALL_SKILLS, SKILL_NAMES, decodeStringPacket, type WorldObjectDef } from '@projectrs/shared';
+import { ServerOpcode, ClientOpcode, encodePacket, ALL_SKILLS, SKILL_NAMES, decodeStringPacket, type WorldObjectDef, type ItemDef } from '@projectrs/shared';
 
 // NPC color palette by definition ID
 const NPC_COLORS: Record<number, Color3> = {
@@ -80,7 +80,10 @@ export class GameManager {
 
   // Movement
   private path: { x: number; z: number }[] = [];
+  private pathIndex: number = 0;
   private moveSpeed: number = 3.0;
+  private _tempVec: Vector3 = new Vector3(); // reusable temp vector to avoid per-frame allocations
+  private _splatVp = new Viewport(0, 0, 1, 1); // reusable viewport for hit splat projection
 
   // Combat follow (local player follows melee target)
   private combatTargetId: number = -1;
@@ -110,6 +113,7 @@ export class GameManager {
   /** Tiles blocked by non-depleted world objects (key = `${tileX},${tileZ}`) */
   private blockedObjectTiles: Set<string> = new Set();
   private objectDefsCache: Map<number, WorldObjectDef> = new Map();
+  private itemDefsCache: Map<number, ItemDef> = new Map();
   /** Per-defId tree model templates: { template, scale } */
   private treeModels: Map<number, { template: TransformNode; scale: number }> = new Map();
   private rockModelTemplate: TransformNode | null = null;
@@ -248,6 +252,7 @@ export class GameManager {
     this.chunkManager.loadMap('kcmap').then(() => {
       this.applyFog();
       this.repositionWorldObjects();
+      this.linkPlacedObjectsToWorldObjects();
     });
     this.loadObjectDefs();
     this.loadTreeModels();
@@ -290,10 +295,19 @@ export class GameManager {
       for (const def of defs) {
         this.objectDefsCache.set(def.id, def);
       }
-      // Rebuild blocked tiles for any world objects that arrived before defs loaded
       this.rebuildBlockedObjectTiles();
     } catch (e) {
       console.warn('Failed to load object definitions:', e);
+    }
+    try {
+      const res = await fetch('/data/items.json');
+      const defs: ItemDef[] = await res.json();
+      for (const def of defs) {
+        this.itemDefsCache.set(def.id, def);
+      }
+      if (this.sidePanel) this.sidePanel.setItemDefs(this.itemDefsCache);
+    } catch (e) {
+      console.warn('Failed to load item definitions:', e);
     }
   }
 
@@ -308,19 +322,76 @@ export class GameManager {
     }
   }
 
-  /** Tree model config: defId → GLB file + target height */
-  private static readonly TREE_MODEL_CONFIG: { defId: number; file: string; targetHeight: number }[] = [
-    { defId: 1, file: 'tree.glb', targetHeight: 3.0 },         // Tree (level 1)
-    { defId: 2, file: 'tree.glb', targetHeight: 3.75 },       // Oak Tree (level 15)
+  /** Tree model config: defId → GLB files + target height + stump file */
+  private static readonly TREE_MODEL_CONFIG: { defId: number; files: string[]; targetHeight: number; stumpFile: string; stumpHeight: number }[] = [
+    { defId: 1, files: ['sTree_1.glb', 'sTree_2.glb', 'stree_3.glb', 'sTree4.glb', 'stree_autumn.glb'], targetHeight: 3.0, stumpFile: 'stump1.glb', stumpHeight: 0.5 },
+    { defId: 2, files: ['oaktree2.glb'], targetHeight: 3.75, stumpFile: 'oakstump.glb', stumpHeight: 0.6 },
+    { defId: 9, files: ['willow_tree.glb'], targetHeight: 4.0, stumpFile: 'willowstump.glb', stumpHeight: 0.5 },
+    { defId: 10, files: ['DeadTreeLam.glb'], targetHeight: 2.5, stumpFile: 'stump2.glb', stumpHeight: 0.4 },
   ];
+  private treeModelVariants: Map<number, { template: TransformNode; scale: number }[]> = new Map();
+  private stumpModels: Map<number, { template: TransformNode; scale: number }> = new Map();
+  private stumpModelsByName: Map<string, { template: TransformNode; scale: number }> = new Map();
+
+  /** Map placed object asset name patterns → stump file to use */
+  private static readonly ASSET_STUMP_MAP: [string, string][] = [
+    ['oaktree', 'oakstump.glb'],
+    ['willow', 'willowstump.glb'],
+    ['maple', 'maplestump.glb'],
+    ['DeadTree', 'stump2.glb'],
+    ['stree_3', 'stump2.glb'],
+    ['stree 3', 'stump2.glb'],
+    ['sTree', 'stump1.glb'],       // sTree 1, sTree 2, sTree4, stree autumn
+    ['stree', 'stump1.glb'],       // fallback for any stree variant
+  ];
+  private worldObjectStumps: Map<number, TransformNode> = new Map();
+  private thinkingBubble: HTMLDivElement | null = null;
 
   private async loadTreeModels(): Promise<void> {
     const loads = GameManager.TREE_MODEL_CONFIG.map(async (cfg) => {
-      try {
-        const result = await SceneLoader.ImportMeshAsync('', '/models/', cfg.file, this.scene);
+      const templates: { template: TransformNode; scale: number }[] = [];
+      for (const file of cfg.files) {
+        try {
+          const result = await SceneLoader.ImportMeshAsync('', '/models/', file, this.scene);
+          let minY = Infinity, maxY = -Infinity;
+          for (const mesh of result.meshes) {
+            if (mesh.getTotalVertices() === 0) continue;
+            mesh.computeWorldMatrix(true);
+            const bb = mesh.getBoundingInfo().boundingBox;
+            if (bb.minimumWorld.y < minY) minY = bb.minimumWorld.y;
+            if (bb.maximumWorld.y > maxY) maxY = bb.maximumWorld.y;
+          }
+          const modelHeight = maxY - minY;
+          const scale = modelHeight > 0 ? cfg.targetHeight / modelHeight : 1;
+          const root = new TransformNode(`treeTemplate_${cfg.defId}_${file}`, this.scene);
+          for (const mesh of result.meshes) {
+            if (!mesh.parent) mesh.parent = root;
+          }
+          for (const child of root.getChildren()) {
+            (child as TransformNode).position.y -= minY;
+          }
+          root.setEnabled(false);
+          templates.push({ template: root, scale });
+          console.log(`Tree model '${file}' loaded for defId=${cfg.defId} (height=${modelHeight.toFixed(2)}, scale=${scale.toFixed(3)})`);
+        } catch (e) {
+          console.warn(`Failed to load tree model '${file}':`, e);
+        }
+      }
+      if (templates.length > 0) {
+        // Store first as default, keep all for random picking
+        this.treeModels.set(cfg.defId, templates[0]);
+        this.treeModelVariants.set(cfg.defId, templates);
+      }
+    });
 
-        let minY = Infinity;
-        let maxY = -Infinity;
+    await Promise.all(loads);
+
+    // Load stump models — one per unique stump file
+    const uniqueStumps = [...new Set(GameManager.ASSET_STUMP_MAP.map(([, f]) => f))];
+    const stumpLoads = uniqueStumps.map(async (stumpFile) => {
+      try {
+        const result = await SceneLoader.ImportMeshAsync('', '/models/', stumpFile, this.scene);
+        let minY = Infinity, maxY = -Infinity;
         for (const mesh of result.meshes) {
           if (mesh.getTotalVertices() === 0) continue;
           mesh.computeWorldMatrix(true);
@@ -329,9 +400,9 @@ export class GameManager {
           if (bb.maximumWorld.y > maxY) maxY = bb.maximumWorld.y;
         }
         const modelHeight = maxY - minY;
-        const scale = modelHeight > 0 ? cfg.targetHeight / modelHeight : 1;
-
-        const root = new TransformNode(`treeTemplate_${cfg.defId}`, this.scene);
+        const targetHeight = 0.5;
+        const scale = modelHeight > 0 ? targetHeight / modelHeight : 1;
+        const root = new TransformNode(`stumpTemplate_${stumpFile}`, this.scene);
         for (const mesh of result.meshes) {
           if (!mesh.parent) mesh.parent = root;
         }
@@ -339,20 +410,21 @@ export class GameManager {
           (child as TransformNode).position.y -= minY;
         }
         root.setEnabled(false);
-
-        this.treeModels.set(cfg.defId, { template: root, scale });
-        console.log(`Tree model '${cfg.file}' loaded for defId=${cfg.defId} (height=${modelHeight.toFixed(2)}, scale=${scale.toFixed(3)})`);
+        this.stumpModelsByName.set(stumpFile, { template: root, scale });
+        console.log(`Stump model '${stumpFile}' loaded`);
       } catch (e) {
-        console.warn(`Failed to load tree model '${cfg.file}':`, e);
+        console.warn(`Failed to load stump model '${stumpFile}':`, e);
       }
     });
+    await Promise.all(stumpLoads);
 
-    await Promise.all(loads);
     this.upgradeTreeSpritesToModels();
   }
 
   private createTreeModel(objectEntityId: number, objectDefId: number, x: number, z: number, isDepleted: boolean): void {
-    const model = this.treeModels.get(objectDefId);
+    // Pick a random variant if available
+    const variants = this.treeModelVariants.get(objectDefId);
+    const model = variants ? variants[objectEntityId % variants.length] : this.treeModels.get(objectDefId);
     if (!model) return;
 
     const clone = model.template.instantiateHierarchy(null, undefined, (source, cloned) => {
@@ -374,23 +446,34 @@ export class GameManager {
     clone.scaling.set(s, s, s);
     const cx = Math.floor(x) + 0.5;
     const cz = Math.floor(z) + 0.5;
-    clone.position.set(cx, this.getHeight(cx, cz), cz);
+    const terrainY = this.getHeight(cx, cz);
+    clone.position.set(cx, terrainY, cz);
     this.worldObjectModels.set(objectEntityId, clone);
+
+    // Create stump model (hidden until tree is depleted)
+    const stumpModel = this.stumpModels.get(objectDefId);
+    if (stumpModel) {
+      const stump = stumpModel.template.instantiateHierarchy(null, undefined, (source, cloned) => {
+        cloned.name = source.name + `_stump_${objectEntityId}`;
+      })!;
+      stump.setEnabled(isDepleted);
+      for (const child of stump.getChildMeshes()) {
+        child.setEnabled(true);
+        const mat = child.material as any;
+        if (mat) {
+          if (mat.transparencyMode !== undefined) mat.transparencyMode = 1;
+          mat.alpha = 1;
+        }
+      }
+      const ss = stumpModel.scale;
+      stump.scaling.set(ss, ss, ss);
+      stump.position.set(cx, terrainY, cz);
+      this.worldObjectStumps.set(objectEntityId, stump);
+    }
   }
 
   private upgradeTreeSpritesToModels(): void {
-    for (const [objectEntityId, data] of this.worldObjectDefs) {
-      if (this.worldObjectModels.has(objectEntityId)) continue;
-      const def = this.objectDefsCache.get(data.defId);
-      if (def?.category !== 'tree') continue;
-      if (!this.treeModels.has(data.defId)) continue;
-      const sprite = this.worldObjectSprites.get(objectEntityId);
-      if (sprite) {
-        sprite.dispose();
-        this.worldObjectSprites.delete(objectEntityId);
-      }
-      this.createTreeModel(objectEntityId, data.defId, data.x, data.z, data.depleted);
-    }
+    // Trees now use placed GLB objects from the editor — no GameManager models needed
   }
 
   /** Ore color tints per object def ID */
@@ -682,6 +765,58 @@ export class GameManager {
     }
   }
 
+  /** Link placed GLB objects to server world objects after map finishes loading */
+  private linkPlacedObjectsToWorldObjects(): void {
+    let linked = 0;
+    for (const [objectEntityId, data] of this.worldObjectDefs) {
+      if (this.worldObjectModels.has(objectEntityId)) continue;
+      const def = this.objectDefsCache.get(data.defId);
+      if (def?.category !== 'tree') continue;
+
+      const placedNode = this.chunkManager.findPlacedObjectNear(data.x, data.z, 1.5);
+      if (!placedNode) continue;
+
+      this.worldObjectModels.set(objectEntityId, placedNode);
+      // Tag all descendants for right-click picking
+      if (!placedNode.metadata) placedNode.metadata = {};
+      placedNode.metadata.objectEntityId = objectEntityId;
+      for (const child of placedNode.getChildMeshes(false)) {
+        if (!child.metadata) child.metadata = {};
+        child.metadata.objectEntityId = objectEntityId;
+      }
+      for (const child of placedNode.getChildTransformNodes(false)) {
+        if (!child.metadata) child.metadata = {};
+        child.metadata.objectEntityId = objectEntityId;
+      }
+      if (data.depleted) placedNode.setEnabled(false);
+
+      // Create stump model at the tree's position — pick stump based on placed asset name
+      if (!this.worldObjectStumps.has(objectEntityId)) {
+        const assetName = placedNode.name; // e.g. "placed_X_template_sTree 1"
+        const stumpEntry = GameManager.ASSET_STUMP_MAP.find(([pattern]) => assetName.includes(pattern));
+        const stumpFile = stumpEntry ? stumpEntry[1] : 'stump1.glb';
+        const stumpModel = this.stumpModelsByName.get(stumpFile);
+        if (stumpModel) {
+          const stump = stumpModel.template.instantiateHierarchy(null, undefined, (source, cloned) => {
+            cloned.name = source.name + `_stump_${objectEntityId}`;
+          })!;
+          stump.setEnabled(data.depleted);
+          for (const child of stump.getChildMeshes()) {
+            child.setEnabled(true);
+            const mat = child.material as any;
+            if (mat && mat.transparencyMode !== undefined) mat.transparencyMode = 1;
+          }
+          const ss = stumpModel.scale;
+          stump.scaling.set(ss, ss, ss);
+          stump.position.set(placedNode.position.x, placedNode.position.y, placedNode.position.z);
+          this.worldObjectStumps.set(objectEntityId, stump);
+        }
+      }
+
+      linked++;
+    }
+  }
+
   private setupKeyboard(): void {
     window.addEventListener('keydown', (e) => {
       if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
@@ -809,10 +944,12 @@ export class GameManager {
       this.groundItems.set(groundItemId, { id: groundItemId, itemId, quantity, x, z });
 
       if (!this.groundItemSprites.has(groundItemId)) {
+        const itemDef = this.itemDefsCache.get(itemId);
+        const itemName = itemDef?.name ?? `Item ${itemId}`;
         const sprite = new SpriteEntity(this.scene, {
           name: `gitem_${groundItemId}`,
           color: new Color3(0.8, 0.7, 0.2),
-          label: `Item`,
+          label: itemName,
           labelColor: '#ffaa00',
           width: 0.4,
           height: 0.4,
@@ -925,11 +1062,12 @@ export class GameManager {
       const hasRockModel = isRock && !!this.rockModelTemplate;
 
       // Create visual if not yet created
-      if (hasTreeModel && !this.worldObjectModels.has(objectEntityId)) {
-        this.createTreeModel(objectEntityId, objectDefId, x, z, isDepleted);
+      // Trees use placed GLBs — no visual work in SYNC, stumps created on DEPLETED
+      if (isTree) {
+        // just store in worldObjectDefs (already done above)
       } else if (hasRockModel && !this.worldObjectModels.has(objectEntityId)) {
         this.createRockModel(objectEntityId, objectDefId, x, z, isDepleted);
-      } else if (!hasTreeModel && !hasRockModel && !this.worldObjectSprites.has(objectEntityId) && !this.worldObjectModels.has(objectEntityId)) {
+      } else if (!this.worldObjectSprites.has(objectEntityId) && !this.worldObjectModels.has(objectEntityId)) {
         const name = def?.name ?? `Object${objectDefId}`;
         const color = def?.color
           ? new Color3(def.color[0] / 255, def.color[1] / 255, def.color[2] / 255)
@@ -949,16 +1087,18 @@ export class GameManager {
         this.worldObjectSprites.set(objectEntityId, sprite);
       }
 
-      // Update depletion visual
-      const model = this.worldObjectModels.get(objectEntityId);
-      if (model) {
-        model.setEnabled(!isDepleted);
-      } else {
-        const sprite = this.worldObjectSprites.get(objectEntityId);
-        if (sprite && isDepleted) {
-          sprite.getMesh().isVisible = false;
-        } else if (sprite && !isDepleted) {
-          sprite.getMesh().isVisible = true;
+      // Update depletion visual (trees handled entirely by WORLD_OBJECT_DEPLETED handler)
+      if (!isTree) {
+        const model = this.worldObjectModels.get(objectEntityId);
+        if (model) {
+          if (isRock) {
+            this.updateRockColor(objectEntityId, objectDefId, isDepleted);
+          } else {
+            model.setEnabled(!isDepleted);
+          }
+        } else {
+          const sprite = this.worldObjectSprites.get(objectEntityId);
+          if (sprite) sprite.getMesh().isVisible = !isDepleted;
         }
       }
     });
@@ -980,21 +1120,49 @@ export class GameManager {
       }
 
       const def = data ? this.objectDefsCache.get(data.defId) : null;
+      const isTree = def?.category === 'tree';
       const isRock = def?.category === 'rock';
 
-      const model = this.worldObjectModels.get(objectEntityId);
-      if (model) {
-        if (isRock && data) {
-          // Rocks change color instead of hiding (grey when depleted, ore color when respawned)
-          this.updateRockColor(objectEntityId, data.defId, isDepleted === 1);
-        } else {
-          model.setEnabled(isDepleted === 0);
+      if (isTree && data) {
+        // Find placed GLB tree and toggle visibility
+        const placedNode = this.worldObjectModels.get(objectEntityId)
+          ?? this.chunkManager.findPlacedObjectNear(data.x, data.z, 1.5);
+        if (placedNode) {
+          this.worldObjectModels.set(objectEntityId, placedNode);
+          placedNode.setEnabled(isDepleted === 0);
+
+          // Create or toggle stump
+          let stump = this.worldObjectStumps.get(objectEntityId);
+          if (!stump && isDepleted === 1) {
+            const assetName = placedNode.name;
+            const stumpEntry = GameManager.ASSET_STUMP_MAP.find(([p]) => assetName.includes(p));
+            const stumpFile = stumpEntry ? stumpEntry[1] : 'stump1.glb';
+            const sm = this.stumpModelsByName.get(stumpFile);
+            if (sm) {
+              stump = sm.template.instantiateHierarchy(null, undefined, (source, cloned) => {
+                cloned.name = source.name + `_stump_${objectEntityId}`;
+              })!;
+              for (const child of stump.getChildMeshes()) {
+                child.setEnabled(true);
+                const mat = child.material as any;
+                if (mat && mat.transparencyMode !== undefined) mat.transparencyMode = 1;
+              }
+              const ss = sm.scale;
+              stump.scaling.set(ss, ss, ss);
+              stump.position.set(placedNode.position.x, placedNode.position.y, placedNode.position.z);
+              this.worldObjectStumps.set(objectEntityId, stump);
+            }
+          }
+          if (stump) stump.setEnabled(isDepleted === 1);
         }
+      } else if (isRock && data) {
+        const model = this.worldObjectModels.get(objectEntityId);
+        if (model) this.updateRockColor(objectEntityId, data.defId, isDepleted === 1);
       } else {
+        const model = this.worldObjectModels.get(objectEntityId);
+        if (model) model.setEnabled(isDepleted === 0);
         const sprite = this.worldObjectSprites.get(objectEntityId);
-        if (sprite) {
-          sprite.getMesh().isVisible = isDepleted === 0;
-        }
+        if (sprite) sprite.getMesh().isVisible = isDepleted === 0;
       }
     });
 
@@ -1007,11 +1175,20 @@ export class GameManager {
         const actionName = def?.actions[0] ?? 'Working';
         this.chatPanel.addSystemMessage(`You begin to ${actionName.toLowerCase()}...`, '#8cf');
       }
+      // Show thinking bubble with tool icon
+      const objData = this.worldObjectDefs.get(v[0]);
+      const objDef = objData ? this.objectDefsCache.get(objData.defId) : null;
+      if (objDef?.category === 'tree') {
+        this.showThinkingBubble('/sprites/items/axe base.png');
+      } else if (objDef?.category === 'rock') {
+        this.showThinkingBubble('/sprites/items/pickaxe base.png');
+      }
     });
 
     this.network.on(ServerOpcode.SKILLING_STOP, (_op, _v) => {
       this.isSkilling = false;
       this.skillingObjectId = -1;
+      this.hideThinkingBubble();
     });
 
     this.network.on(ServerOpcode.PLAYER_STATS, (_op, v) => {
@@ -1108,8 +1285,13 @@ export class GameManager {
 
     for (const [, sprite] of this.worldObjectSprites) sprite.dispose();
     this.worldObjectSprites.clear();
-    for (const [, model] of this.worldObjectModels) model.dispose();
+    // Only dispose models that GameManager created, not linked placed objects from ChunkManager
+    for (const [, model] of this.worldObjectModels) {
+      if (!this.chunkManager.isPlacedObjectNode(model)) model.dispose();
+    }
     this.worldObjectModels.clear();
+    for (const [, stump] of this.worldObjectStumps) stump.dispose();
+    this.worldObjectStumps.clear();
     this.worldObjectDefs.clear();
     this.blockedObjectTiles.clear();
 
@@ -1119,11 +1301,13 @@ export class GameManager {
     // Load new map
     await this.chunkManager.loadMap(mapId);
     this.applyFog();
+    // Tell server we're ready to receive entity data — SYNCs will link trees via the handler
+    this.network.sendRaw(encodePacket(ClientOpcode.MAP_READY));
 
     // Update player position
     this.playerX = newX;
     this.playerZ = newZ;
-    this.path = [];
+    this.path = []; this.pathIndex = 0;
     if (this.localPlayer) this.localPlayer.stopWalking();
     this.combatTargetId = -1;
 
@@ -1172,15 +1356,18 @@ export class GameManager {
 
       for (const [groundItemId, sprite] of this.groundItemSprites) {
         if (sprite.getMesh().name === meshName) {
+          const gItem = this.groundItems.get(groundItemId);
+          const iDef = gItem ? this.itemDefsCache.get(gItem.itemId) : null;
+          const iName = iDef?.name ?? 'item';
           options.push({
-            label: `Pick up item`,
+            label: `Pick up ${iName}`,
             action: () => this.pickupItem(groundItemId),
           });
           break;
         }
       }
 
-      // Check 3D tree models — walk up parent chain looking for objectEntityId metadata
+      // Check 3D models (trees, rocks, placed objects) — walk up parent chain looking for objectEntityId metadata
       let pickedObjectEntityId: number | null = null;
       let walkMesh: any = pickResult.pickedMesh;
       while (walkMesh) {
@@ -1189,6 +1376,34 @@ export class GameManager {
           break;
         }
         walkMesh = walkMesh.parent;
+      }
+
+      // If no objectEntityId found, check if this is a placed object near a world object
+      if (pickedObjectEntityId == null && pickResult.pickedMesh) {
+        // Walk up to root placed node
+        let rootNode: any = pickResult.pickedMesh;
+        while (rootNode.parent) {
+          if (this.chunkManager.isPlacedObjectNode(rootNode)) break;
+          rootNode = rootNode.parent;
+        }
+
+        if (this.chunkManager.isPlacedObjectNode(rootNode)) {
+          const px = rootNode.position.x;
+          const pz = rootNode.position.z;
+          // Find nearest world object by position
+          let bestEid = -1, bestDist = 3.0;
+          for (const [eid, data] of this.worldObjectDefs) {
+            const dist = Math.hypot(data.x - px, data.z - pz);
+            if (dist < bestDist) {
+              bestDist = dist;
+              bestEid = eid;
+            }
+          }
+          if (bestEid >= 0) {
+            pickedObjectEntityId = bestEid;
+            this.worldObjectModels.set(bestEid, rootNode);
+          }
+        }
       }
 
       if (pickedObjectEntityId != null) {
@@ -1294,7 +1509,7 @@ export class GameManager {
         }
       }
       if (path.length > 0) {
-        this.path = path;
+        this.path = path; this.pathIndex = 0;
         this.destMarker.isVisible = false;
         this.minimap?.clearDestination();
       }
@@ -1327,7 +1542,7 @@ export class GameManager {
         }
       }
       if (path.length > 0) {
-        this.path = path;
+        this.path = path; this.pathIndex = 0;
         this.network.sendMove(path);
       }
     }
@@ -1459,7 +1674,7 @@ export class GameManager {
       (fx, fz, tx, tz) => this.currentFloor === 0 ? this.chunkManager.isWallBlocked(fx, fz, tx, tz) : this.chunkManager.isWallBlockedOnFloor(fx, fz, tx, tz, this.currentFloor));
 
     if (path.length > 0) {
-      this.path = path;
+      this.path = path; this.pathIndex = 0;
       const dest = path[path.length - 1];
       this.destMarker.position.x = dest.x;
       this.destMarker.position.y = this.getHeight(dest.x, dest.z) + 0.02;
@@ -1538,6 +1753,52 @@ export class GameManager {
     }
   }
 
+  private showThinkingBubble(iconUrl: string): void {
+    this.hideThinkingBubble();
+    const bubble = document.createElement('div');
+    bubble.style.cssText = `
+      position: fixed; pointer-events: none; z-index: 200;
+      background: white; border: 2px solid #333; border-radius: 12px;
+      padding: 4px; width: 36px; height: 36px;
+      display: flex; align-items: center; justify-content: center;
+    `;
+    const img = document.createElement('img');
+    img.src = iconUrl;
+    img.style.cssText = 'width: 28px; height: 28px; image-rendering: pixelated;';
+    bubble.appendChild(img);
+    // Small tail triangle
+    const tail = document.createElement('div');
+    tail.style.cssText = `
+      position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%);
+      width: 0; height: 0;
+      border-left: 6px solid transparent; border-right: 6px solid transparent;
+      border-top: 8px solid #333;
+    `;
+    bubble.appendChild(tail);
+    document.body.appendChild(bubble);
+    this.thinkingBubble = bubble;
+  }
+
+  private hideThinkingBubble(): void {
+    if (this.thinkingBubble) {
+      this.thinkingBubble.remove();
+      this.thinkingBubble = null;
+    }
+  }
+
+  private updateThinkingBubble(): void {
+    if (!this.thinkingBubble || !this.localPlayer) return;
+    const cam = this.scene.activeCamera;
+    if (!cam) return;
+    const pos = this.localPlayer.position.clone();
+    pos.y += 2.2; // above player head
+    const screenPos = Vector3.Project(pos, Matrix.Identity(),
+      cam.getViewMatrix().multiply(cam.getProjectionMatrix()),
+      new Viewport(0, 0, this.engine.getRenderWidth(), this.engine.getRenderHeight()));
+    this.thinkingBubble.style.left = `${screenPos.x - 20}px`;
+    this.thinkingBubble.style.top = `${screenPos.y - 48}px`;
+  }
+
   private update(dt: number): void {
     // WASD camera rotation
     const camSpeed = 2.0 * dt;
@@ -1558,6 +1819,9 @@ export class GameManager {
     for (const [, sprite] of this.remotePlayers) sprite.updateAnimation(dt);
     for (const [, sprite] of this.npcSprites) sprite.updateAnimation(dt);
 
+    // Cache camera position for this frame
+    const camPos = this.scene.activeCamera?.position ?? null;
+
     // Update chunks around player
     this.chunkManager.updatePlayerPosition(this.playerX, this.playerZ);
     this.chunkManager.updateAnimations();
@@ -1570,7 +1834,7 @@ export class GameManager {
         const dz = npcTarget.z - this.playerZ;
         const dist = Math.hypot(dx, dz);
         if (dist > 1.5) {
-          if (this.path.length === 0 || dist > 3) {
+          if (this.pathIndex >= this.path.length || dist > 3) {
             const newPath = findPath(this.playerX, this.playerZ, npcTarget.x, npcTarget.z,
               this.isTileBlocked,
               this.chunkManager.getMapWidth(), this.chunkManager.getMapHeight(), 200,
@@ -1582,7 +1846,7 @@ export class GameManager {
               }
             }
             if (newPath.length > 0) {
-              this.path = newPath;
+              this.path = newPath; this.pathIndex = 0;
               this.destMarker.isVisible = false;
               this.minimap?.clearDestination();
             }
@@ -1592,7 +1856,7 @@ export class GameManager {
     }
 
     // Move local player
-    if (this.path.length > 0 && this.localPlayer) {
+    if (this.pathIndex < this.path.length && this.localPlayer) {
       // Start walk animation when path is active
       if (!this.localPlayer.isWalking()) this.localPlayer.startWalking();
 
@@ -1601,7 +1865,7 @@ export class GameManager {
         if (npcTarget) {
           const toDist = Math.hypot(npcTarget.x - this.playerX, npcTarget.z - this.playerZ);
           if (toDist <= 1.5) {
-            this.path = [];
+            this.pathIndex = this.path.length;
             this.localPlayer.stopWalking();
             this.playerX = Math.floor(this.playerX) + 0.5;
             this.playerZ = Math.floor(this.playerZ) + 0.5;
@@ -1610,22 +1874,21 @@ export class GameManager {
         }
       }
 
-      if (this.path.length > 0) {
-        const target = this.path[0];
+      if (this.pathIndex < this.path.length) {
+        const target = this.path[this.pathIndex];
         const dx = target.x - this.playerX;
         const dz = target.z - this.playerZ;
         const dist = Math.hypot(dx, dz);
         const step = this.moveSpeed * dt;
 
         // Update sprite direction based on movement + camera angle
-        const camPos = this.scene.activeCamera?.position;
         if (camPos) this.localPlayer.updateMovementDirection(dx, dz, camPos);
 
         if (dist <= step) {
           this.playerX = target.x;
           this.playerZ = target.z;
-          this.path.shift();
-          if (this.path.length === 0) {
+          this.pathIndex++;
+          if (this.pathIndex >= this.path.length) {
             this.destMarker.isVisible = false;
             this.minimap?.clearDestination();
             this.localPlayer.stopWalking();
@@ -1639,8 +1902,7 @@ export class GameManager {
     }
 
     // Face local player toward combat target when idle
-    if (this.localPlayer && this.path.length === 0 && this.combatTargetId >= 0) {
-      const camPos = this.scene.activeCamera?.position;
+    if (this.localPlayer && this.pathIndex >= this.path.length && this.combatTargetId >= 0) {
       if (camPos) {
         const npcTarget = this.npcTargets.get(this.combatTargetId);
         const npcSprite = this.npcSprites.get(this.combatTargetId);
@@ -1660,7 +1922,6 @@ export class GameManager {
       const dist = Math.hypot(dx, dz);
       if (dist > 0.05) {
         if (!sprite.isWalking()) sprite.startWalking();
-        const camPos = this.scene.activeCamera?.position;
         if (camPos) sprite.updateMovementDirection(dx, dz, camPos);
         const step = Math.min(4.0 * dt, dist);
         const nx = c.x + (dx / dist) * step;
@@ -1671,7 +1932,6 @@ export class GameManager {
         // Idle — face combat target if in combat
         const combatTarget = this.remoteCombatTargets.get(entityId);
         if (combatTarget !== undefined) {
-          const camPos = this.scene.activeCamera?.position;
           if (camPos) {
             const targetSprite = this.npcSprites.get(combatTarget);
             if (targetSprite) sprite.faceToward(targetSprite.position, camPos);
@@ -1689,7 +1949,6 @@ export class GameManager {
       const dz = target.z - c.z;
       const dist = Math.hypot(dx, dz);
       if (dist > 0.05) {
-        const camPos = this.scene.activeCamera?.position;
         if (camPos) sprite.updateMovementDirection(dx, dz, camPos);
         const step = Math.min(3.0 * dt, dist);
         const nx = c.x + (dx / dist) * step;
@@ -1699,7 +1958,6 @@ export class GameManager {
         // Idle — face combat target if in combat
         const combatTarget = this.npcCombatTargets.get(entityId);
         if (combatTarget !== undefined) {
-          const camPos = this.scene.activeCamera?.position;
           if (camPos) {
             // NPC's target could be local player or a remote player
             if (combatTarget === this.localPlayerId && this.localPlayer) {
@@ -1716,37 +1974,36 @@ export class GameManager {
     // Update hit splats
     {
       const cam = this.scene.activeCamera;
-      if (cam) {
+      if (cam && this.hitSplats.length > 0) {
         const w = this.engine.getRenderWidth();
         const h = this.engine.getRenderHeight();
-        const viewMatrix = cam.getViewMatrix();
-        const projMatrix = cam.getProjectionMatrix();
-        const transform = viewMatrix.multiply(projMatrix);
-        const vp = new Viewport(0, 0, w, h);
+        const transform = cam.getViewMatrix().multiply(cam.getProjectionMatrix());
+        this._splatVp.x = 0; this._splatVp.y = 0; this._splatVp.width = w; this._splatVp.height = h;
 
-        for (let i = this.hitSplats.length - 1; i >= 0; i--) {
+        let writeIdx = 0;
+        for (let i = 0; i < this.hitSplats.length; i++) {
           const splat = this.hitSplats[i];
           splat.timer -= dt;
           splat.worldPos.y += dt * 0.5;
 
-          const opacity = splat.timer < 0.3 ? splat.timer / 0.3 : 1;
-          splat.el.style.opacity = opacity.toString();
-
           if (splat.timer <= 0) {
             splat.el.remove();
-            this.hitSplats.splice(i, 1);
           } else {
-            const screenPos = Vector3.Project(splat.worldPos, Matrix.Identity(), transform, vp);
+            splat.el.style.opacity = (splat.timer < 0.3 ? splat.timer / 0.3 : 1).toString();
+            const screenPos = Vector3.Project(splat.worldPos, Matrix.Identity(), transform, this._splatVp);
             splat.el.style.left = `${screenPos.x}px`;
             splat.el.style.top = `${screenPos.y}px`;
+            this.hitSplats[writeIdx++] = splat;
           }
         }
+        this.hitSplats.length = writeIdx;
       }
     }
 
     // Camera follows player
     if (this.localPlayer) {
-      this.camera.followTarget(new Vector3(this.playerX, this.getHeight(this.playerX, this.playerZ), this.playerZ));
+      this._tempVec.set(this.playerX, this.getHeight(this.playerX, this.playerZ), this.playerZ);
+      this.camera.followTarget(this._tempVec);
     }
 
     // Note: player sprite directions are updated during movement interpolation above
@@ -1754,6 +2011,7 @@ export class GameManager {
 
     // Update all HTML overlay positions
     this.updateOverlayPositions();
+    this.updateThinkingBubble();
 
     // Update minimap
     if (this.minimap && this.chunkManager.isLoaded()) {

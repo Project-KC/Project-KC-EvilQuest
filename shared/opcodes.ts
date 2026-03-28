@@ -14,6 +14,7 @@ export enum ClientOpcode {
   PLAYER_BUY_ITEM = 36,
   PLAYER_SELL_ITEM = 37,
   PLAYER_INTERACT_OBJECT = 40,
+  MAP_READY = 50,
 }
 
 // Server → Client opcodes

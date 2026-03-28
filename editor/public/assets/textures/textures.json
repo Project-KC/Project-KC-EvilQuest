@@ -355,11 +355,6 @@
     "path": "/assets/textures/71.png"
   },
   {
-    "id": "tex72",
-    "name": "Texture 72",
-    "path": "/assets/textures/72.png"
-  },
-  {
     "id": "tex73",
     "name": "Texture 73",
     "path": "/assets/textures/73.png"
@@ -388,11 +383,6 @@
     "id": "tex0",
     "name": "Texture 0",
     "path": "/assets/textures/0.png"
-  },
-  {
-    "id": "tex-tree-leaves",
-    "name": "Tree Leaves",
-    "path": "/assets/textures/tree leaves.png"
   },
   {
     "id": "tex-7f0972d5",

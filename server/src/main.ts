@@ -41,7 +41,8 @@ function getMimeType(path: string): string {
 }
 
 function serveStatic(pathname: string): Response | null {
-  let filePath = resolve(CLIENT_DIST, pathname.startsWith('/') ? pathname.slice(1) : pathname);
+  const decoded = decodeURIComponent(pathname);
+  let filePath = resolve(CLIENT_DIST, decoded.startsWith('/') ? decoded.slice(1) : decoded);
 
   try {
     const stat = statSync(filePath);
@@ -224,10 +225,39 @@ const server = Bun.serve<SocketData>({
           return new Response('Forbidden', { status: 403 });
         }
 
-        // Write all files
-        writeFileSync(resolve(mapDir, 'meta.json'), JSON.stringify(meta, null, 2));
-        writeFileSync(resolve(mapDir, 'spawns.json'), JSON.stringify(spawns ?? { npcs: [], objects: [] }, null, 2));
-        writeFileSync(resolve(mapDir, 'map.json'), JSON.stringify(mapData, null, 2));
+        // Preserve existing meta dimensions and spawn point
+        const metaPath = resolve(mapDir, 'meta.json');
+        try {
+          const existingMeta = JSON.parse(readFileSync(metaPath, 'utf-8'));
+          if (existingMeta.width) meta.width = existingMeta.width;
+          if (existingMeta.height) meta.height = existingMeta.height;
+          if (existingMeta.spawnPoint) meta.spawnPoint = existingMeta.spawnPoint;
+        } catch { /* first save */ }
+        writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+
+        // Merge spawns: editor provides NPC + item spawns, preserve existing object spawns
+        const spawnsPath = resolve(mapDir, 'spawns.json');
+        let existingObjects: any[] = [];
+        try {
+          const existing: SpawnsFile = JSON.parse(readFileSync(spawnsPath, 'utf-8'));
+          existingObjects = existing.objects ?? [];
+        } catch { /* no existing file */ }
+        const mergedSpawns = {
+          npcs: spawns?.npcs ?? [],
+          objects: existingObjects,
+          items: (spawns as any)?.items ?? [],
+        };
+        writeFileSync(spawnsPath, JSON.stringify(mergedSpawns, null, 2));
+
+        // Preserve placed objects if editor sends empty (prevents accidental wipe)
+        const mapJsonPath = resolve(mapDir, 'map.json');
+        try {
+          const existing: KCMapFile = JSON.parse(readFileSync(mapJsonPath, 'utf-8'));
+          if ((mapData.placedObjects?.length ?? 0) === 0 && (existing.placedObjects?.length ?? 0) > 0) {
+            mapData.placedObjects = existing.placedObjects;
+          }
+        } catch { /* no existing file */ }
+        writeFileSync(mapJsonPath, JSON.stringify(mapData, null, 2));
         writeFileSync(resolve(mapDir, 'walls.json'), JSON.stringify(walls ?? { walls: {} }, null, 2));
 
         return jsonResponse({ ok: true });

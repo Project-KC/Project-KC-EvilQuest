@@ -355,11 +355,6 @@
     "path": "/assets/textures/71.png"
   },
   {
-    "id": "tex72",
-    "name": "Texture 72",
-    "path": "/assets/textures/72.png"
-  },
-  {
     "id": "tex73",
     "name": "Texture 73",
     "path": "/assets/textures/73.png"
@@ -388,11 +383,6 @@
     "id": "tex0",
     "name": "Texture 0",
     "path": "/assets/textures/0.png"
-  },
-  {
-    "id": "tex-tree-leaves",
-    "name": "Tree Leaves",
-    "path": "/assets/textures/tree leaves.png"
   },
   {
     "id": "tex-7f0972d5",
@@ -470,5 +460,135 @@
     "name": "Stretched 76",
     "path": "/assets/stretched textures/76.png",
     "defaultScale": 4
+  },
+  {
+    "id": "tex78",
+    "name": "Texture 78",
+    "path": "/assets/textures/78.png"
+  },
+  {
+    "id": "tex79",
+    "name": "Texture 79",
+    "path": "/assets/textures/79.jpg"
+  },
+  {
+    "id": "tex80",
+    "name": "Texture 80",
+    "path": "/assets/textures/80.jpg"
+  },
+  {
+    "id": "tex81",
+    "name": "Texture 81",
+    "path": "/assets/textures/81.jpg"
+  },
+  {
+    "id": "tex82",
+    "name": "Texture 82",
+    "path": "/assets/textures/82.jpg"
+  },
+  {
+    "id": "tex83",
+    "name": "Texture 83",
+    "path": "/assets/textures/83.jpg"
+  },
+  {
+    "id": "tex84",
+    "name": "Texture 84",
+    "path": "/assets/textures/84.jpg"
+  },
+  {
+    "id": "tex85",
+    "name": "Texture 85",
+    "path": "/assets/textures/85.jpg"
+  },
+  {
+    "id": "tex86",
+    "name": "Texture 86",
+    "path": "/assets/textures/86.png"
+  },
+  {
+    "id": "tex87",
+    "name": "Texture 87",
+    "path": "/assets/textures/87.tif"
+  },
+  {
+    "id": "tex88",
+    "name": "Texture 88",
+    "path": "/assets/textures/88.tif"
+  },
+  {
+    "id": "tex89",
+    "name": "Texture 89",
+    "path": "/assets/textures/89.tif"
+  },
+  {
+    "id": "tex90",
+    "name": "Texture 90",
+    "path": "/assets/textures/90.jpg"
+  },
+  {
+    "id": "tex91",
+    "name": "Texture 91",
+    "path": "/assets/textures/91.jpg"
+  },
+  {
+    "id": "tex92",
+    "name": "Texture 92",
+    "path": "/assets/textures/92.jpg"
+  },
+  {
+    "id": "tex93",
+    "name": "Texture 93",
+    "path": "/assets/textures/93.tif"
+  },
+  {
+    "id": "tex94",
+    "name": "Texture 94",
+    "path": "/assets/textures/94.png"
+  },
+  {
+    "id": "tex-stretched-78",
+    "name": "Stretched 78",
+    "path": "/assets/stretched textures/78.png"
+  },
+  {
+    "id": "tex-stretched-80",
+    "name": "Stretched 80",
+    "path": "/assets/stretched textures/80.jpg"
+  },
+  {
+    "id": "tex-stretched-81",
+    "name": "Stretched 81",
+    "path": "/assets/stretched textures/81.jpg"
+  },
+  {
+    "id": "tex-stretched-82",
+    "name": "Stretched 82",
+    "path": "/assets/stretched textures/82.jpg"
+  },
+  {
+    "id": "tex-stretched-83",
+    "name": "Stretched 83",
+    "path": "/assets/stretched textures/83.jpg"
+  },
+  {
+    "id": "tex-stretched-84",
+    "name": "Stretched 84",
+    "path": "/assets/stretched textures/84.jpg"
+  },
+  {
+    "id": "tex-stretched-88",
+    "name": "Stretched 88",
+    "path": "/assets/stretched textures/88.tif"
+  },
+  {
+    "id": "tex-stretched-90",
+    "name": "Stretched 90",
+    "path": "/assets/stretched textures/90.jpg"
+  },
+  {
+    "id": "tex-stretched-93",
+    "name": "Stretched 93",
+    "path": "/assets/stretched textures/93.tif"
   }
 ]

@@ -32,10 +32,13 @@ export function handleGameSocketOpen(
   // Apply saved state
   if (saved) {
     player.skills = saved.skills;
-    player.inventory = saved.inventory;
+    // Pad saved inventory to 28 slots
+    const inv = saved.inventory;
+    while (inv.length < 28) inv.push(null);
+    player.inventory = inv;
     player.equipment = saved.equipment;
     player.stance = saved.stance;
-    player.currentMapLevel = saved.mapLevel;
+    player.currentMapLevel = mapLevel; // use validated mapLevel, not raw saved value
     player.syncHealthFromSkills();
   }
 
@@ -114,6 +117,11 @@ export function handleGameSocketMessage(
       const objectEntityId = values[0];
       const actionIndex = values[1] ?? 0;
       world.handlePlayerInteractObject(playerId, objectEntityId, actionIndex);
+      break;
+    }
+
+    case ClientOpcode.MAP_READY: {
+      world.handleMapReady(playerId);
       break;
     }
 

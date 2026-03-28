@@ -1,32 +1,6 @@
 import { INVENTORY_SIZE, ClientOpcode, encodePacket } from '@projectrs/shared';
+import type { ItemDef } from '@projectrs/shared';
 import type { NetworkManager } from '../managers/NetworkManager';
-
-// Item name lookup (mirror of server data — in real game this would be loaded from server)
-const ITEM_NAMES: Record<number, string> = {
-  1: 'Bones',
-  2: 'Bronze Sword',
-  3: 'Bronze Shield',
-  4: 'Raw Rat Meat',
-  5: 'Iron Sword',
-  6: 'Leather Body',
-  7: 'Leather Legs',
-  8: 'Cooked Meat',
-  9: 'Bread',
-  10: 'Coins',
-};
-
-const ITEM_COLORS: Record<number, string> = {
-  1: '#ccc',
-  2: '#b87333',
-  3: '#b87333',
-  4: '#c44',
-  5: '#888',
-  6: '#8b5e3c',
-  7: '#8b5e3c',
-  8: '#a52',
-  9: '#da5',
-  10: '#fd0',
-};
 
 export interface InventorySlotData {
   itemId: number;
@@ -39,11 +13,18 @@ export class InventoryPanel {
   private slotElements: HTMLDivElement[] = [];
   private network: NetworkManager;
   private visible: boolean = true;
+  private itemDefs: Map<number, ItemDef> = new Map();
 
   constructor(network: NetworkManager) {
     this.network = network;
     this.container = this.buildUI();
     document.body.appendChild(this.container);
+  }
+
+  setItemDefs(defs: Map<number, ItemDef>): void {
+    this.itemDefs = defs;
+    // Re-render all slots to apply sprites
+    for (let i = 0; i < this.slots.length; i++) this.renderSlot(i);
   }
 
   private buildUI(): HTMLDivElement {
@@ -127,12 +108,17 @@ export class InventoryPanel {
       return;
     }
 
-    const name = ITEM_NAMES[slot.itemId] || `Item ${slot.itemId}`;
-    const color = ITEM_COLORS[slot.itemId] || '#aaa';
+    const def = this.itemDefs.get(slot.itemId);
+    const name = def?.name || `Item ${slot.itemId}`;
+    const sprite = def?.sprite;
+
+    const iconHtml = sprite
+      ? `<img src="/sprites/items/${sprite}" style="width:28px;height:28px;image-rendering:pixelated;object-fit:contain;" />`
+      : `<div style="width:24px;height:24px;background:#aaa;border-radius:3px;"></div>`;
 
     el.innerHTML = `
-      <div style="width: 24px; height: 24px; background: ${color}; border-radius: 3px; margin-bottom: 2px;"></div>
-      <div style="font-size: 9px; color: #ccc; text-align: center; line-height: 1;">${name.substring(0, 8)}</div>
+      ${iconHtml}
+      <div style="font-size: 9px; color: #ccc; text-align: center; line-height: 1;">${name.length > 10 ? name.substring(0, 9) + '..' : name}</div>
       ${slot.quantity > 1 ? `<div style="position: absolute; top: 1px; left: 3px; font-size: 9px; color: #fd0;">${slot.quantity}</div>` : ''}
     `;
     el.style.borderColor = '#5a4a35';
@@ -148,9 +134,9 @@ export class InventoryPanel {
     const slot = this.slots[index];
     if (!slot) return;
 
-    const name = ITEM_NAMES[slot.itemId] || 'Item';
+    const def = this.itemDefs.get(slot.itemId);
+    const name = def?.name || 'Item';
 
-    // Create mini context menu
     const menu = document.createElement('div');
     menu.style.cssText = `
       position: fixed; left: ${event.clientX}px; top: ${event.clientY}px;
@@ -168,13 +154,20 @@ export class InventoryPanel {
       },
     ];
 
-    // Check if equippable (IDs 2,3,5,6,7 are equippable)
-    const equippableIds = [2, 3, 5, 6, 7];
-    if (equippableIds.includes(slot.itemId)) {
+    if (def?.equippable) {
       options.unshift({
         label: `Equip ${name}`,
         action: () => {
           this.network.sendRaw(encodePacket(ClientOpcode.PLAYER_EQUIP_ITEM, index));
+        },
+      });
+    }
+
+    if (def?.healAmount) {
+      options.unshift({
+        label: `Eat ${name}`,
+        action: () => {
+          this.network.sendRaw(encodePacket(ClientOpcode.PLAYER_EAT_ITEM, index));
         },
       });
     }
