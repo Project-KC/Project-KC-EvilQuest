@@ -1980,6 +1980,7 @@ let brushRadius = 3.2
     markTerrainDirty({ rebuildTexturePlanes: true, rebuildTextureOverlays: true })
     updateSelectionHelper()
     updateToolUI()
+    buildChunkGrid()
   }
 
   async function importChunk(data, offsetX, offsetZ) {
