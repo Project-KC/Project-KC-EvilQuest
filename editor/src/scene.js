@@ -960,11 +960,16 @@ let brushRadius = 3.2
         <button id="collStairBtn" class="tool-btn" style="flex:1;font-size:10px;padding:4px;">Stairs</button>
       </div>
       <div id="collWallPanel">
-        <div style="font-size:10px;color:rgba(255,255,255,0.4);margin-bottom:2px;">Select chunk</div>
-        <div id="chunkGrid" style="display:flex;flex-wrap:wrap;gap:2px;margin-bottom:6px;"></div>
-        <button id="autoWallsBtn" style="width:100%;margin-bottom:4px;font-size:11px;">Auto-detect walls (selected chunk)</button>
-        <button id="clearRegionWallsBtn" style="width:100%;margin-bottom:4px;font-size:11px;">Clear walls (selected chunk)</button>
-        <button id="autoWallsAllBtn" style="width:100%;margin-bottom:4px;font-size:11px;">Auto-detect ALL chunks</button>
+        <div style="font-size:10px;color:rgba(255,255,255,0.4);margin-bottom:2px;">Chunk</div>
+        <div style="display:flex;gap:4px;align-items:center;margin-bottom:6px;">
+          <label style="font-size:10px;color:#aaa;">X</label>
+          <input id="wallChunkX" type="number" min="0" value="0" style="width:40px;font-size:11px;padding:2px;">
+          <label style="font-size:10px;color:#aaa;">Z</label>
+          <input id="wallChunkZ" type="number" min="0" value="0" style="width:40px;font-size:11px;padding:2px;">
+          <span id="wallChunkInfo" style="font-size:9px;color:#666;"></span>
+        </div>
+        <button id="autoWallsBtn" style="width:100%;margin-bottom:4px;font-size:11px;">Auto-detect walls (this chunk)</button>
+        <button id="clearRegionWallsBtn" style="width:100%;margin-bottom:4px;font-size:11px;">Clear walls (this chunk)</button>
         <button id="clearAllWallsBtn" style="width:100%;margin-bottom:4px;font-size:11px;">Clear all walls (this floor)</button>
         <div style="display:flex;gap:3px;margin-bottom:6px;">
           <button id="wallDrawBtn" class="tool-btn active-tool" style="flex:1;font-size:10px;padding:4px;">Draw</button>
@@ -1193,42 +1198,33 @@ let brushRadius = 3.2
   })
 
   // --- Chunk-based auto-wall system ---
-  const CHUNK_SIZE = 32
-  let selectedWallChunk = null // { cx, cz }
+  const WALL_CHUNK_SIZE = 32
 
-  function buildChunkGrid() {
-    const grid = sidebar.querySelector('#chunkGrid')
-    if (!grid) return
-    grid.innerHTML = ''
-    const chunksX = Math.ceil(map.width / CHUNK_SIZE)
-    const chunksZ = Math.ceil(map.height / CHUNK_SIZE)
-    for (let cz = 0; cz < chunksZ; cz++) {
-      for (let cx = 0; cx < chunksX; cx++) {
-        const btn = document.createElement('button')
-        btn.className = 'tool-btn'
-        btn.style.cssText = 'width:28px;height:22px;font-size:9px;padding:0;'
-        btn.textContent = `${cx},${cz}`
-        btn.title = `Chunk (${cx},${cz}): tiles ${cx*CHUNK_SIZE}-${Math.min((cx+1)*CHUNK_SIZE-1, map.width-1)}, ${cz*CHUNK_SIZE}-${Math.min((cz+1)*CHUNK_SIZE-1, map.height-1)}`
-        btn.addEventListener('click', () => {
-          selectedWallChunk = { cx, cz }
-          for (const b of grid.querySelectorAll('.tool-btn')) b.classList.remove('active-tool')
-          btn.classList.add('active-tool')
-        })
-        grid.appendChild(btn)
-      }
-    }
+  function getSelectedWallChunk() {
+    const cx = parseInt(sidebar.querySelector('#wallChunkX')?.value) || 0
+    const cz = parseInt(sidebar.querySelector('#wallChunkZ')?.value) || 0
+    return { cx, cz }
   }
-  buildChunkGrid()
 
   function getChunkRegion(chunk) {
-    if (!chunk) return { x1: 0, z1: 0, x2: map.width - 1, z2: map.height - 1 }
     return {
-      x1: chunk.cx * CHUNK_SIZE,
-      z1: chunk.cz * CHUNK_SIZE,
-      x2: Math.min((chunk.cx + 1) * CHUNK_SIZE - 1, map.width - 1),
-      z2: Math.min((chunk.cz + 1) * CHUNK_SIZE - 1, map.height - 1)
+      x1: chunk.cx * WALL_CHUNK_SIZE,
+      z1: chunk.cz * WALL_CHUNK_SIZE,
+      x2: Math.min((chunk.cx + 1) * WALL_CHUNK_SIZE - 1, map.width - 1),
+      z2: Math.min((chunk.cz + 1) * WALL_CHUNK_SIZE - 1, map.height - 1)
     }
   }
+
+  function updateChunkInfo() {
+    const info = sidebar.querySelector('#wallChunkInfo')
+    if (!info) return
+    const chunk = getSelectedWallChunk()
+    const r = getChunkRegion(chunk)
+    info.textContent = `tiles ${r.x1}-${r.x2}, ${r.z1}-${r.z2}`
+  }
+  sidebar.querySelector('#wallChunkX')?.addEventListener('input', updateChunkInfo)
+  sidebar.querySelector('#wallChunkZ')?.addEventListener('input', updateChunkInfo)
+  updateChunkInfo()
 
   function autoDetectWallsInRegion(region) {
     let count = 0
@@ -1284,25 +1280,17 @@ let brushRadius = 3.2
   }
 
   sidebar.querySelector('#autoWallsBtn')?.addEventListener('click', () => {
-    if (!selectedWallChunk) { statusText.textContent = 'Select a chunk first'; return }
+    const chunk = getSelectedWallChunk()
     pushUndoState()
-    const region = getChunkRegion(selectedWallChunk)
+    const region = getChunkRegion(chunk)
     const count = autoDetectWallsInRegion(region)
     rebuildCollisionMeshes()
-    statusText.textContent = `Auto-detected ${count} wall edges in chunk (${selectedWallChunk.cx},${selectedWallChunk.cz})`
-  })
-
-  sidebar.querySelector('#autoWallsAllBtn')?.addEventListener('click', () => {
-    pushUndoState()
-    const region = getChunkRegion(null)
-    const count = autoDetectWallsInRegion(region)
-    rebuildCollisionMeshes()
-    statusText.textContent = `Auto-detected ${count} wall edges across entire map`
+    statusText.textContent = `Auto-detected ${count} wall edges in chunk (${chunk.cx},${chunk.cz})`
   })
 
   sidebar.querySelector('#clearRegionWallsBtn')?.addEventListener('click', () => {
-    if (!selectedWallChunk) { statusText.textContent = 'Select a chunk first'; return }
-    const region = getChunkRegion(selectedWallChunk)
+    const chunk = getSelectedWallChunk()
+    const region = getChunkRegion(chunk)
     pushUndoState()
     let count = 0
     for (let x = region.x1; x <= region.x2; x++) {
@@ -1314,7 +1302,7 @@ let brushRadius = 3.2
       }
     }
     rebuildCollisionMeshes()
-    statusText.textContent = `Cleared ${count} wall tiles in chunk (${selectedWallChunk.cx},${selectedWallChunk.cz})`
+    statusText.textContent = `Cleared ${count} wall tiles in chunk (${chunk.cx},${chunk.cz})`
   })
 
   const smoothModeBtn = sidebar.querySelector('#toggleSmoothMode')
@@ -1980,7 +1968,7 @@ let brushRadius = 3.2
     markTerrainDirty({ rebuildTexturePlanes: true, rebuildTextureOverlays: true })
     updateSelectionHelper()
     updateToolUI()
-    buildChunkGrid()
+    updateChunkInfo()
   }
 
   async function importChunk(data, offsetX, offsetZ) {
