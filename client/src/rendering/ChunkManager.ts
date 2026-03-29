@@ -27,19 +27,35 @@ function sampleNoise(x: number, z: number, scaleA = 1, scaleB = 1): number {
 
 interface RGB { r: number; g: number; b: number; }
 
+// Exposed cliff color for desert slope blending (warm dark brown rock)
+const CLIFF_R = 0.38, CLIFF_G = 0.28, CLIFF_B = 0.18;
+// Desert-family types that blend toward cliff color on steep slopes
+const DESERT_SLOPE_TYPES = new Set<GroundType>(['desert', 'sand', 'sandstone', 'drysand']);
+
 function groundColor(type: GroundType, shade: number): RGB {
+  let r: number, g: number, b: number;
   switch (type) {
-    case 'dirt':  return { r: 0.45 * shade, g: 0.31 * shade, b: 0.14 * shade };
-    case 'sand':  return { r: 0.72 * shade, g: 0.60 * shade, b: 0.24 * shade };
-    case 'path':  return { r: 0.42 * shade, g: 0.30 * shade, b: 0.13 * shade };
-    case 'road':      return { r: 0.47 * shade, g: 0.46 * shade, b: 0.43 * shade };
-    case 'water':     return { r: 0.40 * shade, g: 0.47 * shade, b: 0.66 * shade };
-    case 'desert':    return { r: 0.82 * shade, g: 0.72 * shade, b: 0.50 * shade };
-    case 'sandstone': return { r: 0.68 * shade, g: 0.48 * shade, b: 0.28 * shade };
-    case 'rock':      return { r: 0.42 * shade, g: 0.40 * shade, b: 0.36 * shade };
-    case 'drysand':   return { r: 0.62 * shade, g: 0.42 * shade, b: 0.22 * shade };
-    default:          return { r: 0.13 * shade, g: 0.43 * shade, b: 0.07 * shade }; // grass
+    case 'dirt':      r = 0.45; g = 0.31; b = 0.14; break;
+    case 'sand':      r = 0.72; g = 0.60; b = 0.24; break;
+    case 'path':      r = 0.42; g = 0.30; b = 0.13; break;
+    case 'road':      r = 0.47; g = 0.46; b = 0.43; break;
+    case 'water':     r = 0.40; g = 0.47; b = 0.66; break;
+    case 'desert':    r = 0.82; g = 0.72; b = 0.50; break;
+    case 'sandstone': r = 0.68; g = 0.48; b = 0.28; break;
+    case 'rock':      r = 0.42; g = 0.40; b = 0.36; break;
+    case 'drysand':   r = 0.62; g = 0.42; b = 0.22; break;
+    default:          r = 0.13; g = 0.43; b = 0.07; break; // grass
   }
+
+  // Desert-family types: steep slopes blend toward exposed cliff rock
+  if (DESERT_SLOPE_TYPES.has(type) && shade < 0.85) {
+    const t = Math.min(1.0, (0.85 - shade) * 2.5); // 0 at shade=0.85, 1 at shade=0.45
+    r = r * (1 - t) + CLIFF_R * t;
+    g = g * (1 - t) + CLIFF_G * t;
+    b = b * (1 - t) + CLIFF_B * t;
+  }
+
+  return { r: r * shade, g: g * shade, b: b * shade };
 }
 
 function getNoiseExtra(type: GroundType, vx: number, vz: number): number {

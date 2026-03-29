@@ -18,20 +18,35 @@ function sampleNoise(x, z, scaleA = 1, scaleB = 1) {
   ) * 0.5
 }
 
+// Exposed cliff color for desert slope blending
+const CLIFF_R = 0.38, CLIFF_G = 0.28, CLIFF_B = 0.18
+const DESERT_SLOPE_TYPES = new Set(['desert', 'sand', 'sandstone', 'drysand'])
+
 // Returns plain {r, g, b} object (no engine dependency)
 function groundColor(type, shade) {
-  if (type === 'dirt')         return { r: 0.45 * shade, g: 0.31 * shade, b: 0.14 * shade }
-  if (type === 'sand')         return { r: 0.72 * shade, g: 0.60 * shade, b: 0.24 * shade }
-  if (type === 'path')         return { r: 0.42 * shade, g: 0.30 * shade, b: 0.13 * shade }
-  if (type === 'road')         return { r: 0.47 * shade, g: 0.46 * shade, b: 0.43 * shade }
-  if (type === 'water')        return { r: 0.40 * shade, g: 0.47 * shade, b: 0.66 * shade }
-  if (type === 'desert')        return { r: 0.82 * shade, g: 0.72 * shade, b: 0.50 * shade }
-  if (type === 'sandstone')     return { r: 0.68 * shade, g: 0.48 * shade, b: 0.28 * shade }
-  if (type === 'rock')          return { r: 0.42 * shade, g: 0.40 * shade, b: 0.36 * shade }
-  if (type === 'drysand')       return { r: 0.62 * shade, g: 0.42 * shade, b: 0.22 * shade }
-  if (type === 'dungeon-floor') return { r: 0.22 * shade, g: 0.17 * shade, b: 0.11 * shade }
-  if (type === 'dungeon-rock')  return { r: 0.28 * shade, g: 0.20 * shade, b: 0.12 * shade }
-  return { r: 0.13 * shade, g: 0.43 * shade, b: 0.07 * shade } // grass
+  let r, g, b
+  if (type === 'dirt')              { r = 0.45; g = 0.31; b = 0.14 }
+  else if (type === 'sand')         { r = 0.72; g = 0.60; b = 0.24 }
+  else if (type === 'path')         { r = 0.42; g = 0.30; b = 0.13 }
+  else if (type === 'road')         { r = 0.47; g = 0.46; b = 0.43 }
+  else if (type === 'water')        { r = 0.40; g = 0.47; b = 0.66 }
+  else if (type === 'desert')       { r = 0.82; g = 0.72; b = 0.50 }
+  else if (type === 'sandstone')    { r = 0.68; g = 0.48; b = 0.28 }
+  else if (type === 'rock')         { r = 0.42; g = 0.40; b = 0.36 }
+  else if (type === 'drysand')      { r = 0.62; g = 0.42; b = 0.22 }
+  else if (type === 'dungeon-floor') { r = 0.22; g = 0.17; b = 0.11 }
+  else if (type === 'dungeon-rock') { r = 0.28; g = 0.20; b = 0.12 }
+  else                              { r = 0.13; g = 0.43; b = 0.07 } // grass
+
+  // Desert-family types: steep slopes blend toward exposed cliff rock
+  if (DESERT_SLOPE_TYPES.has(type) && shade < 0.85) {
+    const t = Math.min(1.0, (0.85 - shade) * 2.5)
+    r = r * (1 - t) + CLIFF_R * t
+    g = g * (1 - t) + CLIFF_G * t
+    b = b * (1 - t) + CLIFF_B * t
+  }
+
+  return { r: r * shade, g: g * shade, b: b * shade }
 }
 
 function colorMultiplyScalar(c, s) {
