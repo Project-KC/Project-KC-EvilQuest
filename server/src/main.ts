@@ -508,6 +508,16 @@ const server = Bun.serve<SocketData>({
         return new Response('Forbidden', { status: 403 });
       }
       try {
+        // For map.json requests, reassemble placedObjects from chunk files
+        if (mapPath.endsWith('/map.json')) {
+          const mapDir = resolve(filePath, '..');
+          const mapFile: KCMapFile = JSON.parse(readFileSync(filePath, 'utf-8'));
+          const chunked = loadChunkedObjects(mapDir);
+          if (chunked) mapFile.placedObjects = chunked;
+          return new Response(JSON.stringify(mapFile), {
+            headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
+          });
+        }
         const content = readFileSync(filePath);
         return new Response(content, {
           headers: {
