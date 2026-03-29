@@ -1,14 +1,19 @@
 // Binary protocol helpers for game socket
 // All game packets: [opcode (1 byte), ...payload]
 
+// Shared encode buffer — avoids per-call allocation of DataView.
+// Max packet: 1 opcode + 10 int16 values = 21 bytes. 32 gives headroom.
+const _encBuf = new ArrayBuffer(32);
+const _encView = new DataView(_encBuf);
+const _encU8 = new Uint8Array(_encBuf);
+
 export function encodePacket(opcode: number, ...values: number[]): Uint8Array {
-  const buf = new Uint8Array(1 + values.length * 2);
-  const view = new DataView(buf.buffer);
-  view.setUint8(0, opcode);
+  const len = 1 + values.length * 2;
+  _encView.setUint8(0, opcode);
   for (let i = 0; i < values.length; i++) {
-    view.setInt16(1 + i * 2, values[i]);
+    _encView.setInt16(1 + i * 2, values[i]);
   }
-  return buf;
+  return _encU8.slice(0, len);
 }
 
 export function decodePacket(data: ArrayBuffer): { opcode: number; values: number[] } {

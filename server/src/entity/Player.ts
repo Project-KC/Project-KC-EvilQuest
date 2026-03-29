@@ -30,6 +30,9 @@ export class Player extends Entity {
   // Chunk tracking
   currentChunkX: number = -1;
   currentChunkZ: number = -1;
+  /** Previous chunk position for broadcastSync — when this changes, viewer needs full resync */
+  lastBroadcastChunkX: number = -9999;
+  lastBroadcastChunkZ: number = -9999;
 
   // Combat
   attackTarget: Entity | null = null;

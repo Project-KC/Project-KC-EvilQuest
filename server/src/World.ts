@@ -11,6 +11,20 @@ import { processPlayerCombat, processNpcCombat, rollLoot } from './combat/Combat
 import { broadcastPlayerInfo } from './network/ChatSocket';
 import { ServerChunkManager } from './ChunkManager';
 
+/** Map string IDs to small integers for blockedObjectTiles encoding */
+const mapIdRegistry: Map<string, number> = new Map();
+let nextMapIdx = 0;
+function getMapIdx(mapId: string): number {
+  let idx = mapIdRegistry.get(mapId);
+  if (idx === undefined) { idx = nextMapIdx++; mapIdRegistry.set(mapId, idx); }
+  return idx;
+}
+/** Encode map+tile into a single number. Supports tiles up to 4095x4095 with up to 16 maps. */
+function blockedKey(mapIdx: number, tileX: number, tileZ: number): number {
+  return (mapIdx << 24) | (tileX << 12) | tileZ;
+}
+const HITPOINTS_SKILL_INDEX = ALL_SKILLS.indexOf('hitpoints' as SkillId);
+
 export interface GroundItem {
   id: number;
   itemId: number;
@@ -32,8 +46,8 @@ export class World {
   readonly npcs: Map<number, Npc> = new Map();
   readonly groundItems: Map<number, GroundItem> = new Map();
   readonly worldObjects: Map<number, WorldObject> = new Map();
-  /** Tiles blocked by non-depleted world objects, keyed by `mapId:tileX,tileZ` */
-  private blockedObjectTiles: Set<string> = new Set();
+  /** Tiles blocked by non-depleted world objects, encoded as numeric key */
+  private blockedObjectTiles: Set<number> = new Set();
 
   private currentTick: number = 0;
   private tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -41,6 +55,8 @@ export class World {
 
   // Player combat targets (playerId -> npcId)
   private playerCombatTargets: Map<number, number> = new Map();
+  // Reverse lookup: npcId -> set of playerIds targeting it (kept in sync with playerCombatTargets)
+  private npcTargetedBy: Map<number, Set<number>> = new Map();
 
   // Skilling: player -> { objectId, action, ticksLeft }
   private skillingActions: Map<number, { objectId: number; action: string; ticksLeft: number }> = new Map();
@@ -77,7 +93,7 @@ export class World {
     }
     for (const [id, obj] of this.worldObjects) {
       if (obj.mapLevel === mapId) {
-        this.blockedObjectTiles.delete(`${mapId}:${Math.floor(obj.x)},${Math.floor(obj.z)}`);
+        this.blockedObjectTiles.delete(this.blockedKeyFor(mapId, obj.x, obj.z));
         this.worldObjects.delete(id);
       }
     }
@@ -111,7 +127,7 @@ export class World {
       if (spawn.rotY != null) obj.rotationY = spawn.rotY;
       this.worldObjects.set(obj.id, obj);
       if (objDef.blocking) {
-        this.blockedObjectTiles.add(`${mapId}:${Math.floor(spawn.x)},${Math.floor(spawn.z)}`);
+        this.blockedObjectTiles.add(this.blockedKeyFor(mapId, spawn.x, spawn.z));
       }
       cm.addEntity(obj.id, spawn.x, spawn.z);
     }
@@ -131,6 +147,7 @@ export class World {
         despawnTimer: -1,
       };
       this.groundItems.set(groundItem.id, groundItem);
+      cm.addEntity(groundItem.id, groundItem.x, groundItem.z);
     }
 
     // Re-register players on this map
@@ -153,25 +170,21 @@ export class World {
     const player = this.players.get(playerId);
     if (!player) return;
     const mapId = player.currentMapLevel;
-    for (const [, other] of this.players) {
-      if (other.id !== player.id && other.currentMapLevel === mapId && this.isNearby(player, other.position.x, other.position.y)) {
-        this.sendPlayerUpdate(player, other);
-      }
-    }
-    for (const [, npc] of this.npcs) {
-      if (!npc.dead && npc.currentMapLevel === mapId && this.isNearby(player, npc.position.x, npc.position.y)) {
-        this.sendNpcUpdate(player, npc);
-      }
-    }
-    for (const [, obj] of this.worldObjects) {
-      if (obj.mapLevel === mapId && this.isNearby(player, obj.x, obj.z)) {
-        this.sendWorldObjectUpdate(player, obj);
-      }
-    }
-    for (const [, item] of this.groundItems) {
-      if (item.mapLevel === mapId && this.isNearby(player, item.x, item.z)) {
-        this.sendGroundItemUpdate(player, item);
-      }
+    const cm = this.chunkManagers.get(mapId);
+    if (!cm) return;
+
+    // Use chunk manager to get all nearby entities (players, NPCs, world objects, ground items)
+    const nearbyIds = cm.getEntitiesNear(player.position.x, player.position.y);
+    for (const eid of nearbyIds) {
+      if (eid === player.id) continue;
+      const other = this.players.get(eid);
+      if (other) { this.sendPlayerUpdate(player, other); continue; }
+      const npc = this.npcs.get(eid);
+      if (npc && !npc.dead) { this.sendNpcUpdate(player, npc); continue; }
+      const obj = this.worldObjects.get(eid);
+      if (obj) { this.sendWorldObjectUpdate(player, obj); continue; }
+      const item = this.groundItems.get(eid);
+      if (item) { this.sendGroundItemUpdate(player, item); continue; }
     }
     this.sendSkills(player);
     this.sendInventory(player);
@@ -240,8 +253,10 @@ export class World {
         if (spawn.rotY != null) obj.rotationY = spawn.rotY;
         this.worldObjects.set(obj.id, obj);
         if (objDef.blocking) {
-          this.blockedObjectTiles.add(`${mapId}:${Math.floor(spawn.x)},${Math.floor(spawn.z)}`);
+          this.blockedObjectTiles.add(this.blockedKeyFor(mapId, spawn.x, spawn.z));
         }
+        const cm = this.chunkManagers.get(mapId);
+        if (cm) cm.addEntity(obj.id, spawn.x, spawn.z);
       }
       console.log(`Spawned objects for map '${mapId}'`);
     }
@@ -262,6 +277,8 @@ export class World {
           despawnTimer: -1, // permanent spawn
         };
         this.groundItems.set(groundItem.id, groundItem);
+        const cm = this.chunkManagers.get(mapId);
+        if (cm) cm.addEntity(groundItem.id, groundItem.x, groundItem.z);
         itemCount++;
       }
     }
@@ -312,6 +329,7 @@ export class World {
     // Register with chunk manager
     const cm = this.chunkManagers.get(player.currentMapLevel)!;
     cm.addEntity(player.id, player.position.x, player.position.y);
+    cm.registerPlayer(player.id);
     player.currentChunkX = Math.floor(player.position.x / CHUNK_SIZE);
     player.currentChunkZ = Math.floor(player.position.y / CHUNK_SIZE);
 
@@ -349,17 +367,12 @@ export class World {
     if (cm) cm.removeEntity(player.id);
 
     this.players.delete(playerId);
-    this.playerCombatTargets.delete(playerId);
+    this.clearCombatTarget(playerId);
     this.skillingActions.delete(playerId);
     console.log(`Player "${player.name}" left`);
 
     // Notify nearby players
-    for (const [, other] of this.players) {
-      if (other.currentMapLevel === player.currentMapLevel &&
-          this.isNearby(other, player.position.x, player.position.y)) {
-        this.sendToPlayer(other, ServerOpcode.ENTITY_DEATH, playerId);
-      }
-    }
+    this.broadcastNearby(player.currentMapLevel, player.position.x, player.position.y, ServerOpcode.ENTITY_DEATH, playerId);
   }
 
   /** Check if a world position is within chunk load radius of a player */
@@ -387,14 +400,14 @@ export class World {
     if (isOpen) {
       // Close door — restore wall collision
       map.setWall(tx, tz, currentWall | edgeMask);
-      this.blockedObjectTiles.add(`${obj.mapLevel}:${tx},${tz}`);
+      this.blockedObjectTiles.add(blockedKey(getMapIdx(obj.mapLevel), tx, tz));
       obj.depleted = false;
       // Update action to "Open"
       obj.def = { ...obj.def, actions: ['Open', 'Examine'] };
     } else {
       // Open door — remove wall collision
       map.setWall(tx, tz, currentWall & ~edgeMask);
-      this.blockedObjectTiles.delete(`${obj.mapLevel}:${tx},${tz}`);
+      this.blockedObjectTiles.delete(blockedKey(getMapIdx(obj.mapLevel), tx, tz));
       obj.depleted = true;
       obj.respawnTimer = obj.def.respawnTime ?? 15;
       // Update action to "Close"
@@ -402,11 +415,7 @@ export class World {
     }
 
     // Broadcast state to nearby players
-    for (const [, p] of this.players) {
-      if (p.currentMapLevel === obj.mapLevel && this.isNearby(p, obj.x, obj.z)) {
-        this.sendToPlayer(p, ServerOpcode.WORLD_OBJECT_DEPLETED, obj.id, obj.depleted ? 1 : 0);
-      }
-    }
+    this.broadcastNearby(obj.mapLevel, obj.x, obj.z, ServerOpcode.WORLD_OBJECT_DEPLETED, obj.id, obj.depleted ? 1 : 0);
   }
 
   private findBestTool(player: Player, toolType: string, playerSkillLevel: number): ItemDef | null {
@@ -436,11 +445,57 @@ export class World {
            Math.abs(cz - player.currentChunkZ) <= CHUNK_LOAD_RADIUS;
   }
 
+  /** Send an opcode to all players near a world position on a given map */
+  private broadcastNearby(mapId: string, worldX: number, worldZ: number, opcode: ServerOpcode, ...values: number[]): void {
+    const cm = this.chunkManagers.get(mapId);
+    if (!cm) return;
+    const playerIds = cm.getPlayersNear(worldX, worldZ);
+    for (const pid of playerIds) {
+      const p = this.players.get(pid);
+      if (p) this.sendToPlayer(p, opcode, ...values);
+    }
+  }
+
+  /** Call fn for each player near a world position on a given map */
+  private forEachPlayerNear(mapId: string, worldX: number, worldZ: number, fn: (p: Player) => void): void {
+    const cm = this.chunkManagers.get(mapId);
+    if (!cm) return;
+    const playerIds = cm.getPlayersNear(worldX, worldZ);
+    for (const pid of playerIds) {
+      const p = this.players.get(pid);
+      if (p) fn(p);
+    }
+  }
+
+  private setCombatTarget(playerId: number, npcId: number): void {
+    this.clearCombatTarget(playerId);
+    this.playerCombatTargets.set(playerId, npcId);
+    let set = this.npcTargetedBy.get(npcId);
+    if (!set) { set = new Set(); this.npcTargetedBy.set(npcId, set); }
+    set.add(playerId);
+  }
+
+  private clearCombatTarget(playerId: number): void {
+    const oldNpc = this.playerCombatTargets.get(playerId);
+    if (oldNpc !== undefined) {
+      const set = this.npcTargetedBy.get(oldNpc);
+      if (set) {
+        set.delete(playerId);
+        if (set.size === 0) this.npcTargetedBy.delete(oldNpc);
+      }
+      this.playerCombatTargets.delete(playerId);
+    }
+  }
+
+  private blockedKeyFor(mapId: string, x: number, z: number): number {
+    return blockedKey(getMapIdx(mapId), Math.floor(x), Math.floor(z));
+  }
+
   handlePlayerMove(playerId: number, path: { x: number; z: number }[]): void {
     const player = this.players.get(playerId);
     if (!player) return;
 
-    this.playerCombatTargets.delete(playerId);
+    this.clearCombatTarget(playerId);
     player.attackTarget = null;
     player.pendingInteraction = null;
     this.cancelSkilling(playerId);
@@ -453,7 +508,7 @@ export class World {
     for (const step of path) {
       const pFloor = player.currentFloor;
       const tileBlocked = pFloor === 0
-        ? (map.isBlocked(step.x, step.z) || this.blockedObjectTiles.has(`${mapId}:${Math.floor(step.x)},${Math.floor(step.z)}`))
+        ? (map.isBlocked(step.x, step.z) || this.blockedObjectTiles.has(this.blockedKeyFor(mapId, step.x, step.z)))
         : map.isTileBlockedOnFloor(Math.floor(step.x), Math.floor(step.z), pFloor);
       const wallBlocked = pFloor === 0
         ? map.isWallBlocked(prevX, prevZ, step.x, step.z)
@@ -477,7 +532,7 @@ export class World {
     if (npc.currentMapLevel !== player.currentMapLevel) return;
 
     player.attackTarget = npc;
-    this.playerCombatTargets.set(playerId, npcId);
+    this.setCombatTarget(playerId, npcId);
 
     const dx = npc.position.x - player.position.x;
     const dz = npc.position.y - player.position.y;
@@ -516,12 +571,9 @@ export class World {
 
     if (player.addItem(item.itemId, item.quantity)) {
       this.groundItems.delete(groundItemId);
-      // Notify nearby players
-      for (const [, p] of this.players) {
-        if (p.currentMapLevel === item.mapLevel && this.isNearby(p, item.x, item.z)) {
-          this.sendToPlayer(p, ServerOpcode.GROUND_ITEM_SYNC, groundItemId, 0, 0, 0, 0);
-        }
-      }
+      const itemCm = this.chunkManagers.get(item.mapLevel);
+      if (itemCm) itemCm.removeEntity(groundItemId);
+      this.broadcastNearby(item.mapLevel, item.x, item.z, ServerOpcode.GROUND_ITEM_SYNC, groundItemId, 0, 0, 0, 0);
       this.sendInventory(player);
     }
   }
@@ -543,12 +595,10 @@ export class World {
       despawnTimer: 200,
     };
     this.groundItems.set(groundItem.id, groundItem);
+    const dropCm = this.chunkManagers.get(groundItem.mapLevel);
+    if (dropCm) dropCm.addEntity(groundItem.id, groundItem.x, groundItem.z);
 
-    for (const [, p] of this.players) {
-      if (p.currentMapLevel === groundItem.mapLevel && this.isNearby(p, groundItem.x, groundItem.z)) {
-        this.sendGroundItemUpdate(p, groundItem);
-      }
-    }
+    this.forEachPlayerNear(groundItem.mapLevel, groundItem.x, groundItem.z, p => this.sendGroundItemUpdate(p, groundItem));
     this.sendInventory(player);
   }
 
@@ -581,7 +631,7 @@ export class World {
     // Stop movement
     player.moveQueue = [];
     player.attackTarget = null;
-    this.playerCombatTargets.delete(playerId);
+    this.clearCombatTarget(playerId);
 
     const action = obj.def.actions[actionIndex];
     if (!action) return;
@@ -669,7 +719,7 @@ export class World {
         }
 
         this.sendInventory(player);
-        this.sendSkills(player);
+        if (skillIdx >= 0) this.sendSingleSkill(player, skillIdx);
         return;
       }
       // No valid recipe found - player doesn't have required items/level
@@ -778,26 +828,27 @@ export class World {
       if (npc.dead) {
         if (npc.tickRespawn()) {
           // Respawned — notify nearby players
-          for (const [, p] of this.players) {
-            if (p.currentMapLevel === npc.currentMapLevel && this.isNearby(p, npc.position.x, npc.position.y)) {
-              this.sendNpcUpdate(p, npc);
-            }
-          }
+          this.forEachPlayerNear(npc.currentMapLevel, npc.position.x, npc.position.y, p => this.sendNpcUpdate(p, npc));
         }
         continue;
       }
 
       const map = this.getMap(npc.currentMapLevel);
 
-      // Aggressive NPC targeting
+      // Aggressive NPC targeting — use chunk manager to find nearby players
       if (npc.def.aggressive && !npc.combatTarget) {
-        for (const [, player] of this.players) {
-          if (player.currentMapLevel !== npc.currentMapLevel) continue;
-          const dx = Math.abs(npc.position.x - player.position.x);
-          const dz = Math.abs(npc.position.y - player.position.y);
-          if (dx <= 5 && dz <= 5) {
-            npc.combatTarget = player;
-            break;
+        const cm = this.chunkManagers.get(npc.currentMapLevel);
+        if (cm) {
+          const nearbyPlayerIds = cm.getPlayersNear(npc.position.x, npc.position.y);
+          for (const pid of nearbyPlayerIds) {
+            const player = this.players.get(pid);
+            if (!player) continue;
+            const dx = Math.abs(npc.position.x - player.position.x);
+            const dz = Math.abs(npc.position.y - player.position.y);
+            if (dx <= 5 && dz <= 5) {
+              npc.combatTarget = player;
+              break;
+            }
           }
         }
       }
@@ -819,7 +870,7 @@ export class World {
       const player = this.players.get(playerId);
       const npc = this.npcs.get(npcId);
       if (!player || !npc || npc.dead || npc.currentMapLevel !== player.currentMapLevel) {
-        this.playerCombatTargets.delete(playerId);
+        this.clearCombatTarget(playerId);
         continue;
       }
 
@@ -869,20 +920,17 @@ export class World {
           }
         }
 
-        if (result.xpDrops.length > 0) {
-          this.sendSkills(player);
+        for (const xp of result.xpDrops) {
+          const skillIdx = ALL_SKILLS.indexOf(xp.skill as SkillId);
+          if (skillIdx >= 0) this.sendSingleSkill(player, skillIdx);
         }
 
         if (!npc.alive) {
           npc.die();
-          this.playerCombatTargets.delete(playerId);
+          this.clearCombatTarget(playerId);
 
           // Notify nearby players of NPC death
-          for (const [, p] of this.players) {
-            if (p.currentMapLevel === npc.currentMapLevel && this.isNearby(p, npc.position.x, npc.position.y)) {
-              this.sendToPlayer(p, ServerOpcode.ENTITY_DEATH, npc.id);
-            }
-          }
+          this.broadcastNearby(npc.currentMapLevel, npc.position.x, npc.position.y, ServerOpcode.ENTITY_DEATH, npc.id);
 
           // Drop loot
           const loot = rollLoot(npc);
@@ -897,11 +945,9 @@ export class World {
               despawnTimer: 200,
             };
             this.groundItems.set(groundItem.id, groundItem);
-            for (const [, p] of this.players) {
-              if (p.currentMapLevel === groundItem.mapLevel && this.isNearby(p, groundItem.x, groundItem.z)) {
-                this.sendGroundItemUpdate(p, groundItem);
-              }
-            }
+            const lootCm = this.chunkManagers.get(groundItem.mapLevel);
+            if (lootCm) lootCm.addEntity(groundItem.id, groundItem.x, groundItem.z);
+            this.forEachPlayerNear(groundItem.mapLevel, groundItem.x, groundItem.z, p => this.sendGroundItemUpdate(p, groundItem));
           }
         }
       }
@@ -923,7 +969,7 @@ export class World {
         this.sendToPlayer(target, ServerOpcode.PLAYER_STATS,
           target.health, target.maxHealth
         );
-        this.sendSkills(target);
+        this.sendSingleSkill(target, HITPOINTS_SKILL_INDEX);
 
         if (!target.alive) {
           const map = this.getMap(target.currentMapLevel);
@@ -935,42 +981,41 @@ export class World {
           target.moveQueue = [];
           target.attackTarget = null;
           npc.combatTarget = null;
-          this.playerCombatTargets.delete(target.id);
+          this.clearCombatTarget(target.id);
 
           this.sendToPlayer(target, ServerOpcode.PLAYER_STATS,
             target.health, target.maxHealth
           );
-          this.sendSkills(target);
+          this.sendSkills(target);  // Full sync on respawn
         }
       }
     }
 
-    // NPC health regeneration
+    // NPC health regeneration — use npcTargetedBy reverse map for O(1) combat check
     if (this.currentTick % 10 === 0) {
       for (const [, npc] of this.npcs) {
         if (npc.dead || npc.health >= npc.maxHealth) continue;
         if (npc.combatTarget) continue;
-        let inCombat = false;
-        for (const [, npcId] of this.playerCombatTargets) {
-          if (npcId === npc.id) { inCombat = true; break; }
-        }
-        if (inCombat) continue;
+        if (this.npcTargetedBy.has(npc.id)) continue;
         npc.heal(1);
       }
 
-      // Player health regeneration
+      // Player health regeneration — check if any NPC targets this player
+      // Build a quick set of players being attacked by NPCs (only active combat NPCs)
+      const playersUnderAttack = new Set<number>();
+      for (const [, npc] of this.npcs) {
+        if (!npc.dead && npc.combatTarget) {
+          playersUnderAttack.add((npc.combatTarget as Player).id);
+        }
+      }
       for (const [playerId, player] of this.players) {
         if (!player.alive || player.health >= player.maxHealth) continue;
         if (this.playerCombatTargets.has(playerId)) continue;
-        let inCombat = false;
-        for (const [, npc] of this.npcs) {
-          if (npc.combatTarget === player) { inCombat = true; break; }
-        }
-        if (inCombat) continue;
+        if (playersUnderAttack.has(playerId)) continue;
         player.heal(1);
         player.skills.hitpoints.currentLevel = player.health;
         this.sendToPlayer(player, ServerOpcode.PLAYER_STATS, player.health, player.maxHealth);
-        this.sendSkills(player);
+        this.sendSingleSkill(player, HITPOINTS_SKILL_INDEX);
       }
     }
 
@@ -1020,20 +1065,18 @@ export class World {
           }
 
           this.sendInventory(player);
-          this.sendSkills(player);
+          // Only send the skill that changed
+          const harvestSkillIdx = ALL_SKILLS.indexOf(skillId);
+          if (harvestSkillIdx >= 0) this.sendSingleSkill(player, harvestSkillIdx);
 
           // Roll depletion
           if (obj.def.depletionChance && Math.random() < obj.def.depletionChance) {
             obj.deplete();
             if (obj.def.blocking) {
-              this.blockedObjectTiles.delete(`${obj.mapLevel}:${Math.floor(obj.x)},${Math.floor(obj.z)}`);
+              this.blockedObjectTiles.delete(this.blockedKeyFor(obj.mapLevel, obj.x, obj.z));
             }
             // Notify all nearby players
-            for (const [, p] of this.players) {
-              if (p.currentMapLevel === obj.mapLevel && this.isNearby(p, obj.x, obj.z)) {
-                this.sendToPlayer(p, ServerOpcode.WORLD_OBJECT_DEPLETED, obj.id, 1);
-              }
-            }
+            this.broadcastNearby(obj.mapLevel, obj.x, obj.z, ServerOpcode.WORLD_OBJECT_DEPLETED, obj.id, 1);
             this.skillingActions.delete(playerId);
             this.sendToPlayer(player, ServerOpcode.SKILLING_STOP, 0);
           } else {
@@ -1052,7 +1095,7 @@ export class World {
     for (const [, obj] of this.worldObjects) {
       if (obj.tickRespawn()) {
         if (obj.def.blocking) {
-          this.blockedObjectTiles.add(`${obj.mapLevel}:${Math.floor(obj.x)},${Math.floor(obj.z)}`);
+          this.blockedObjectTiles.add(this.blockedKeyFor(obj.mapLevel, obj.x, obj.z));
         }
         // Door auto-close: restore wall collision and action text
         if (obj.def.category === 'door') {
@@ -1066,11 +1109,7 @@ export class World {
           obj.def = { ...obj.def, actions: ['Open', 'Examine'] };
         }
         // Respawned — notify nearby players
-        for (const [, p] of this.players) {
-          if (p.currentMapLevel === obj.mapLevel && this.isNearby(p, obj.x, obj.z)) {
-            this.sendToPlayer(p, ServerOpcode.WORLD_OBJECT_DEPLETED, obj.id, 0);
-          }
-        }
+        this.broadcastNearby(obj.mapLevel, obj.x, obj.z, ServerOpcode.WORLD_OBJECT_DEPLETED, obj.id, 0);
       }
     }
 
@@ -1080,11 +1119,9 @@ export class World {
       item.despawnTimer--;
       if (item.despawnTimer <= 0) {
         this.groundItems.delete(id);
-        for (const [, p] of this.players) {
-          if (p.currentMapLevel === item.mapLevel && this.isNearby(p, item.x, item.z)) {
-            this.sendToPlayer(p, ServerOpcode.GROUND_ITEM_SYNC, id, 0, 0, 0, 0);
-          }
-        }
+        const despawnCm = this.chunkManagers.get(item.mapLevel);
+        if (despawnCm) despawnCm.removeEntity(id);
+        this.broadcastNearby(item.mapLevel, item.x, item.z, ServerOpcode.GROUND_ITEM_SYNC, id, 0, 0, 0, 0);
       }
     }
 
@@ -1133,23 +1170,24 @@ export class World {
     // Save player state
     this.db.savePlayerState(player.accountId, player);
 
-    // Remove from old map's chunk manager
+    // Get nearby entities before removing from chunk manager (for cleanup)
     const oldCm = this.chunkManagers.get(oldMap);
-    if (oldCm) oldCm.removeEntity(player.id);
+    let oldNearbyIds: Set<number> | undefined;
+    if (oldCm) {
+      oldNearbyIds = oldCm.getEntitiesNear(player.position.x, player.position.y);
+      oldCm.removeEntity(player.id);
+    }
 
     // Send ENTITY_DEATH for all entities the player was seeing (clean slate)
-    for (const [, other] of this.players) {
-      if (other.id !== player.id && other.currentMapLevel === oldMap) {
-        this.sendToPlayer(player, ServerOpcode.ENTITY_DEATH, other.id);
+    if (oldNearbyIds) {
+      for (const eid of oldNearbyIds) {
+        if (eid === player.id) continue;
+        this.sendToPlayer(player, ServerOpcode.ENTITY_DEATH, eid);
         // Also tell the other player this player disappeared
-        if (this.isNearby(other, player.position.x, player.position.y)) {
+        const other = this.players.get(eid);
+        if (other) {
           this.sendToPlayer(other, ServerOpcode.ENTITY_DEATH, player.id);
         }
-      }
-    }
-    for (const [, npc] of this.npcs) {
-      if (!npc.dead && npc.currentMapLevel === oldMap) {
-        this.sendToPlayer(player, ServerOpcode.ENTITY_DEATH, npc.id);
       }
     }
 
@@ -1159,7 +1197,7 @@ export class World {
     player.position.y = transition.targetZ;
     player.moveQueue = [];
     player.attackTarget = null;
-    this.playerCombatTargets.delete(player.id);
+    this.clearCombatTarget(player.id);
 
     // Update chunk position
     player.currentChunkX = Math.floor(player.position.x / CHUNK_SIZE);
@@ -1167,31 +1205,31 @@ export class World {
 
     // Add to new map's chunk manager
     const newCm = this.chunkManagers.get(newMap);
-    if (newCm) newCm.addEntity(player.id, player.position.x, player.position.y);
+    if (newCm) {
+      newCm.addEntity(player.id, player.position.x, player.position.y);
+      newCm.registerPlayer(player.id);
+    }
 
     // Send MAP_CHANGE packet
     this.sendMapChange(player, newMap);
 
-    // Send nearby entities on new map
-    for (const [, other] of this.players) {
-      if (other.id !== player.id && other.currentMapLevel === newMap && this.isNearby(player, other.position.x, other.position.y)) {
-        this.sendPlayerUpdate(player, other);
-        this.sendPlayerUpdate(other, player);
-      }
-    }
-    for (const [, npc] of this.npcs) {
-      if (!npc.dead && npc.currentMapLevel === newMap && this.isNearby(player, npc.position.x, npc.position.y)) {
-        this.sendNpcUpdate(player, npc);
-      }
-    }
-    for (const [, item] of this.groundItems) {
-      if (item.mapLevel === newMap && this.isNearby(player, item.x, item.z)) {
-        this.sendGroundItemUpdate(player, item);
-      }
-    }
-    for (const [, obj] of this.worldObjects) {
-      if (obj.mapLevel === newMap && this.isNearby(player, obj.x, obj.z)) {
-        this.sendWorldObjectUpdate(player, obj);
+    // Send nearby entities on new map using chunk manager (all entity types registered)
+    if (newCm) {
+      const nearbyIds = newCm.getEntitiesNear(player.position.x, player.position.y);
+      for (const eid of nearbyIds) {
+        if (eid === player.id) continue;
+        const other = this.players.get(eid);
+        if (other) {
+          this.sendPlayerUpdate(player, other);
+          this.sendPlayerUpdate(other, player);
+          continue;
+        }
+        const npc = this.npcs.get(eid);
+        if (npc && !npc.dead) { this.sendNpcUpdate(player, npc); continue; }
+        const obj = this.worldObjects.get(eid);
+        if (obj) { this.sendWorldObjectUpdate(player, obj); continue; }
+        const item = this.groundItems.get(eid);
+        if (item) { this.sendGroundItemUpdate(player, item); continue; }
       }
     }
 
@@ -1212,32 +1250,68 @@ export class World {
   }
 
   private broadcastSync(): void {
-    for (const [, viewer] of this.players) {
-      // Sync players on same map within chunk range
-      for (const [, subject] of this.players) {
-        if (subject.currentMapLevel !== viewer.currentMapLevel) continue;
-        if (!this.isNearby(viewer, subject.position.x, subject.position.y) && subject.id !== viewer.id) continue;
-        this.sendPlayerUpdate(viewer, subject);
+    // Phase 1: Mark dirty entities (position or health changed since last sync)
+    // Use rounded coords to match what we actually send (x*10 truncated to int)
+    for (const [, player] of this.players) {
+      const sx = Math.round(player.position.x * 10);
+      const sz = Math.round(player.position.y * 10);
+      if (sx !== player.lastSyncX || sz !== player.lastSyncZ || player.health !== player.lastSyncHealth) {
+        player.lastSyncX = sx;
+        player.lastSyncZ = sz;
+        player.lastSyncHealth = player.health;
+        player.syncDirty = true;
       }
-      // Sync NPCs on same map within chunk range
-      for (const [, npc] of this.npcs) {
-        if (npc.dead || npc.currentMapLevel !== viewer.currentMapLevel) continue;
-        if (!this.isNearby(viewer, npc.position.x, npc.position.y)) continue;
-        this.sendNpcUpdate(viewer, npc);
-      }
-      // World objects don't move, but we sync them periodically for new players entering chunk range
-      // (Initial sync is done in addPlayer; this handles chunk boundary crossings)
     }
+    for (const [, npc] of this.npcs) {
+      if (npc.dead) continue;
+      const sx = Math.round(npc.position.x * 10);
+      const sz = Math.round(npc.position.y * 10);
+      if (sx !== npc.lastSyncX || sz !== npc.lastSyncZ || npc.health !== npc.lastSyncHealth) {
+        npc.lastSyncX = sx;
+        npc.lastSyncZ = sz;
+        npc.lastSyncHealth = npc.health;
+        npc.syncDirty = true;
+      }
+    }
+
+    // Phase 2: Send dirty entities to nearby viewers
+    for (const [, viewer] of this.players) {
+      const cm = this.chunkManagers.get(viewer.currentMapLevel);
+      if (!cm) continue;
+
+      // If viewer moved to a new chunk, they need a full sync of all nearby entities
+      const viewerChunkChanged = viewer.currentChunkX !== viewer.lastBroadcastChunkX ||
+                                  viewer.currentChunkZ !== viewer.lastBroadcastChunkZ;
+      if (viewerChunkChanged) {
+        viewer.lastBroadcastChunkX = viewer.currentChunkX;
+        viewer.lastBroadcastChunkZ = viewer.currentChunkZ;
+      }
+
+      const nearbyIds = cm.getEntitiesNearChunk(viewer.currentChunkX, viewer.currentChunkZ);
+
+      for (const eid of nearbyIds) {
+        const subject = this.players.get(eid);
+        if (subject) {
+          if (subject.syncDirty || viewerChunkChanged) this.sendPlayerUpdate(viewer, subject);
+          continue;
+        }
+        const npc = this.npcs.get(eid);
+        if (npc && !npc.dead && (npc.syncDirty || viewerChunkChanged)) {
+          this.sendNpcUpdate(viewer, npc);
+        }
+      }
+
+      // Always sync self if dirty
+      if (viewer.syncDirty) this.sendPlayerUpdate(viewer, viewer);
+    }
+
+    // Phase 3: Clear dirty flags
+    for (const [, player] of this.players) player.syncDirty = false;
+    for (const [, npc] of this.npcs) npc.syncDirty = false;
   }
 
   private broadcastCombatHit(attackerId: number, targetId: number, damage: number, targetHp: number, targetMaxHp: number, mapLevel: string, worldX: number, worldZ: number): void {
-    for (const [, p] of this.players) {
-      if (p.currentMapLevel === mapLevel && this.isNearby(p, worldX, worldZ)) {
-        this.sendToPlayer(p, ServerOpcode.COMBAT_HIT,
-          attackerId, targetId, damage, targetHp, targetMaxHp
-        );
-      }
-    }
+    this.broadcastNearby(mapLevel, worldX, worldZ, ServerOpcode.COMBAT_HIT, attackerId, targetId, damage, targetHp, targetMaxHp);
   }
 
   private sendMapChange(player: Player, mapId: string): void {
@@ -1307,13 +1381,17 @@ export class World {
 
   sendSkills(player: Player): void {
     for (let i = 0; i < ALL_SKILLS.length; i++) {
-      const skill = player.skills[ALL_SKILLS[i]];
-      const xpHigh = (skill.xp >> 16) & 0xFFFF;
-      const xpLow = skill.xp & 0xFFFF;
-      this.sendToPlayer(player, ServerOpcode.PLAYER_SKILLS,
-        i, skill.level, skill.currentLevel, xpHigh, xpLow
-      );
+      this.sendSingleSkill(player, i);
     }
+  }
+
+  private sendSingleSkill(player: Player, skillIndex: number): void {
+    const skill = player.skills[ALL_SKILLS[skillIndex]];
+    const xpHigh = (skill.xp >> 16) & 0xFFFF;
+    const xpLow = skill.xp & 0xFFFF;
+    this.sendToPlayer(player, ServerOpcode.PLAYER_SKILLS,
+      skillIndex, skill.level, skill.currentLevel, xpHigh, xpLow
+    );
   }
 
   sendEquipment(player: Player): void {

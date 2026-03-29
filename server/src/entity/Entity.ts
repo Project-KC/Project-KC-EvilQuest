@@ -11,6 +11,12 @@ export abstract class Entity {
   currentMapLevel: string = 'kcmap';
   currentFloor: number = 0;
 
+  /** Last broadcast position/health — used by broadcastSync dirty checking */
+  lastSyncX: number = -9999;
+  lastSyncZ: number = -9999;
+  lastSyncHealth: number = -1;
+  syncDirty: boolean = true;
+
   constructor(name: string, x: number, z: number, maxHealth: number) {
     this.id = nextEntityId++;
     this.name = name;

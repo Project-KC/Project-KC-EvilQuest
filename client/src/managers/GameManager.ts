@@ -1457,7 +1457,7 @@ export class GameManager {
       const path = findPath(this.playerX, this.playerZ, target.x, target.z,
         this.isTileBlocked,
         this.chunkManager.getMapWidth(), this.chunkManager.getMapHeight(), 200,
-        (fx, fz, tx, tz) => this.currentFloor === 0 ? this.chunkManager.isWallBlocked(fx, fz, tx, tz) : this.chunkManager.isWallBlockedOnFloor(fx, fz, tx, tz, this.currentFloor));
+        this.isWallBlockedForPath);
       if (path.length > 1) {
         const last = path[path.length - 1];
         if (Math.floor(last.x) === Math.floor(target.x) && Math.floor(last.z) === Math.floor(target.z)) {
@@ -1510,7 +1510,7 @@ export class GameManager {
       const path = findPath(this.playerX, this.playerZ, data.x, data.z,
         this.isTileBlocked,
         this.chunkManager.getMapWidth(), this.chunkManager.getMapHeight(), 200,
-        (fx, fz, tx, tz) => this.currentFloor === 0 ? this.chunkManager.isWallBlocked(fx, fz, tx, tz) : this.chunkManager.isWallBlockedOnFloor(fx, fz, tx, tz, this.currentFloor));
+        this.isWallBlockedForPath);
       if (path.length > 1) {
         const last = path[path.length - 1];
         if (Math.floor(last.x) === Math.floor(data.x) && Math.floor(last.z) === Math.floor(data.z)) {
@@ -1650,6 +1650,12 @@ export class GameManager {
     return this.chunkManager.isBlockedOnFloor(x, z, this.currentFloor);
   };
 
+  private isWallBlockedForPath = (fx: number, fz: number, tx: number, tz: number): boolean => {
+    return this.currentFloor === 0
+      ? this.chunkManager.isWallBlocked(fx, fz, tx, tz)
+      : this.chunkManager.isWallBlockedOnFloor(fx, fz, tx, tz, this.currentFloor);
+  };
+
   private handleGroundClick(worldX: number, worldZ: number): void {
     this.combatTargetId = -1;
     if (this.interactMarker) this.interactMarker.isVisible = false;
@@ -1659,7 +1665,7 @@ export class GameManager {
     const path = findPath(this.playerX, this.playerZ, worldX, worldZ,
       this.isTileBlocked,
       this.chunkManager.getMapWidth(), this.chunkManager.getMapHeight(), 200,
-      (fx, fz, tx, tz) => this.currentFloor === 0 ? this.chunkManager.isWallBlocked(fx, fz, tx, tz) : this.chunkManager.isWallBlockedOnFloor(fx, fz, tx, tz, this.currentFloor));
+      this.isWallBlockedForPath);
     if (path.length > 0) {
       this.path = path; this.pathIndex = 0;
       const dest = path[path.length - 1];
@@ -1699,6 +1705,8 @@ export class GameManager {
     document.querySelectorAll('.entity-health-bar').forEach(el => el.remove());
   }
 
+  private static readonly IDENTITY = Matrix.Identity();
+
   private updateOverlayPositions(): void {
     const cam = this.scene.activeCamera;
     if (!cam) return;
@@ -1710,28 +1718,33 @@ export class GameManager {
     const projMatrix = cam.getProjectionMatrix();
     const transform = viewMatrix.multiply(projMatrix);
     const viewport = new Viewport(0, 0, w, h);
+    const identity = GameManager.IDENTITY;
 
-    const allSprites: SpriteEntity[] = [];
-    if (this.localPlayer) allSprites.push(this.localPlayer);
-    for (const [, sprite] of this.remotePlayers) allSprites.push(sprite);
-    for (const [, sprite] of this.npcSprites) allSprites.push(sprite);
+    // Project overlays for sprites that actually have visible overlays — no intermediate array
+    const projectSprite = (sprite: SpriteEntity) => {
+      const hasBubble = sprite.hasChatBubble();
+      const hasBar = sprite.hasHealthBar();
+      if (!hasBubble && !hasBar) return;
 
-    for (const sprite of allSprites) {
-      if (sprite.hasChatBubble()) {
+      if (hasBubble) {
         const worldPos = sprite.getChatBubbleWorldPos();
         if (worldPos) {
-          const screenPos = Vector3.Project(worldPos, Matrix.Identity(), transform, viewport);
+          const screenPos = Vector3.Project(worldPos, identity, transform, viewport);
           sprite.updateChatBubbleScreenPos(screenPos.x, screenPos.y);
         }
       }
-      if (sprite.hasHealthBar()) {
+      if (hasBar) {
         const worldPos = sprite.getHealthBarWorldPos();
         if (worldPos) {
-          const screenPos = Vector3.Project(worldPos, Matrix.Identity(), transform, viewport);
+          const screenPos = Vector3.Project(worldPos, identity, transform, viewport);
           sprite.updateHealthBarScreenPos(screenPos.x, screenPos.y);
         }
       }
-    }
+    };
+
+    if (this.localPlayer) projectSprite(this.localPlayer);
+    for (const [, sprite] of this.remotePlayers) projectSprite(sprite);
+    for (const [, sprite] of this.npcSprites) projectSprite(sprite);
   }
 
   private updateHUD(): void {
@@ -1825,7 +1838,7 @@ export class GameManager {
             const newPath = findPath(this.playerX, this.playerZ, npcTarget.x, npcTarget.z,
               this.isTileBlocked,
               this.chunkManager.getMapWidth(), this.chunkManager.getMapHeight(), 200,
-              (fx, fz, tx, tz) => this.currentFloor === 0 ? this.chunkManager.isWallBlocked(fx, fz, tx, tz) : this.chunkManager.isWallBlockedOnFloor(fx, fz, tx, tz, this.currentFloor));
+              this.isWallBlockedForPath);
             if (newPath.length > 1) {
               const last = newPath[newPath.length - 1];
               if (Math.floor(last.x) === Math.floor(npcTarget.x) && Math.floor(last.z) === Math.floor(npcTarget.z)) {
