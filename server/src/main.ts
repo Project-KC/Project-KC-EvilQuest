@@ -1,9 +1,64 @@
-import { SERVER_PORT, GAME_WS_PATH, CHAT_WS_PATH } from '@projectrs/shared';
+import { SERVER_PORT, GAME_WS_PATH, CHAT_WS_PATH, CHUNK_SIZE } from '@projectrs/shared';
 import { resolve } from 'path';
 import { statSync, readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'fs';
-import type { KCMapFile, KCMapData, KCTile, MapMeta, WallsFile, SpawnsFile } from '@projectrs/shared';
+import type { KCMapFile, KCMapData, KCTile, MapMeta, WallsFile, SpawnsFile, PlacedObject } from '@projectrs/shared';
 import { defaultKCTile } from '@projectrs/shared';
 import { World } from './World';
+
+// --- Chunked object storage helpers ---
+
+/** Split placed objects into per-chunk buckets keyed by "chunk_{cx}_{cz}" */
+function splitObjectsByChunk(objects: PlacedObject[]): Map<string, PlacedObject[]> {
+  const chunks = new Map<string, PlacedObject[]>();
+  for (const obj of objects) {
+    const cx = Math.floor(obj.position.x / CHUNK_SIZE);
+    const cz = Math.floor(obj.position.z / CHUNK_SIZE);
+    const key = `chunk_${cx}_${cz}`;
+    let arr = chunks.get(key);
+    if (!arr) { arr = []; chunks.set(key, arr); }
+    arr.push(obj);
+  }
+  return chunks;
+}
+
+/** Save placed objects as per-chunk JSON files, removing chunks that are now empty */
+function saveChunkedObjects(mapDir: string, objects: PlacedObject[]): void {
+  const objectsDir = resolve(mapDir, 'objects');
+  mkdirSync(objectsDir, { recursive: true });
+
+  // Track which chunk files we write so we can delete stale ones
+  const written = new Set<string>();
+  const chunks = splitObjectsByChunk(objects);
+  for (const [key, objs] of chunks) {
+    const filePath = resolve(objectsDir, `${key}.json`);
+    writeFileSync(filePath, JSON.stringify(objs, null, 2));
+    written.add(`${key}.json`);
+  }
+
+  // Remove chunk files that no longer have objects
+  try {
+    for (const file of readdirSync(objectsDir)) {
+      if (file.startsWith('chunk_') && file.endsWith('.json') && !written.has(file)) {
+        rmSync(resolve(objectsDir, file));
+      }
+    }
+  } catch { /* dir may not exist yet */ }
+}
+
+/** Load placed objects from per-chunk files, falling back to map.json for backwards compat */
+function loadChunkedObjects(mapDir: string): PlacedObject[] | null {
+  const objectsDir = resolve(mapDir, 'objects');
+  if (!existsSync(objectsDir)) return null;
+  const objects: PlacedObject[] = [];
+  try {
+    for (const file of readdirSync(objectsDir)) {
+      if (!file.startsWith('chunk_') || !file.endsWith('.json')) continue;
+      const chunk: PlacedObject[] = JSON.parse(readFileSync(resolve(objectsDir, file), 'utf-8'));
+      objects.push(...chunk);
+    }
+  } catch { return null; }
+  return objects.length > 0 ? objects : null;
+}
 import { GameDatabase } from './Database';
 import {
   handleGameSocketOpen,
@@ -244,15 +299,24 @@ const server = Bun.serve<SocketData>({
         };
         writeFileSync(spawnsPath, JSON.stringify(mergedSpawns, null, 2));
 
-        // Preserve placed objects if editor sends empty (prevents accidental wipe)
+        // Save placed objects as per-chunk files
         const mapJsonPath = resolve(mapDir, 'map.json');
-        try {
-          const existing: KCMapFile = JSON.parse(readFileSync(mapJsonPath, 'utf-8'));
-          if ((mapData.placedObjects?.length ?? 0) === 0 && (existing.placedObjects?.length ?? 0) > 0) {
-            mapData.placedObjects = existing.placedObjects;
-          }
-        } catch { /* no existing file */ }
-        writeFileSync(mapJsonPath, JSON.stringify(mapData, null, 2));
+        let objectsToSave = mapData.placedObjects ?? [];
+        // Preserve existing objects if editor sends empty (prevents accidental wipe)
+        if (objectsToSave.length === 0) {
+          const existing = loadChunkedObjects(mapDir);
+          if (existing) objectsToSave = existing;
+          else try {
+            const existingMap: KCMapFile = JSON.parse(readFileSync(mapJsonPath, 'utf-8'));
+            objectsToSave = existingMap.placedObjects ?? [];
+          } catch { /* no existing data */ }
+        }
+        saveChunkedObjects(mapDir, objectsToSave);
+
+        // Save map.json WITHOUT placedObjects (they're in chunk files now)
+        const { placedObjects: _, ...mapDataWithoutObjects } = mapData;
+        const mapFileToSave = { ...mapDataWithoutObjects, placedObjects: [] };
+        writeFileSync(mapJsonPath, JSON.stringify(mapFileToSave, null, 2));
         writeFileSync(resolve(mapDir, 'walls.json'), JSON.stringify(walls ?? { walls: {} }, null, 2));
 
         return jsonResponse({ ok: true });
@@ -365,10 +429,16 @@ const server = Bun.serve<SocketData>({
       if (!mapDir.startsWith(MAPS_DIR)) return new Response('Forbidden', { status: 403 });
 
       try {
+        // Reassemble placedObjects from chunk files into map.json for export
+        const mapJson: KCMapFile = JSON.parse(readFileSync(resolve(mapDir, 'map.json'), 'utf-8'));
+        const chunkedObjects = loadChunkedObjects(mapDir);
+        if (chunkedObjects) {
+          mapJson.placedObjects = chunkedObjects;
+        }
         const exportFiles: Record<string, string> = {
           'meta.json': readFileSync(resolve(mapDir, 'meta.json'), 'utf-8'),
           'spawns.json': readFileSync(resolve(mapDir, 'spawns.json'), 'utf-8'),
-          'map.json': readFileSync(resolve(mapDir, 'map.json'), 'utf-8'),
+          'map.json': JSON.stringify(mapJson),
         };
         const wallsPath = resolve(mapDir, 'walls.json');
         if (existsSync(wallsPath)) {

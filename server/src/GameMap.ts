@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, readdirSync, existsSync } from 'fs';
 import { resolve } from 'path';
 import { CHUNK_SIZE, TileType, BLOCKING_TILES, groundTypeToTileType, shouldTileRenderWater, WallEdge, DEFAULT_WALL_HEIGHT, STAIR_ASSET_CONFIG, rotateStairDirection } from '@projectrs/shared';
 import type { MapMeta, MapTransition, WallsFile, StairData, RoofData, FloorLayerData, KCMapFile, KCMapData, KCTile, GroundType } from '@projectrs/shared';
@@ -59,7 +59,22 @@ export class GameMap {
     // Load KC map data
     const mapFile: KCMapFile = JSON.parse(readFileSync(resolve(dir, 'map.json'), 'utf-8'));
     this.mapData = mapFile.map;
-    this.placedObjects = (mapFile.placedObjects ?? []).map(o => ({
+
+    // Load placed objects from per-chunk files, falling back to map.json
+    let rawObjects = mapFile.placedObjects ?? [];
+    const objectsDir = resolve(dir, 'objects');
+    if (existsSync(objectsDir)) {
+      const chunked: typeof rawObjects = [];
+      for (const file of readdirSync(objectsDir)) {
+        if (!file.startsWith('chunk_') || !file.endsWith('.json')) continue;
+        try {
+          const objs = JSON.parse(readFileSync(resolve(objectsDir, file), 'utf-8'));
+          chunked.push(...objs);
+        } catch { /* skip bad chunk files */ }
+      }
+      if (chunked.length > 0) rawObjects = chunked;
+    }
+    this.placedObjects = rawObjects.map(o => ({
       assetId: o.assetId, position: o.position, rotation: o.rotation, scale: o.scale
     }));
 
