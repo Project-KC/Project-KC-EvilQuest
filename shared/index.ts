@@ -4,3 +4,4 @@ export * from './types.js';
 export * from './protocol.js';
 export * from './skills.js';
 export * from './terrain.js';
+export * from './assetObjectMap.js';

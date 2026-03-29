@@ -1,4 +1,4 @@
-import { TICK_RATE, CHUNK_SIZE, CHUNK_LOAD_RADIUS, ServerOpcode, ALL_SKILLS, type SkillId, type ItemDef } from '@projectrs/shared';
+import { TICK_RATE, CHUNK_SIZE, CHUNK_LOAD_RADIUS, ServerOpcode, ALL_SKILLS, ASSET_TO_OBJECT_DEF, WallEdge, type SkillId, type ItemDef } from '@projectrs/shared';
 import { encodePacket, encodeStringPacket } from '@projectrs/shared';
 import { addXp, levelFromXp } from '@projectrs/shared';
 import { GameMap } from './GameMap';
@@ -82,7 +82,7 @@ export class World {
       }
     }
 
-    // Re-spawn NPCs and world objects from spawns.json + placed trees from map.json
+    // Re-spawn NPCs and world objects
     const spawns = this.data.loadSpawns(mapId);
     for (const spawn of spawns.npcs ?? []) {
       const npcDef = this.data.getNpc(spawn.npcId);
@@ -92,18 +92,23 @@ export class World {
       this.npcs.set(npc.id, npc);
       cm.addEntity(npc.id, spawn.x, spawn.z);
     }
-    // Derive tree world objects from placed objects
+    // Derive world objects from placed objects in map.json (single source of truth)
+    const objectSpawns: { objectId: number; x: number; z: number; rotY?: number }[] = [];
     for (const placed of gameMap.placedObjects) {
-      const defId = World.TREE_ASSET_TO_DEF[placed.assetId];
+      const defId = ASSET_TO_OBJECT_DEF[placed.assetId];
       if (defId != null) {
-        if (!spawns.objects) spawns.objects = [];
-        spawns.objects.push({ objectId: defId, x: placed.position.x, z: placed.position.z });
+        objectSpawns.push({ objectId: defId, x: placed.position.x, z: placed.position.z, rotY: placed.rotation?.y });
       }
     }
-    for (const spawn of spawns.objects ?? []) {
+    // Fallback: sprite-only objects from spawns.json
+    for (const obj of spawns.objects ?? []) {
+      objectSpawns.push(obj);
+    }
+    for (const spawn of objectSpawns) {
       const objDef = this.data.getObject(spawn.objectId);
       if (!objDef) continue;
       const obj = new WorldObject(objDef, spawn.x, spawn.z, mapId);
+      if (spawn.rotY != null) obj.rotationY = spawn.rotY;
       this.worldObjects.set(obj.id, obj);
       if (objDef.blocking) {
         this.blockedObjectTiles.add(`${mapId}:${Math.floor(spawn.x)},${Math.floor(spawn.z)}`);
@@ -206,37 +211,33 @@ export class World {
     console.log(`Total NPCs: ${this.npcs.size}`);
   }
 
-  /** Map placed object asset IDs to world object definition IDs */
-  private static readonly TREE_ASSET_TO_DEF: Record<string, number> = {
-    'sTree 1': 1, 'sTree 2': 1, 'stree 3': 1, 'sTree4': 1, 'stree autumn': 1,
-    'oaktree2': 2,
-    'willow tree': 9,
-    'DeadTreeLam': 10,
-  };
-
   private spawnWorldObjects(): void {
     for (const [mapId] of this.maps) {
-      // Spawn objects from spawns.json
       const spawns = this.data.loadSpawns(mapId);
-      if (!spawns.objects) spawns.objects = [];
 
-      // Also derive tree world objects from placed objects in map.json
+      // Derive world objects from placed objects in map.json (single source of truth)
       const gameMap = this.maps.get(mapId)!;
-      const placedObjects = gameMap.placedObjects ?? [];
-      for (const placed of placedObjects) {
-        const defId = World.TREE_ASSET_TO_DEF[placed.assetId];
+      const objectSpawns: { objectId: number; x: number; z: number; rotY?: number }[] = [];
+      for (const placed of gameMap.placedObjects ?? []) {
+        const defId = ASSET_TO_OBJECT_DEF[placed.assetId];
         if (defId != null) {
-          spawns.objects.push({ objectId: defId, x: placed.position.x, z: placed.position.z });
+          objectSpawns.push({ objectId: defId, x: placed.position.x, z: placed.position.z, rotY: placed.rotation?.y });
         }
       }
 
-      for (const spawn of spawns.objects) {
+      // Fallback: sprite-only objects from spawns.json (fishing spots, altars, etc. without GLBs)
+      for (const obj of spawns.objects ?? []) {
+        objectSpawns.push(obj);
+      }
+
+      for (const spawn of objectSpawns) {
         const objDef = this.data.getObject(spawn.objectId);
         if (!objDef) {
           console.warn(`Unknown object id ${spawn.objectId} in ${mapId}/spawns.json`);
           continue;
         }
         const obj = new WorldObject(objDef, spawn.x, spawn.z, mapId);
+        if (spawn.rotY != null) obj.rotationY = spawn.rotY;
         this.worldObjects.set(obj.id, obj);
         if (objDef.blocking) {
           this.blockedObjectTiles.add(`${mapId}:${Math.floor(spawn.x)},${Math.floor(spawn.z)}`);
@@ -314,7 +315,7 @@ export class World {
     player.currentChunkX = Math.floor(player.position.x / CHUNK_SIZE);
     player.currentChunkZ = Math.floor(player.position.y / CHUNK_SIZE);
 
-    // Send login confirmation
+    // Send login confirmation — entity data will be sent when client responds with MAP_READY
     this.sendToPlayer(player, ServerOpcode.LOGIN_OK, player.id,
       Math.round(player.position.x * 10),
       Math.round(player.position.y * 10)
@@ -327,47 +328,6 @@ export class World {
         broadcastPlayerInfo(other.id, other.name);
       }
     }
-
-    // Send nearby existing players
-    for (const [, other] of this.players) {
-      if (other.id !== player.id && other.currentMapLevel === player.currentMapLevel) {
-        if (this.isNearby(player, other.position.x, other.position.y)) {
-          this.sendPlayerUpdate(player, other);
-        }
-        if (this.isNearby(other, player.position.x, player.position.y)) {
-          this.sendPlayerUpdate(other, player);
-        }
-      }
-    }
-
-    // Send nearby NPCs
-    for (const [, npc] of this.npcs) {
-      if (!npc.dead && npc.currentMapLevel === player.currentMapLevel &&
-          this.isNearby(player, npc.position.x, npc.position.y)) {
-        this.sendNpcUpdate(player, npc);
-      }
-    }
-
-    // Send nearby ground items
-    for (const [, item] of this.groundItems) {
-      if (item.mapLevel === player.currentMapLevel &&
-          this.isNearby(player, item.x, item.z)) {
-        this.sendGroundItemUpdate(player, item);
-      }
-    }
-
-    // Send nearby world objects
-    for (const [, obj] of this.worldObjects) {
-      if (obj.mapLevel === player.currentMapLevel &&
-          this.isNearby(player, obj.x, obj.z)) {
-        this.sendWorldObjectUpdate(player, obj);
-      }
-    }
-
-    // Send full skills
-    this.sendSkills(player);
-    this.sendInventory(player);
-    this.sendEquipment(player);
   }
 
   private cancelSkilling(playerId: number): void {
@@ -404,6 +364,51 @@ export class World {
 
   /** Check if a world position is within chunk load radius of a player */
   /** Find the best tool of a given type that the player can use (checks equipped weapon + inventory) */
+  private toggleDoor(obj: WorldObject): void {
+    const map = this.maps.get(obj.mapLevel);
+    if (!map) return;
+    const tx = Math.floor(obj.x);
+    const tz = Math.floor(obj.z);
+
+    // Derive wall edge from door rotation (normalize to 0-360)
+    const degRaw = Math.round((obj.rotationY * 180 / Math.PI) % 360 + 360) % 360;
+    // Map rotation to the wall edges the door blocks
+    // 0° or 360° → N/S edge, 90° or 270° → E/W edge
+    let edgeMask: number;
+    if (degRaw === 0 || degRaw === 180) {
+      edgeMask = WallEdge.N | WallEdge.S;
+    } else {
+      edgeMask = WallEdge.E | WallEdge.W;
+    }
+
+    const isOpen = obj.depleted;
+    const currentWall = map.getWall(tx, tz);
+
+    if (isOpen) {
+      // Close door — restore wall collision
+      map.setWall(tx, tz, currentWall | edgeMask);
+      this.blockedObjectTiles.add(`${obj.mapLevel}:${tx},${tz}`);
+      obj.depleted = false;
+      // Update action to "Open"
+      obj.def = { ...obj.def, actions: ['Open', 'Examine'] };
+    } else {
+      // Open door — remove wall collision
+      map.setWall(tx, tz, currentWall & ~edgeMask);
+      this.blockedObjectTiles.delete(`${obj.mapLevel}:${tx},${tz}`);
+      obj.depleted = true;
+      obj.respawnTimer = obj.def.respawnTime ?? 15;
+      // Update action to "Close"
+      obj.def = { ...obj.def, actions: ['Close', 'Examine'] };
+    }
+
+    // Broadcast state to nearby players
+    for (const [, p] of this.players) {
+      if (p.currentMapLevel === obj.mapLevel && this.isNearby(p, obj.x, obj.z)) {
+        this.sendToPlayer(p, ServerOpcode.WORLD_OBJECT_DEPLETED, obj.id, obj.depleted ? 1 : 0);
+      }
+    }
+  }
+
   private findBestTool(player: Player, toolType: string, playerSkillLevel: number): ItemDef | null {
     let best: ItemDef | null = null;
     const check = (itemId: number) => {
@@ -437,6 +442,7 @@ export class World {
 
     this.playerCombatTargets.delete(playerId);
     player.attackTarget = null;
+    player.pendingInteraction = null;
     this.cancelSkilling(playerId);
 
     const map = this.getPlayerMap(player);
@@ -568,7 +574,7 @@ export class World {
         }
       }
       player.moveQueue = path;
-      // Queue the interaction for when player arrives
+      player.pendingInteraction = { objectEntityId, actionIndex };
       return;
     }
 
@@ -583,6 +589,12 @@ export class World {
     if (action === 'Examine') {
       // Just send a chat message
       this.sendToPlayer(player, ServerOpcode.CHAT_SYSTEM, 0); // Will use chat socket instead
+      return;
+    }
+
+    // Door open/close
+    if (obj.def.category === 'door' && (action === 'Open' || action === 'Close')) {
+      this.toggleDoor(obj);
       return;
     }
 
@@ -752,6 +764,12 @@ export class World {
         const pickupId = player.pendingPickup;
         player.pendingPickup = -1;
         this.handlePlayerPickup(playerId, pickupId);
+      }
+      // Check pending object interaction after movement
+      if (player.pendingInteraction && player.moveQueue.length === 0) {
+        const { objectEntityId, actionIndex } = player.pendingInteraction;
+        player.pendingInteraction = null;
+        this.handlePlayerInteractObject(playerId, objectEntityId, actionIndex);
       }
     }
 
@@ -1035,6 +1053,17 @@ export class World {
       if (obj.tickRespawn()) {
         if (obj.def.blocking) {
           this.blockedObjectTiles.add(`${obj.mapLevel}:${Math.floor(obj.x)},${Math.floor(obj.z)}`);
+        }
+        // Door auto-close: restore wall collision and action text
+        if (obj.def.category === 'door') {
+          const map = this.maps.get(obj.mapLevel);
+          if (map) {
+            const tx = Math.floor(obj.x), tz = Math.floor(obj.z);
+            const degRaw = Math.round((obj.rotationY * 180 / Math.PI) % 360 + 360) % 360;
+            const edgeMask = (degRaw === 0 || degRaw === 180) ? (WallEdge.N | WallEdge.S) : (WallEdge.E | WallEdge.W);
+            map.setWall(tx, tz, map.getWall(tx, tz) | edgeMask);
+          }
+          obj.def = { ...obj.def, actions: ['Open', 'Examine'] };
         }
         // Respawned — notify nearby players
         for (const [, p] of this.players) {

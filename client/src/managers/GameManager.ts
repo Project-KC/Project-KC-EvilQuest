@@ -19,7 +19,7 @@ import { SidePanel } from '../ui/SidePanel';
 import { ChatPanel } from '../ui/ChatPanel';
 import { Minimap } from '../ui/Minimap';
 import { StatsPanel } from '../ui/StatsPanel';
-import { ServerOpcode, ClientOpcode, encodePacket, ALL_SKILLS, SKILL_NAMES, decodeStringPacket, type WorldObjectDef, type ItemDef } from '@projectrs/shared';
+import { ServerOpcode, ClientOpcode, encodePacket, ALL_SKILLS, SKILL_NAMES, ASSET_TO_OBJECT_DEF, decodeStringPacket, type WorldObjectDef, type ItemDef } from '@projectrs/shared';
 
 // NPC color palette by definition ID
 const NPC_COLORS: Record<number, Color3> = {
@@ -116,8 +116,6 @@ export class GameManager {
   private itemDefsCache: Map<number, ItemDef> = new Map();
   /** Per-defId tree model templates: { template, scale } */
   private treeModels: Map<number, { template: TransformNode; scale: number }> = new Map();
-  private rockModelTemplate: TransformNode | null = null;
-  private rockModelScale: number = 1;
   private playerSprites: DirectionalSpriteSet | null = null;
   private playerWalkAnim: AnimationSpriteSet | null = null;
   private playerPunchAnim: AnimationSpriteSet | null = null;
@@ -128,10 +126,13 @@ export class GameManager {
   /** Per-NPC-defId attack animation sprite sets */
   private npcAttackAnims: Map<number, AnimationSpriteSet> = new Map();
   private isSkilling: boolean = false;
+  private isIndoors: boolean = false;
+  private hiddenRoofNodes: TransformNode[] = [];
   private skillingObjectId: number = -1;
 
   // UI
   private destMarker: any = null;
+  private interactMarker: any = null;
   private contextMenu: HTMLDivElement | null = null;
   private sidePanel: SidePanel | null = null;
   private chatPanel: ChatPanel | null = null;
@@ -182,6 +183,13 @@ export class GameManager {
     this.inputManager.setGroundClickHandler((worldX, worldZ) => {
       this.handleGroundClick(worldX, worldZ);
     });
+    this.inputManager.setObjectClickHandler((objectEntityId) => {
+      this.handleObjectClick(objectEntityId);
+    });
+    this.inputManager.setIndoorCheck(() => ({
+      indoors: this.isIndoors,
+      playerY: this.localPlayer?.position.y ?? this.getHeight(this.playerX, this.playerZ),
+    }));
 
     // Right-click context menu for NPCs/items
     this.setupContextMenu(canvas);
@@ -248,15 +256,21 @@ export class GameManager {
       }
     });
 
-    // Load overworld map, object definitions, and tree 3D model
+    // When a chunk's placed objects finish loading, link them to world entities
+    this.chunkManager.setOnChunkObjectsLoaded(() => {
+      this.linkPlacedObjectsToWorldObjects();
+      this.cleanupDisposedWorldObjects();
+    });
+
+    // Load map, then tell server we're ready for entity data
     this.chunkManager.loadMap('kcmap').then(() => {
       this.applyFog();
+      this.network.sendRaw(encodePacket(ClientOpcode.MAP_READY));
       this.repositionWorldObjects();
-      this.linkPlacedObjectsToWorldObjects();
     });
     this.loadObjectDefs();
     this.loadTreeModels();
-    this.loadRockModel();
+    this.loadDepletedRockModel();
     this.loadPlayerSprites();
     this.loadNpcSprites();
 
@@ -274,7 +288,8 @@ export class GameManager {
   }
 
   private getHeight(x: number, z: number): number {
-    return this.chunkManager.getEffectiveHeight(x, z);
+    const currentY = this.localPlayer?.position.y;
+    return this.chunkManager.getEffectiveHeight(x, z, undefined, currentY);
   }
 
   private applyFog(): void {
@@ -323,28 +338,19 @@ export class GameManager {
   }
 
   /** Tree model config: defId → GLB files + target height + stump file */
-  private static readonly TREE_MODEL_CONFIG: { defId: number; files: string[]; targetHeight: number; stumpFile: string; stumpHeight: number }[] = [
-    { defId: 1, files: ['sTree_1.glb', 'sTree_2.glb', 'stree_3.glb', 'sTree4.glb', 'stree_autumn.glb'], targetHeight: 3.0, stumpFile: 'stump1.glb', stumpHeight: 0.5 },
-    { defId: 2, files: ['oaktree2.glb'], targetHeight: 3.75, stumpFile: 'oakstump.glb', stumpHeight: 0.6 },
-    { defId: 9, files: ['willow_tree.glb'], targetHeight: 4.0, stumpFile: 'willowstump.glb', stumpHeight: 0.5 },
-    { defId: 10, files: ['DeadTreeLam.glb'], targetHeight: 2.5, stumpFile: 'stump2.glb', stumpHeight: 0.4 },
+  private static readonly TREE_MODEL_CONFIG: { defId: number; files: string[]; targetHeight: number; stumpFile: string }[] = [
+    { defId: 1, files: ['sTree_1.glb', 'sTree_2.glb', 'stree_3.glb', 'sTree4.glb', 'stree_autumn.glb'], targetHeight: 3.0, stumpFile: 'stump1.glb' },
+    { defId: 2, files: ['oaktree2.glb'], targetHeight: 3.75, stumpFile: 'oakstump.glb' },
+    { defId: 9, files: ['willow_tree.glb'], targetHeight: 4.0, stumpFile: 'willowstump.glb' },
+    { defId: 10, files: ['DeadTreeLam.glb'], targetHeight: 2.5, stumpFile: 'stump2.glb' },
   ];
   private treeModelVariants: Map<number, { template: TransformNode; scale: number }[]> = new Map();
   private stumpModels: Map<number, { template: TransformNode; scale: number }> = new Map();
   private stumpModelsByName: Map<string, { template: TransformNode; scale: number }> = new Map();
 
-  /** Map placed object asset name patterns → stump file to use */
-  private static readonly ASSET_STUMP_MAP: [string, string][] = [
-    ['oaktree', 'oakstump.glb'],
-    ['willow', 'willowstump.glb'],
-    ['maple', 'maplestump.glb'],
-    ['DeadTree', 'stump2.glb'],
-    ['stree_3', 'stump2.glb'],
-    ['stree 3', 'stump2.glb'],
-    ['sTree', 'stump1.glb'],       // sTree 1, sTree 2, sTree4, stree autumn
-    ['stree', 'stump1.glb'],       // fallback for any stree variant
-  ];
+  /** Depleted models for objects (stumps for trees, depleted rock for rocks) */
   private worldObjectStumps: Map<number, TransformNode> = new Map();
+  private depletedRockModel: { template: TransformNode; scale: number } | null = null;
   private thinkingBubble: HTMLDivElement | null = null;
 
   private async loadTreeModels(): Promise<void> {
@@ -386,9 +392,10 @@ export class GameManager {
 
     await Promise.all(loads);
 
-    // Load stump models — one per unique stump file
-    const uniqueStumps = [...new Set(GameManager.ASSET_STUMP_MAP.map(([, f]) => f))];
+    // Load stump models — one per unique stump file from TREE_MODEL_CONFIG
+    const uniqueStumps = [...new Set(GameManager.TREE_MODEL_CONFIG.map(c => c.stumpFile))];
     const stumpLoads = uniqueStumps.map(async (stumpFile) => {
+      const cfg = GameManager.TREE_MODEL_CONFIG.find(c => c.stumpFile === stumpFile)!;
       try {
         const result = await SceneLoader.ImportMeshAsync('', '/models/', stumpFile, this.scene);
         let minY = Infinity, maxY = -Infinity;
@@ -400,8 +407,6 @@ export class GameManager {
           if (bb.maximumWorld.y > maxY) maxY = bb.maximumWorld.y;
         }
         const modelHeight = maxY - minY;
-        const targetHeight = 0.5;
-        const scale = modelHeight > 0 ? targetHeight / modelHeight : 1;
         const root = new TransformNode(`stumpTemplate_${stumpFile}`, this.scene);
         for (const mesh of result.meshes) {
           if (!mesh.parent) mesh.parent = root;
@@ -410,15 +415,44 @@ export class GameManager {
           (child as TransformNode).position.y -= minY;
         }
         root.setEnabled(false);
-        this.stumpModelsByName.set(stumpFile, { template: root, scale });
-        console.log(`Stump model '${stumpFile}' loaded`);
+        this.stumpModelsByName.set(stumpFile, { template: root, scale: 1 });
+        console.log(`Stump model '${stumpFile}' loaded (height=${modelHeight.toFixed(3)}, minY=${minY.toFixed(3)})`);
       } catch (e) {
         console.warn(`Failed to load stump model '${stumpFile}':`, e);
       }
     });
     await Promise.all(stumpLoads);
 
-    this.upgradeTreeSpritesToModels();
+    // Populate stumpModels by defId from TREE_MODEL_CONFIG
+    for (const cfg of GameManager.TREE_MODEL_CONFIG) {
+      const stump = this.stumpModelsByName.get(cfg.stumpFile);
+      if (stump) this.stumpModels.set(cfg.defId, stump);
+    }
+  }
+
+  private async loadDepletedRockModel(): Promise<void> {
+    try {
+      const result = await SceneLoader.ImportMeshAsync('', '/models/', 'depleted_rock.glb', this.scene);
+      let minY = Infinity;
+      for (const mesh of result.meshes) {
+        if (mesh.getTotalVertices() === 0) continue;
+        mesh.computeWorldMatrix(true);
+        const bb = mesh.getBoundingInfo().boundingBox;
+        if (bb.minimumWorld.y < minY) minY = bb.minimumWorld.y;
+      }
+      const root = new TransformNode('depletedRockTemplate', this.scene);
+      for (const mesh of result.meshes) {
+        if (!mesh.parent) mesh.parent = root;
+      }
+      for (const child of root.getChildren()) {
+        (child as TransformNode).position.y -= minY;
+      }
+      root.setEnabled(false);
+      this.depletedRockModel = { template: root, scale: 1 };
+      console.log('Depleted rock model loaded');
+    } catch (e) {
+      console.warn('Failed to load depleted rock model:', e);
+    }
   }
 
   private createTreeModel(objectEntityId: number, objectDefId: number, x: number, z: number, isDepleted: boolean): void {
@@ -476,106 +510,6 @@ export class GameManager {
     // Trees now use placed GLB objects from the editor — no GameManager models needed
   }
 
-  /** Ore color tints per object def ID */
-  private static readonly ROCK_COLORS: Record<number, [number, number, number]> = {
-    3: [0.72, 0.45, 0.20],  // Copper Rock — warm orange-brown
-    4: [0.45, 0.35, 0.32],  // Iron Rock — dark reddish-brown
-  };
-  private static readonly ROCK_DEPLETED_COLOR: [number, number, number] = [0.4, 0.4, 0.4]; // grey when mined
-
-  private async loadRockModel(): Promise<void> {
-    try {
-      const result = await SceneLoader.ImportMeshAsync('', '/models/', 'rpgRock.glb', this.scene);
-
-      let minY = Infinity;
-      let maxY = -Infinity;
-      for (const mesh of result.meshes) {
-        if (mesh.getTotalVertices() === 0) continue;
-        mesh.computeWorldMatrix(true);
-        const bb = mesh.getBoundingInfo().boundingBox;
-        if (bb.minimumWorld.y < minY) minY = bb.minimumWorld.y;
-        if (bb.maximumWorld.y > maxY) maxY = bb.maximumWorld.y;
-      }
-      const modelHeight = maxY - minY;
-      this.rockModelScale = modelHeight > 0 ? 1.0 / modelHeight : 1;
-
-      const root = new TransformNode('rockTemplate', this.scene);
-      for (const mesh of result.meshes) {
-        if (!mesh.parent) {
-          mesh.parent = root;
-        }
-      }
-      for (const child of root.getChildren()) {
-        (child as TransformNode).position.y -= minY;
-      }
-
-      root.setEnabled(false);
-      this.rockModelTemplate = root;
-      console.log(`Rock model loaded (height=${modelHeight.toFixed(2)}, minY=${minY.toFixed(2)}, scale=${this.rockModelScale.toFixed(3)})`);
-
-      this.upgradeRockSpritesToModels();
-    } catch (e) {
-      console.warn('Failed to load rock model, falling back to sprites:', e);
-    }
-  }
-
-  private createRockModel(objectEntityId: number, objectDefId: number, x: number, z: number, isDepleted: boolean): void {
-    if (!this.rockModelTemplate) return;
-
-    const clone = this.rockModelTemplate.instantiateHierarchy(null, undefined, (source, cloned) => {
-      cloned.name = source.name + `_rock_${objectEntityId}`;
-    })!;
-    clone.setEnabled(true);
-
-    // Apply ore-specific color tint
-    const tint = isDepleted
-      ? GameManager.ROCK_DEPLETED_COLOR
-      : (GameManager.ROCK_COLORS[objectDefId] ?? [0.5, 0.5, 0.5]);
-
-    for (const child of clone.getChildMeshes()) {
-      child.setEnabled(true);
-      child.metadata = { objectEntityId };
-      // Create unique material per rock instance for individual coloring
-      const mat = new StandardMaterial(`rockMat_${objectEntityId}_${child.name}`, this.scene);
-      mat.diffuseColor = new Color3(tint[0], tint[1], tint[2]);
-      mat.specularColor = new Color3(0.15, 0.15, 0.15);
-      child.material = mat;
-    }
-
-    const s = this.rockModelScale;
-    clone.scaling.set(s, s, s);
-    clone.position.set(x, this.getHeight(x, z), z);
-    this.worldObjectModels.set(objectEntityId, clone);
-  }
-
-  private updateRockColor(objectEntityId: number, objectDefId: number, isDepleted: boolean): void {
-    const model = this.worldObjectModels.get(objectEntityId);
-    if (!model) return;
-    const tint = isDepleted
-      ? GameManager.ROCK_DEPLETED_COLOR
-      : (GameManager.ROCK_COLORS[objectDefId] ?? [0.5, 0.5, 0.5]);
-    for (const child of model.getChildMeshes()) {
-      const mat = child.material as StandardMaterial;
-      if (mat?.diffuseColor) {
-        mat.diffuseColor.set(tint[0], tint[1], tint[2]);
-      }
-    }
-  }
-
-  private upgradeRockSpritesToModels(): void {
-    if (!this.rockModelTemplate) return;
-    for (const [objectEntityId, data] of this.worldObjectDefs) {
-      if (this.worldObjectModels.has(objectEntityId)) continue;
-      const def = this.objectDefsCache.get(data.defId);
-      if (def?.category !== 'rock') continue;
-      const sprite = this.worldObjectSprites.get(objectEntityId);
-      if (sprite) {
-        sprite.dispose();
-        this.worldObjectSprites.delete(objectEntityId);
-      }
-      this.createRockModel(objectEntityId, data.defId, data.x, data.z, data.depleted);
-    }
-  }
 
   private async loadPlayerSprites(): Promise<void> {
     try {
@@ -765,55 +699,95 @@ export class GameManager {
     }
   }
 
+  /** Clean up world object references to disposed placed nodes (after chunk unload) */
+  private cleanupDisposedWorldObjects(): void {
+    for (const [entityId, node] of this.worldObjectModels) {
+      if (node.isDisposed()) {
+        this.worldObjectModels.delete(entityId);
+        // Also dispose stump/depleted model
+        const stump = this.worldObjectStumps.get(entityId);
+        if (stump) {
+          stump.dispose();
+          this.worldObjectStumps.delete(entityId);
+        }
+      }
+    }
+  }
+
   /** Link placed GLB objects to server world objects after map finishes loading */
   private linkPlacedObjectsToWorldObjects(): void {
     let linked = 0;
     for (const [objectEntityId, data] of this.worldObjectDefs) {
       if (this.worldObjectModels.has(objectEntityId)) continue;
-      const def = this.objectDefsCache.get(data.defId);
-      if (def?.category !== 'tree') continue;
 
-      const placedNode = this.chunkManager.findPlacedObjectNear(data.x, data.z, 1.5);
+      const placedNode = this.chunkManager.findPlacedObjectNear(data.x, data.z, 1.5, data.defId);
       if (!placedNode) continue;
 
-      this.worldObjectModels.set(objectEntityId, placedNode);
-      // Tag all descendants for right-click picking
-      if (!placedNode.metadata) placedNode.metadata = {};
-      placedNode.metadata.objectEntityId = objectEntityId;
-      for (const child of placedNode.getChildMeshes(false)) {
-        if (!child.metadata) child.metadata = {};
-        child.metadata.objectEntityId = objectEntityId;
-      }
-      for (const child of placedNode.getChildTransformNodes(false)) {
-        if (!child.metadata) child.metadata = {};
-        child.metadata.objectEntityId = objectEntityId;
-      }
-      if (data.depleted) placedNode.setEnabled(false);
-
-      // Create stump model at the tree's position — pick stump based on placed asset name
-      if (!this.worldObjectStumps.has(objectEntityId)) {
-        const assetName = placedNode.name; // e.g. "placed_X_template_sTree 1"
-        const stumpEntry = GameManager.ASSET_STUMP_MAP.find(([pattern]) => assetName.includes(pattern));
-        const stumpFile = stumpEntry ? stumpEntry[1] : 'stump1.glb';
-        const stumpModel = this.stumpModelsByName.get(stumpFile);
-        if (stumpModel) {
-          const stump = stumpModel.template.instantiateHierarchy(null, undefined, (source, cloned) => {
-            cloned.name = source.name + `_stump_${objectEntityId}`;
-          })!;
-          stump.setEnabled(data.depleted);
-          for (const child of stump.getChildMeshes()) {
-            child.setEnabled(true);
-            const mat = child.material as any;
-            if (mat && mat.transparencyMode !== undefined) mat.transparencyMode = 1;
-          }
-          const ss = stumpModel.scale;
-          stump.scaling.set(ss, ss, ss);
-          stump.position.set(placedNode.position.x, placedNode.position.y, placedNode.position.z);
-          this.worldObjectStumps.set(objectEntityId, stump);
-        }
-      }
-
+      this.linkPlacedNodeToEntity(objectEntityId, data, placedNode);
       linked++;
+    }
+  }
+
+  /** Link a placed GLB node to a world object entity, tagging for picking and handling depletion */
+  private linkPlacedNodeToEntity(
+    objectEntityId: number,
+    data: { defId: number; x: number; z: number; depleted: boolean },
+    placedNode: TransformNode,
+  ): void {
+    this.worldObjectModels.set(objectEntityId, placedNode);
+    // Tag all descendants for right-click picking
+    if (!placedNode.metadata) placedNode.metadata = {};
+    placedNode.metadata.objectEntityId = objectEntityId;
+    for (const child of placedNode.getChildMeshes(false)) {
+      if (!child.metadata) child.metadata = {};
+      child.metadata.objectEntityId = objectEntityId;
+    }
+    for (const child of placedNode.getChildTransformNodes(false)) {
+      if (!child.metadata) child.metadata = {};
+      child.metadata.objectEntityId = objectEntityId;
+    }
+    if (data.depleted) placedNode.setEnabled(false);
+
+    // Create depleted model only if already depleted (lazy — otherwise created on first depletion event)
+    if (data.depleted) {
+      this.createDepletedModel(objectEntityId, data.defId, placedNode);
+    }
+
+    // Remove any sprite that was created before the GLB loaded
+    const sprite = this.worldObjectSprites.get(objectEntityId);
+  }
+
+  /** Create a depleted model (stump/depleted rock) at the placed node's position */
+  private createDepletedModel(objectEntityId: number, defId: number, placedNode: TransformNode): TransformNode | null {
+    if (this.worldObjectStumps.has(objectEntityId)) return this.worldObjectStumps.get(objectEntityId)!;
+    const def = this.objectDefsCache.get(defId);
+    let depletedModel: { template: TransformNode; scale: number } | null = null;
+    if (def?.category === 'tree') {
+      depletedModel = this.stumpModels.get(defId) ?? null;
+    } else if (def?.category === 'rock') {
+      depletedModel = this.depletedRockModel;
+    }
+    if (!depletedModel) return null;
+    const depleted = depletedModel.template.instantiateHierarchy(null, undefined, (source, cloned) => {
+      cloned.name = source.name + `_depleted_${objectEntityId}`;
+    })!;
+    depleted.setEnabled(true);
+    for (const child of depleted.getChildMeshes()) {
+      child.setEnabled(true);
+      const mat = child.material as any;
+      if (mat && mat.transparencyMode !== undefined) mat.transparencyMode = 1;
+    }
+    const ss = depletedModel.scale;
+    depleted.scaling.set(ss, ss, ss);
+    depleted.position.set(placedNode.position.x, placedNode.position.y, placedNode.position.z);
+    if (placedNode.rotationQuaternion) {
+      depleted.rotationQuaternion = placedNode.rotationQuaternion.clone();
+    }
+    this.worldObjectStumps.set(objectEntityId, depleted);
+    return depleted;
+    if (sprite) {
+      sprite.dispose();
+      this.worldObjectSprites.delete(objectEntityId);
     }
   }
 
@@ -1056,50 +1030,47 @@ export class GameManager {
       } else {
         this.blockedObjectTiles.delete(tileKey);
       }
-      const isTree = def?.category === 'tree';
-      const isRock = def?.category === 'rock';
-      const hasTreeModel = isTree && this.treeModels.has(objectDefId);
-      const hasRockModel = isRock && !!this.rockModelTemplate;
 
-      // Create visual if not yet created
-      // Trees use placed GLBs — no visual work in SYNC, stumps created on DEPLETED
-      if (isTree) {
-        // just store in worldObjectDefs (already done above)
-      } else if (hasRockModel && !this.worldObjectModels.has(objectEntityId)) {
-        this.createRockModel(objectEntityId, objectDefId, x, z, isDepleted);
-      } else if (!this.worldObjectSprites.has(objectEntityId) && !this.worldObjectModels.has(objectEntityId)) {
-        const name = def?.name ?? `Object${objectDefId}`;
-        const color = def?.color
-          ? new Color3(def.color[0] / 255, def.color[1] / 255, def.color[2] / 255)
-          : new Color3(0.5, 0.5, 0.5);
-        const width = def?.width ?? 0.8;
-        const height = def?.height ?? 1.0;
+      // Try to link to an editor-placed GLB model
+      if (!this.worldObjectModels.has(objectEntityId)) {
+        const placedNode = this.chunkManager.findPlacedObjectNear(x, z, 1.5, objectDefId);
+        if (placedNode) {
+          this.linkPlacedNodeToEntity(objectEntityId, { defId: objectDefId, x, z, depleted: isDepleted }, placedNode);
+        } else if (!this.chunkManager.isChunkObjectsLoaded(x, z)) {
+          // Chunk is still loading — skip sprite, will link via onChunkObjectsLoaded callback
+        } else if (!this.worldObjectSprites.has(objectEntityId)) {
+          // Chunk loaded but no GLB — fall back to sprite (fishing spots, altars, etc.)
+          const name = def?.name ?? `Object${objectDefId}`;
+          const color = def?.color
+            ? new Color3(def.color[0] / 255, def.color[1] / 255, def.color[2] / 255)
+            : new Color3(0.5, 0.5, 0.5);
+          const width = def?.width ?? 0.8;
+          const height = def?.height ?? 1.0;
 
-        const sprite = new SpriteEntity(this.scene, {
-          name: `obj_${objectEntityId}`,
-          color,
-          label: name,
-          labelColor: '#88ccff',
-          width,
-          height,
-        });
-        sprite.position = new Vector3(x, this.getHeight(x, z), z);
-        this.worldObjectSprites.set(objectEntityId, sprite);
+          const sprite = new SpriteEntity(this.scene, {
+            name: `obj_${objectEntityId}`,
+            color,
+            label: name,
+            labelColor: '#88ccff',
+            width,
+            height,
+          });
+          sprite.position = new Vector3(x, this.getHeight(x, z), z);
+          this.worldObjectSprites.set(objectEntityId, sprite);
+        }
       }
 
-      // Update depletion visual (trees handled entirely by WORLD_OBJECT_DEPLETED handler)
-      if (!isTree) {
-        const model = this.worldObjectModels.get(objectEntityId);
-        if (model) {
-          if (isRock) {
-            this.updateRockColor(objectEntityId, objectDefId, isDepleted);
-          } else {
-            model.setEnabled(!isDepleted);
-          }
-        } else {
-          const sprite = this.worldObjectSprites.get(objectEntityId);
-          if (sprite) sprite.getMesh().isVisible = !isDepleted;
+      // Update depletion visuals
+      const model = this.worldObjectModels.get(objectEntityId);
+      if (model) {
+        // Trees: handled entirely by WORLD_OBJECT_DEPLETED (show/hide stump)
+        // Other GLB objects: toggle visibility
+        if (def?.category !== 'tree') {
+          model.setEnabled(!isDepleted);
         }
+      } else {
+        const sprite = this.worldObjectSprites.get(objectEntityId);
+        if (sprite) sprite.getMesh().isVisible = !isDepleted;
       }
     });
 
@@ -1120,47 +1091,26 @@ export class GameManager {
       }
 
       const def = data ? this.objectDefsCache.get(data.defId) : null;
-      const isTree = def?.category === 'tree';
-      const isRock = def?.category === 'rock';
+      const hasDepleteModel = def?.category === 'tree' || def?.category === 'rock';
 
-      if (isTree && data) {
-        // Find placed GLB tree and toggle visibility
-        const placedNode = this.worldObjectModels.get(objectEntityId)
-          ?? this.chunkManager.findPlacedObjectNear(data.x, data.z, 1.5);
+      const model = this.worldObjectModels.get(objectEntityId);
+      if (hasDepleteModel && data) {
+        // Find placed GLB and toggle visibility
+        const placedNode = model ?? this.chunkManager.findPlacedObjectNear(data.x, data.z, 1.5, data.defId);
         if (placedNode) {
-          this.worldObjectModels.set(objectEntityId, placedNode);
+          if (!model) this.worldObjectModels.set(objectEntityId, placedNode);
           placedNode.setEnabled(isDepleted === 0);
 
-          // Create or toggle stump
-          let stump = this.worldObjectStumps.get(objectEntityId);
-          if (!stump && isDepleted === 1) {
-            const assetName = placedNode.name;
-            const stumpEntry = GameManager.ASSET_STUMP_MAP.find(([p]) => assetName.includes(p));
-            const stumpFile = stumpEntry ? stumpEntry[1] : 'stump1.glb';
-            const sm = this.stumpModelsByName.get(stumpFile);
-            if (sm) {
-              stump = sm.template.instantiateHierarchy(null, undefined, (source, cloned) => {
-                cloned.name = source.name + `_stump_${objectEntityId}`;
-              })!;
-              for (const child of stump.getChildMeshes()) {
-                child.setEnabled(true);
-                const mat = child.material as any;
-                if (mat && mat.transparencyMode !== undefined) mat.transparencyMode = 1;
-              }
-              const ss = sm.scale;
-              stump.scaling.set(ss, ss, ss);
-              stump.position.set(placedNode.position.x, placedNode.position.y, placedNode.position.z);
-              this.worldObjectStumps.set(objectEntityId, stump);
-            }
+          // Create or toggle depleted model (stump / depleted rock)
+          let depleted = this.worldObjectStumps.get(objectEntityId);
+          if (!depleted && isDepleted === 1) {
+            depleted = this.createDepletedModel(objectEntityId, data.defId, placedNode);
           }
-          if (stump) stump.setEnabled(isDepleted === 1);
+          if (depleted) depleted.setEnabled(isDepleted === 1);
         }
-      } else if (isRock && data) {
-        const model = this.worldObjectModels.get(objectEntityId);
-        if (model) this.updateRockColor(objectEntityId, data.defId, isDepleted === 1);
+      } else if (model) {
+        model.setEnabled(isDepleted === 0);
       } else {
-        const model = this.worldObjectModels.get(objectEntityId);
-        if (model) model.setEnabled(isDepleted === 0);
         const sprite = this.worldObjectSprites.get(objectEntityId);
         if (sprite) sprite.getMesh().isVisible = isDepleted === 0;
       }
@@ -1169,6 +1119,7 @@ export class GameManager {
     this.network.on(ServerOpcode.SKILLING_START, (_op, v) => {
       this.isSkilling = true;
       this.skillingObjectId = v[0];
+      if (this.interactMarker) this.interactMarker.isVisible = false;
       if (this.chatPanel) {
         const data = this.worldObjectDefs.get(v[0]);
         const def = data ? this.objectDefsCache.get(data.defId) : null;
@@ -1388,20 +1339,25 @@ export class GameManager {
         }
 
         if (this.chunkManager.isPlacedObjectNode(rootNode)) {
-          const px = rootNode.position.x;
-          const pz = rootNode.position.z;
-          // Find nearest world object by position
-          let bestEid = -1, bestDist = 3.0;
-          for (const [eid, data] of this.worldObjectDefs) {
-            const dist = Math.hypot(data.x - px, data.z - pz);
-            if (dist < bestDist) {
-              bestDist = dist;
-              bestEid = eid;
+          // Only match if this placed object is actually an interactable asset
+          const rootAssetId = rootNode.metadata?.assetId;
+          if (rootAssetId && rootAssetId in ASSET_TO_OBJECT_DEF) {
+            const expectedDefId = ASSET_TO_OBJECT_DEF[rootAssetId];
+            const px = rootNode.position.x;
+            const pz = rootNode.position.z;
+            let bestEid = -1, bestDist = 3.0;
+            for (const [eid, data] of this.worldObjectDefs) {
+              if (data.defId !== expectedDefId) continue;
+              const dist = Math.hypot(data.x - px, data.z - pz);
+              if (dist < bestDist) {
+                bestDist = dist;
+                bestEid = eid;
+              }
             }
-          }
-          if (bestEid >= 0) {
-            pickedObjectEntityId = bestEid;
-            this.worldObjectModels.set(bestEid, rootNode);
+            if (bestEid >= 0) {
+              pickedObjectEntityId = bestEid;
+              this.worldObjectModels.set(bestEid, rootNode);
+            }
           }
         }
       }
@@ -1520,6 +1476,26 @@ export class GameManager {
     this.network.sendRaw(encodePacket(ClientOpcode.PLAYER_PICKUP_ITEM, groundItemId));
   }
 
+  private handleObjectClick(objectEntityId: number): void {
+    const data = this.worldObjectDefs.get(objectEntityId);
+    if (!data || data.depleted) return;
+    const def = this.objectDefsCache.get(data.defId);
+    if (!def) return;
+    // Auto-interact with harvestable objects (trees, rocks) and doors
+    if ((def.skill && def.harvestItemId) || def.category === 'door') {
+      // Show red interaction marker at the object
+      if (this.interactMarker) {
+        this.interactMarker.position.x = data.x;
+        this.interactMarker.position.y = this.getHeight(data.x, data.z) + 0.02;
+        this.interactMarker.position.z = data.z;
+        this.alignMarkerToTerrain(data.x, data.z, this.interactMarker);
+        this.interactMarker.isVisible = true;
+        this.destMarker.isVisible = false;
+      }
+      this.interactObject(objectEntityId, 0);
+    }
+  }
+
   private interactObject(objectEntityId: number, actionIndex: number): void {
     this.combatTargetId = -1;
 
@@ -1626,10 +1602,23 @@ export class GameManager {
     mat.backFaceCulling = false;
     marker.material = mat;
     this.destMarker = marker;
+
+    // Red marker for object interactions
+    const iMarker = MeshBuilder.CreateDisc('interactMarker', { radius: 0.3, tessellation: 6 }, this.scene);
+    iMarker.isVisible = false;
+    iMarker.rotationQuaternion = Quaternion.RotationAxis(Vector3.Right(), -Math.PI / 2);
+    const iMat = new StandardMaterial('interactMarkerMat', this.scene);
+    iMat.diffuseColor = new Color3(1, 0.2, 0.2);
+    iMat.emissiveColor = new Color3(0.6, 0.1, 0.1);
+    iMat.specularColor = Color3.Black();
+    iMat.backFaceCulling = false;
+    iMarker.material = iMat;
+    this.interactMarker = iMarker;
   }
 
-  /** Align the destination marker to the terrain normal at (x, z) */
-  private alignMarkerToTerrain(x: number, z: number): void {
+  /** Align a marker disc to the terrain normal at (x, z) */
+  private alignMarkerToTerrain(x: number, z: number, marker?: any): void {
+    const target = marker ?? this.destMarker;
     const d = 0.25; // sample offset for gradient
     const hC = this.getHeight(x, z);
     const hR = this.getHeight(x + d, z);
@@ -1647,9 +1636,9 @@ export class GameManager {
     if (angle > 0.001) {
       const axis = Vector3.Cross(up, normal).normalize();
       const tilt = Quaternion.RotationAxis(axis, angle);
-      this.destMarker.rotationQuaternion = tilt.multiply(baseRot);
+      target.rotationQuaternion = tilt.multiply(baseRot);
     } else {
-      this.destMarker.rotationQuaternion = baseRot;
+      target.rotationQuaternion = baseRot;
     }
   }
 
@@ -1663,16 +1652,14 @@ export class GameManager {
 
   private handleGroundClick(worldX: number, worldZ: number): void {
     this.combatTargetId = -1;
+    if (this.interactMarker) this.interactMarker.isVisible = false;
 
     const tx = Math.floor(worldX), tz = Math.floor(worldZ);
     const blocked = this.isTileBlocked(tx, tz);
-    console.log(`[Click] target=(${worldX.toFixed(1)}, ${worldZ.toFixed(1)}) tile=(${tx},${tz}) blocked=${blocked}`);
-
     const path = findPath(this.playerX, this.playerZ, worldX, worldZ,
       this.isTileBlocked,
       this.chunkManager.getMapWidth(), this.chunkManager.getMapHeight(), 200,
       (fx, fz, tx, tz) => this.currentFloor === 0 ? this.chunkManager.isWallBlocked(fx, fz, tx, tz) : this.chunkManager.isWallBlockedOnFloor(fx, fz, tx, tz, this.currentFloor));
-
     if (path.length > 0) {
       this.path = path; this.pathIndex = 0;
       const dest = path[path.length - 1];
@@ -2000,9 +1987,39 @@ export class GameManager {
       }
     }
 
-    // Camera follows player
+    // Indoor detection — check if player is under a roof
+    const underRoof = this.chunkManager.isUnderRoof(this.playerX, this.playerZ);
+    if (underRoof && !this.isIndoors) {
+      this.isIndoors = true;
+      this.camera.setTargetRadius(10);
+    } else if (!underRoof && this.isIndoors) {
+      this.isIndoors = false;
+      for (const node of this.hiddenRoofNodes) node.setEnabled(true);
+      this.hiddenRoofNodes = [];
+      this.camera.setTargetRadius(12);
+    }
+    // While indoors, continuously update which objects are hidden based on player height
+    if (this.isIndoors) {
+      // Show previously hidden nodes
+      for (const node of this.hiddenRoofNodes) node.setEnabled(true);
+      const playerY = this.localPlayer?.position.y ?? 0;
+      // Hide objects above the player's current height
+      this.hiddenRoofNodes = [
+        ...this.chunkManager.getRoofNodesNear(this.playerX, this.playerZ, 8, playerY + 0.5),
+        ...this.chunkManager.getNodesAboveHeight(this.playerX, this.playerZ, 8, playerY + 1.5),
+      ];
+      const seen = new Set<TransformNode>();
+      this.hiddenRoofNodes = this.hiddenRoofNodes.filter(n => {
+        if (seen.has(n)) return false;
+        seen.add(n);
+        return true;
+      });
+      for (const node of this.hiddenRoofNodes) node.setEnabled(false);
+    }
+
+    // Camera follows player — use sprite's actual Y position (accounts for bridges/floors)
     if (this.localPlayer) {
-      this._tempVec.set(this.playerX, this.getHeight(this.playerX, this.playerZ), this.playerZ);
+      this._tempVec.set(this.playerX, this.localPlayer.position.y, this.playerZ);
       this.camera.followTarget(this._tempVec);
     }
 

@@ -5,6 +5,8 @@ import { Scene } from '@babylonjs/core/scene';
 export class GameCamera {
   private camera: ArcRotateCamera;
   private targetPosition: Vector3;
+  private targetRadius: number = -1; // -1 = no active zoom transition
+  private targetBeta: number = -1;  // -1 = no active beta transition
 
   constructor(scene: Scene, canvas: HTMLCanvasElement) {
     this.targetPosition = new Vector3(32, 0, 32);
@@ -13,7 +15,7 @@ export class GameCamera {
       'gameCamera',
       -Math.PI / 4,    // horizontal rotation (45 degrees)
       Math.PI / 3.2,   // vertical angle (~56 degrees — nice isometric feel)
-      25,              // zoom distance
+      12,              // fixed zoom distance (outdoor)
       this.targetPosition.clone(),
       scene
     );
@@ -22,14 +24,15 @@ export class GameCamera {
     this.camera.lowerBetaLimit = 0.4;
     this.camera.upperBetaLimit = Math.PI / 2.2;
     this.camera.lowerRadiusLimit = 12;
-    this.camera.upperRadiusLimit = 50;
+    this.camera.upperRadiusLimit = 12;
 
     // Smooth camera
     this.camera.inertia = 0.9;
     this.camera.panningInertia = 0.9;
 
-    // Only allow rotation and zoom, not panning
-    this.camera.panningSensibility = 0; // disable panning
+    // Disable zoom scroll and panning — fixed camera distance
+    this.camera.panningSensibility = 0;
+    this.camera.wheelPrecision = 99999; // effectively disables scroll zoom
 
     this.camera.attachControl(canvas, true);
 
@@ -46,6 +49,37 @@ export class GameCamera {
     this.camera.target.x += (position.x - this.camera.target.x) * speed;
     this.camera.target.y += (position.y - this.camera.target.y) * speed;
     this.camera.target.z += (position.z - this.camera.target.z) * speed;
+
+    // Smooth zoom toward target radius (only when actively transitioning)
+    if (this.targetRadius > 0) {
+      const diff = this.targetRadius - this.camera.radius;
+      if (Math.abs(diff) > 0.1) {
+        this.camera.radius += diff * 0.08;
+      } else {
+        this.camera.radius = this.targetRadius;
+        this.targetRadius = -1;
+      }
+    }
+    // Smooth beta transition (indoor → more top-down)
+    if (this.targetBeta > 0) {
+      const diff = this.targetBeta - this.camera.beta;
+      if (Math.abs(diff) > 0.01) {
+        this.camera.beta += diff * 0.08;
+      } else {
+        this.camera.beta = this.targetBeta;
+        this.targetBeta = -1;
+      }
+    }
+  }
+
+  setTargetRadius(radius: number): void {
+    this.targetRadius = radius;
+    this.camera.lowerRadiusLimit = Math.min(radius, 12);
+    this.camera.upperRadiusLimit = Math.max(radius, 12);
+  }
+
+  setTargetBeta(beta: number): void {
+    this.targetBeta = beta;
   }
 
   getCamera(): ArcRotateCamera {

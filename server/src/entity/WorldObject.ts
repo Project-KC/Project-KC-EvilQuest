@@ -12,6 +12,8 @@ export class WorldObject {
 
   depleted: boolean = false;
   respawnTimer: number = 0;
+  /** For doors: the Y rotation from the editor, used to derive wall edge direction */
+  rotationY: number = 0;
 
   constructor(def: WorldObjectDef, x: number, z: number, mapLevel: string) {
     this.id = nextObjectEntityId++;

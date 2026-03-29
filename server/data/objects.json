@@ -88,5 +88,30 @@
     "skill": "forestry", "levelRequired": 1, "xpReward": 25,
     "harvestItemId": 23, "harvestQuantity": 1, "harvestTime": 3,
     "depletionChance": 0.50, "respawnTime": 12
+  },
+  {
+    "id": 11, "name": "Tin Rock", "category": "rock",
+    "actions": ["Mine", "Examine"],
+    "blocking": true, "width": 0.9, "height": 0.8,
+    "color": [160, 160, 160],
+    "skill": "mining", "levelRequired": 1, "xpReward": 18,
+    "harvestItemId": 34, "harvestQuantity": 1, "harvestTime": 4,
+    "depletionChance": 0.40, "respawnTime": 10
+  },
+  {
+    "id": 12, "name": "Coal Rock", "category": "rock",
+    "actions": ["Mine", "Examine"],
+    "blocking": true, "width": 0.9, "height": 0.8,
+    "color": [40, 40, 40],
+    "skill": "mining", "levelRequired": 30, "xpReward": 50,
+    "harvestItemId": 35, "harvestQuantity": 1, "harvestTime": 5,
+    "depletionChance": 0.30, "respawnTime": 20
+  },
+  {
+    "id": 13, "name": "Door", "category": "door",
+    "actions": ["Open", "Examine"],
+    "blocking": true, "width": 1.0, "height": 1.8,
+    "color": [120, 80, 40],
+    "respawnTime": 15
   }
 ]

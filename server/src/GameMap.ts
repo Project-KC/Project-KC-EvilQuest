@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
-import { CHUNK_SIZE, TileType, BLOCKING_TILES, groundTypeToTileType, shouldTileRenderWater, WallEdge, DEFAULT_WALL_HEIGHT } from '@projectrs/shared';
+import { CHUNK_SIZE, TileType, BLOCKING_TILES, groundTypeToTileType, shouldTileRenderWater, WallEdge, DEFAULT_WALL_HEIGHT, STAIR_ASSET_CONFIG, rotateStairDirection } from '@projectrs/shared';
 import type { MapMeta, MapTransition, WallsFile, StairData, RoofData, FloorLayerData, KCMapFile, KCMapData, KCTile, GroundType } from '@projectrs/shared';
 
 const MAPS_DIR = resolve(import.meta.dir, '../data/maps');
@@ -18,7 +18,7 @@ export class GameMap {
   private mapData: KCMapData;
 
   /** Placed objects from the editor (for deriving world object spawns) */
-  readonly placedObjects: { assetId: string; position: { x: number; y: number; z: number } }[] = [];
+  readonly placedObjects: { assetId: string; position: { x: number; y: number; z: number }; rotation?: { x: number; y: number; z: number }; scale?: { x: number; y: number; z: number } }[] = [];
 
   /** Cached tile types for fast collision checks */
   private tileTypes: Uint8Array;
@@ -60,7 +60,7 @@ export class GameMap {
     const mapFile: KCMapFile = JSON.parse(readFileSync(resolve(dir, 'map.json'), 'utf-8'));
     this.mapData = mapFile.map;
     this.placedObjects = (mapFile.placedObjects ?? []).map(o => ({
-      assetId: o.assetId, position: o.position
+      assetId: o.assetId, position: o.position, rotation: o.rotation, scale: o.scale
     }));
 
     // Build height cache (flat Float32Array for fast access)
@@ -167,6 +167,35 @@ export class GameMap {
 
     // Register horizontal texture planes as walkable floors (bridges, platforms)
     this.registerTexturePlaneFloors(mapFile);
+
+    // Register placed stair GLBs as ramp zones for height interpolation + pathfinding
+    for (const placed of this.placedObjects) {
+      const stairCfg = STAIR_ASSET_CONFIG[placed.assetId];
+      if (!stairCfg) continue;
+      const rotY = placed.rotation?.y ?? 0;
+      const dir = rotateStairDirection(stairCfg.baseDirection, rotY);
+      const tx = Math.floor(placed.position.x);
+      const tz = Math.floor(placed.position.z);
+      const totalGain = stairCfg.heightGain * Math.abs(placed.scale?.y ?? 1);
+      const baseH = placed.position.y;
+      const half = Math.floor(stairCfg.tilesLong / 2);
+      for (let i = 0; i < stairCfg.tilesLong; i++) {
+        const offset = i - half;
+        let sx = tx, sz = tz;
+        if (dir === 'N') sz -= offset;
+        else if (dir === 'S') sz += offset;
+        else if (dir === 'E') sx += offset;
+        else if (dir === 'W') sx -= offset;
+        if (sx >= 0 && sx < this.width && sz >= 0 && sz < this.height) {
+          const t0 = i / stairCfg.tilesLong;
+          const t1 = (i + 1) / stairCfg.tilesLong;
+          const tileBase = baseH + t0 * totalGain;
+          const tileTop = baseH + t1 * totalGain;
+          const tileIdx = sz * this.width + sx;
+          this.stairs.set(tileIdx, { direction: dir, baseHeight: tileBase, topHeight: tileTop });
+        }
+      }
+    }
 
     console.log(`Loaded map '${mapId}': ${this.width}x${this.height} tiles, waterLevel=${this.mapData.waterLevel}, ${this.floorLayers.size} upper floors`);
   }
@@ -349,6 +378,11 @@ export class GameMap {
   getWall(x: number, z: number): number {
     if (x < 0 || x >= this.width || z < 0 || z >= this.height) return 0;
     return this.walls[z * this.width + x];
+  }
+
+  setWall(x: number, z: number, mask: number): void {
+    if (x < 0 || x >= this.width || z < 0 || z >= this.height) return;
+    this.walls[z * this.width + x] = mask;
   }
 
   getWallHeight(x: number, z: number): number {

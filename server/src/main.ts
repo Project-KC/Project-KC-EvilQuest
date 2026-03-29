@@ -235,16 +235,11 @@ const server = Bun.serve<SocketData>({
         } catch { /* first save */ }
         writeFileSync(metaPath, JSON.stringify(meta, null, 2));
 
-        // Merge spawns: editor provides NPC + item spawns, preserve existing object spawns
+        // Save spawns (NPCs, items, and any sprite-only objects from editor)
         const spawnsPath = resolve(mapDir, 'spawns.json');
-        let existingObjects: any[] = [];
-        try {
-          const existing: SpawnsFile = JSON.parse(readFileSync(spawnsPath, 'utf-8'));
-          existingObjects = existing.objects ?? [];
-        } catch { /* no existing file */ }
         const mergedSpawns = {
           npcs: spawns?.npcs ?? [],
-          objects: existingObjects,
+          objects: spawns?.objects ?? [],
           items: (spawns as any)?.items ?? [],
         };
         writeFileSync(spawnsPath, JSON.stringify(mergedSpawns, null, 2));

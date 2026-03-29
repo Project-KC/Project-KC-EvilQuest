@@ -501,9 +501,9 @@
       "path": "/assets/models/wood pole.glb"
     },
     {
-      "id": "Basic1TileDoor",
-      "name": "Basic 1 Tile Door",
-      "path": "/assets/models/Basic1TileDoor.glb"
+      "id": "basicTruedoor",
+      "name": "Basic Door",
+      "path": "/assets/models/basicTruedoor.glb"
     },
     {
       "id": "DeadTreeLam",
@@ -596,9 +596,9 @@
       "path": "/assets/models/OnePersonBed1.glb"
     },
     {
-      "id": "castle1doorrealwood",
-      "name": "Castle Door Real Wood",
-      "path": "/assets/models/Castle1DoorRealWood.glb"
+      "id": "castleTruedoor",
+      "name": "Castle Door",
+      "path": "/assets/models/castleTruedoor.glb"
     },
     {
       "id": "IronRock",
@@ -699,6 +699,11 @@
       "id": "sTree4",
       "name": "sTree4",
       "path": "/assets/models/sTree4.glb"
+    },
+    {
+      "id": "RiceMill",
+      "name": "Rice Mill",
+      "path": "/assets/models/RiceMill.glb"
     }
   ]
 }

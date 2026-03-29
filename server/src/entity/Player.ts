@@ -25,6 +25,7 @@ export class Player extends Entity {
   moveQueue: { x: number; z: number }[] = [];
   moveSpeed: number = 1;
   pendingPickup: number = -1;
+  pendingInteraction: { objectEntityId: number; actionIndex: number } | null = null;
 
   // Chunk tracking
   currentChunkX: number = -1;

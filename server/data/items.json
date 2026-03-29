@@ -66,5 +66,7 @@
   { "id": 33, "name": "Bronze Pickaxe", "description": "A basic bronze pickaxe for mining.", "stackable": false, "equippable": true,
     "equipSlot": "weapon", "attackSpeed": 5, "weaponStyle": "crush",
     "crushAttack": 4, "meleeStrength": 3, "value": 16,
-    "toolType": "pickaxe", "toolLevel": 1, "toolBonus": 0, "sprite": "pickaxe base.png" }
+    "toolType": "pickaxe", "toolLevel": 1, "toolBonus": 0, "sprite": "pickaxe base.png" },
+  { "id": 34, "name": "Tin Ore", "description": "A lump of tin ore.", "stackable": false, "equippable": false, "value": 2 },
+  { "id": 35, "name": "Coal", "description": "A piece of coal.", "stackable": false, "equippable": false, "value": 10 }
 ]
