@@ -703,8 +703,7 @@ let brushRadius = 3.2
   topBar.innerHTML = `
     <span class="app-title">ProjectRS</span>
     <span class="top-sep"></span>
-    <button id="saveMapBtn">Save</button>
-    <label class="file-label">Load <input id="loadMapInput" type="file" accept=".json" /></label>
+    <button id="saveMapBtn">Save Backup</button>
     <label class="file-label">Import Chunk <input id="importChunkInput" type="file" accept=".json" /></label>
     <button id="restoreAutoSaveBtn">Restore Auto-Save</button>
     <span class="top-sep"></span>
@@ -1280,7 +1279,6 @@ let brushRadius = 3.2
   const smoothModeBtn = sidebar.querySelector('#toggleSmoothMode')
   const levelModeBtn = sidebar.querySelector('#toggleLevelMode')
   const saveMapBtn = topBar.querySelector('#saveMapBtn')
-  const loadMapInput = topBar.querySelector('#loadMapInput')
   const mapWidthInput = topBar.querySelector('#mapWidthInput')
   const mapHeightInput = topBar.querySelector('#mapHeightInput')
   const resizeMapBtn = topBar.querySelector('#resizeMapBtn')
@@ -4215,16 +4213,6 @@ function applyToolAtTile(tile, eventLike = null) {
     } catch (e) {
       statusText.textContent = `Server error: ${e.message}`
     }
-  })
-
-  loadMapInput.addEventListener('change', async (event) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    const text = await file.text()
-    const data = JSON.parse(text)
-    await loadSaveData(data)
-    loadMapInput.value = ''
   })
 
   const importChunkInput = topBar.querySelector('#importChunkInput')
