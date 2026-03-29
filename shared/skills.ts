@@ -1,24 +1,25 @@
 // Skills system ported from TextQuest — OSRS-style XP formulas
 
 export type SkillId =
-  | 'accuracy' | 'power' | 'defence' | 'magic' | 'archery' | 'hitpoints'
-  | 'forestry' | 'fishing' | 'cooking' | 'mining' | 'smithing' | 'crafting';
+  | 'accuracy' | 'strength' | 'defence' | 'goodmagic' | 'evilmagic' | 'archery' | 'hitpoints'
+  | 'woodcut' | 'fishing' | 'cooking' | 'mining' | 'smithing' | 'crafting';
 
 export const ALL_SKILLS: SkillId[] = [
-  'accuracy', 'power', 'defence', 'magic', 'archery', 'hitpoints',
-  'forestry', 'fishing', 'cooking', 'mining', 'smithing', 'crafting',
+  'accuracy', 'strength', 'defence', 'goodmagic', 'evilmagic', 'archery', 'hitpoints',
+  'woodcut', 'fishing', 'cooking', 'mining', 'smithing', 'crafting',
 ];
 
-export const COMBAT_SKILLS: SkillId[] = ['accuracy', 'power', 'defence', 'magic', 'archery'];
+export const COMBAT_SKILLS: SkillId[] = ['accuracy', 'strength', 'defence', 'goodmagic', 'evilmagic', 'archery'];
 
 export const SKILL_NAMES: Record<SkillId, string> = {
   accuracy: 'Accuracy',
-  power: 'Power',
+  strength: 'Strength',
   defence: 'Defence',
-  magic: 'Magic',
+  goodmagic: 'Good Magic',
+  evilmagic: 'Evil Magic',
   archery: 'Archery',
   hitpoints: 'Hitpoints',
-  forestry: 'Forestry',
+  woodcut: 'Woodcut',
   fishing: 'Fishing',
   cooking: 'Cooking',
   mining: 'Mining',
@@ -28,12 +29,13 @@ export const SKILL_NAMES: Record<SkillId, string> = {
 
 export const SKILL_COLORS: Record<SkillId, string> = {
   accuracy: '#c44',
-  power: '#e80',
+  strength: '#e80',
   defence: '#48c',
-  magic: '#a4e',
+  goodmagic: '#8cf',
+  evilmagic: '#a4e',
   archery: '#4a4',
   hitpoints: '#e44',
-  forestry: '#2a6',
+  woodcut: '#2a6',
   fishing: '#4ae',
   cooking: '#c84',
   mining: '#888',
@@ -70,6 +72,16 @@ export function levelFromXp(xp: number, maxLevel = 99): number {
   return Math.min(maxLevel, lo - 1);
 }
 
+/**
+ * RS-style stat_random: interpolates between low (at level 1) and high (at level 99),
+ * then rolls against 256. Returns true on success.
+ * P(success) = (floor(low*(99-level)/98) + floor(high*(level-1)/98) + 1) / 256
+ */
+export function statRandom(level: number, low: number, high: number): boolean {
+  const value = Math.floor((low * (99 - level)) / 98) + Math.floor((high * (level - 1)) / 98) + 1;
+  return Math.floor(Math.random() * 256) < value;
+}
+
 export function initSkills(): SkillBlock {
   const s: Partial<SkillBlock> = {};
   for (const id of ALL_SKILLS) {
@@ -104,28 +116,29 @@ export function addXp(skills: SkillBlock, id: SkillId, amount: number): { levele
 // Combat level formula from TextQuest
 export function combatLevel(skills: SkillBlock): number {
   const base = 0.25 * (skills.defence.level + skills.hitpoints.level);
-  const melee = 0.325 * (skills.accuracy.level + skills.power.level);
+  const melee = 0.325 * (skills.accuracy.level + skills.strength.level);
   const range = 0.325 * (Math.floor(skills.archery.level / 2) + skills.archery.level);
-  const mage = 0.325 * (Math.floor(skills.magic.level / 2) + skills.magic.level);
+  const magicLevel = Math.max(skills.goodmagic.level, skills.evilmagic.level);
+  const mage = 0.325 * (Math.floor(magicLevel / 2) + magicLevel);
   return Math.floor(base + Math.max(melee, range, mage));
 }
 
 // Melee stance types
 export type MeleeStance = 'accurate' | 'aggressive' | 'defensive' | 'controlled';
 
-export const STANCE_BONUSES: Record<MeleeStance, { accuracy: number; power: number; defence: number }> = {
-  accurate:   { accuracy: 3, power: 0, defence: 0 },
-  aggressive: { accuracy: 0, power: 3, defence: 0 },
-  defensive:  { accuracy: 0, power: 0, defence: 3 },
-  controlled: { accuracy: 1, power: 1, defence: 1 },
+export const STANCE_BONUSES: Record<MeleeStance, { accuracy: number; strength: number; defence: number }> = {
+  accurate:   { accuracy: 3, strength: 0, defence: 0 },
+  aggressive: { accuracy: 0, strength: 3, defence: 0 },
+  defensive:  { accuracy: 0, strength: 0, defence: 3 },
+  controlled: { accuracy: 1, strength: 1, defence: 1 },
 };
 
 // XP distribution per stance: 4 XP per damage dealt
-export const STANCE_XP: Record<MeleeStance, { accuracy: number; power: number; defence: number }> = {
-  accurate:   { accuracy: 4, power: 0, defence: 0 },
-  aggressive: { accuracy: 0, power: 4, defence: 0 },
-  defensive:  { accuracy: 0, power: 0, defence: 4 },
-  controlled: { accuracy: 1.33, power: 1.33, defence: 1.33 },
+export const STANCE_XP: Record<MeleeStance, { accuracy: number; strength: number; defence: number }> = {
+  accurate:   { accuracy: 4, strength: 0, defence: 0 },
+  aggressive: { accuracy: 0, strength: 4, defence: 0 },
+  defensive:  { accuracy: 0, strength: 0, defence: 4 },
+  controlled: { accuracy: 1.33, strength: 1.33, defence: 1.33 },
 };
 
 // OSRS combat formulas

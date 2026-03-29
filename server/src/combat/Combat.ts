@@ -50,7 +50,7 @@ export function processPlayerCombat(
 
   // Effective levels (stat + stance bonus + 8)
   const effAcc = player.skills.accuracy.currentLevel + stance.accuracy + 8;
-  const effStr = player.skills.power.currentLevel + stance.power + 8;
+  const effStr = player.skills.strength.currentLevel + stance.strength + 8;
 
   // Weapon style determines which attack bonus to use
   const weaponStyle = player.getWeaponStyle(itemDefs);
@@ -100,11 +100,11 @@ export function processPlayerCombat(
       xpDrops.push({ skill: 'accuracy', amount: Math.floor(amt) });
       if (r.leveled) levelUps.push({ skill: 'accuracy', level: r.newLevel });
     }
-    if (stanceXp.power > 0) {
-      const amt = actual * stanceXp.power;
-      const r = addXp(player.skills, 'power', amt);
-      xpDrops.push({ skill: 'power', amount: Math.floor(amt) });
-      if (r.leveled) levelUps.push({ skill: 'power', level: r.newLevel });
+    if (stanceXp.strength > 0) {
+      const amt = actual * stanceXp.strength;
+      const r = addXp(player.skills, 'strength', amt);
+      xpDrops.push({ skill: 'strength', amount: Math.floor(amt) });
+      if (r.leveled) levelUps.push({ skill: 'strength', level: r.newLevel });
     }
     if (stanceXp.defence > 0) {
       const amt = actual * stanceXp.defence;

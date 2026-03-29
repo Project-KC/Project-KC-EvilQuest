@@ -1,6 +1,6 @@
 import { TICK_RATE, CHUNK_SIZE, CHUNK_LOAD_RADIUS, ServerOpcode, ALL_SKILLS, ASSET_TO_OBJECT_DEF, WallEdge, type SkillId, type ItemDef } from '@projectrs/shared';
 import { encodePacket, encodeStringPacket } from '@projectrs/shared';
-import { addXp, levelFromXp } from '@projectrs/shared';
+import { addXp, levelFromXp, statRandom } from '@projectrs/shared';
 import { GameMap } from './GameMap';
 import { Player, type EquipSlot } from './entity/Player';
 import { Npc } from './entity/Npc';
@@ -59,7 +59,7 @@ export class World {
   private npcTargetedBy: Map<number, Set<number>> = new Map();
 
   // Skilling: player -> { objectId, action, ticksLeft }
-  private skillingActions: Map<number, { objectId: number; action: string; ticksLeft: number }> = new Map();
+  private skillingActions: Map<number, { objectId: number; action: string; ticksLeft: number; toolItemId?: number }> = new Map();
 
   constructor(db: GameDatabase) {
     this.db = db;
@@ -659,6 +659,7 @@ export class World {
 
       // Tool check: forestry requires an axe, mining requires a pickaxe
       const requiredTool = obj.def.category === 'tree' ? 'axe' : obj.def.category === 'rock' ? 'pickaxe' : null;
+      let toolItemId: number | undefined;
       let toolBonus = 0;
       if (requiredTool) {
         const bestTool = this.findBestTool(player, requiredTool, playerLevel);
@@ -666,18 +667,21 @@ export class World {
           // No suitable tool — notify via chat socket
           return;
         }
+        toolItemId = bestTool.id;
         toolBonus = bestTool.toolBonus ?? 0;
       }
 
-      // Harvest time reduced by tool bonus (minimum 2 ticks)
+      // Probability-based harvesting (trees): fixed cycle, success rolled per attempt
+      // Fixed harvesting (mining, fishing): toolBonus reduces cycle time
       const baseTime = obj.def.harvestTime ?? 4;
-      const harvestTime = Math.max(2, baseTime - toolBonus);
+      const harvestTime = obj.def.successChances ? baseTime : Math.max(2, baseTime - toolBonus);
 
       // Start skilling action
       this.skillingActions.set(playerId, {
         objectId: obj.id,
         action,
         ticksLeft: harvestTime,
+        toolItemId,
       });
 
       // Notify client of skilling start
@@ -1045,8 +1049,27 @@ export class World {
 
       action.ticksLeft--;
       if (action.ticksLeft <= 0) {
-        // Success! Give item and XP
         const skillId = obj.def.skill as SkillId;
+        const cycleTime = obj.def.harvestTime ?? 4;
+
+        // Probability-based harvesting: roll success per cycle
+        if (obj.def.successChances) {
+          const chances = action.toolItemId != null ? obj.def.successChances[String(action.toolItemId)] : null;
+          if (!chances) {
+            // No valid axe for this tree — shouldn't happen, but stop gracefully
+            this.skillingActions.delete(playerId);
+            this.sendToPlayer(player, ServerOpcode.SKILLING_STOP, 0);
+            continue;
+          }
+          const playerLevel = player.skills[skillId]?.level ?? 1;
+          if (!statRandom(playerLevel, chances[0], chances[1])) {
+            // Failed roll — reset cycle and try again
+            action.ticksLeft = cycleTime;
+            continue;
+          }
+        }
+
+        // Success! Give item and XP
         const itemId = obj.def.harvestItemId!;
         const qty = obj.def.harvestQuantity ?? 1;
         const xpReward = obj.def.xpReward ?? 0;
@@ -1065,7 +1088,6 @@ export class World {
           }
 
           this.sendInventory(player);
-          // Only send the skill that changed
           const harvestSkillIdx = ALL_SKILLS.indexOf(skillId);
           if (harvestSkillIdx >= 0) this.sendSingleSkill(player, harvestSkillIdx);
 
@@ -1075,13 +1097,12 @@ export class World {
             if (obj.def.blocking) {
               this.blockedObjectTiles.delete(this.blockedKeyFor(obj.mapLevel, obj.x, obj.z));
             }
-            // Notify all nearby players
             this.broadcastNearby(obj.mapLevel, obj.x, obj.z, ServerOpcode.WORLD_OBJECT_DEPLETED, obj.id, 1);
             this.skillingActions.delete(playerId);
             this.sendToPlayer(player, ServerOpcode.SKILLING_STOP, 0);
           } else {
-            // Reset timer for next harvest
-            action.ticksLeft = obj.def.harvestTime ?? 4;
+            // Reset cycle for next harvest attempt
+            action.ticksLeft = cycleTime;
           }
         } else {
           // Inventory full

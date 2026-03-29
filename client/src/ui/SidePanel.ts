@@ -483,14 +483,16 @@ export class SidePanel {
     const hp = this.skills.get('hitpoints')?.level || 10;
     const def = this.skills.get('defence')?.level || 1;
     const acc = this.skills.get('accuracy')?.level || 1;
-    const pow = this.skills.get('power')?.level || 1;
+    const str = this.skills.get('strength')?.level || 1;
     const arch = this.skills.get('archery')?.level || 1;
-    const mag = this.skills.get('magic')?.level || 1;
+    const goodMag = this.skills.get('goodmagic')?.level || 1;
+    const evilMag = this.skills.get('evilmagic')?.level || 1;
 
     const base = 0.25 * (def + hp);
-    const melee = 0.325 * (acc + pow);
+    const melee = 0.325 * (acc + str);
     const range = 0.325 * (Math.floor(arch / 2) + arch);
-    const mage = 0.325 * (Math.floor(mag / 2) + mag);
+    const magicLevel = Math.max(goodMag, evilMag);
+    const mage = 0.325 * (Math.floor(magicLevel / 2) + magicLevel);
     const cl = Math.floor(base + Math.max(melee, range, mage));
 
     const el = document.getElementById('combat-level-row');

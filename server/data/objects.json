@@ -4,18 +4,20 @@
     "actions": ["Chop", "Examine"],
     "blocking": true, "width": 1.0, "height": 2.0,
     "color": [40, 100, 30],
-    "skill": "forestry", "levelRequired": 1, "xpReward": 25,
+    "skill": "woodcut", "levelRequired": 1, "xpReward": 25,
     "harvestItemId": 23, "harvestQuantity": 1, "harvestTime": 4,
-    "depletionChance": 0.35, "respawnTime": 15
+    "depletionChance": 0.333, "respawnTime": 15,
+    "successChances": { "31": [64, 200], "32": [96, 300], "36": [128, 400], "37": [160, 500], "38": [176, 550] }
   },
   {
     "id": 2, "name": "Oak Tree", "category": "tree",
     "actions": ["Chop", "Examine"],
     "blocking": true, "width": 1.2, "height": 2.4,
     "color": [30, 80, 20],
-    "skill": "forestry", "levelRequired": 15, "xpReward": 38,
-    "harvestItemId": 24, "harvestQuantity": 1, "harvestTime": 5,
-    "depletionChance": 0.25, "respawnTime": 20
+    "skill": "woodcut", "levelRequired": 15, "xpReward": 38,
+    "harvestItemId": 24, "harvestQuantity": 1, "harvestTime": 4,
+    "depletionChance": 0.125, "respawnTime": 20,
+    "successChances": { "31": [32, 100], "32": [48, 150], "36": [64, 200], "37": [80, 250], "38": [88, 275] }
   },
   {
     "id": 3, "name": "Copper Rock", "category": "rock",
@@ -76,18 +78,20 @@
     "actions": ["Chop", "Examine"],
     "blocking": true, "width": 1.0, "height": 2.0,
     "color": [50, 110, 40],
-    "skill": "forestry", "levelRequired": 30, "xpReward": 68,
-    "harvestItemId": 23, "harvestQuantity": 1, "harvestTime": 5,
-    "depletionChance": 0.12, "respawnTime": 14
+    "skill": "woodcut", "levelRequired": 30, "xpReward": 68,
+    "harvestItemId": 23, "harvestQuantity": 1, "harvestTime": 4,
+    "depletionChance": 0.125, "respawnTime": 14,
+    "successChances": { "31": [16, 50], "32": [24, 75], "36": [32, 100], "37": [40, 125], "38": [44, 137] }
   },
   {
     "id": 10, "name": "Dead Tree", "category": "tree",
     "actions": ["Chop", "Examine"],
     "blocking": true, "width": 1.0, "height": 2.0,
     "color": [80, 60, 40],
-    "skill": "forestry", "levelRequired": 1, "xpReward": 25,
-    "harvestItemId": 23, "harvestQuantity": 1, "harvestTime": 3,
-    "depletionChance": 0.50, "respawnTime": 12
+    "skill": "woodcut", "levelRequired": 1, "xpReward": 25,
+    "harvestItemId": 23, "harvestQuantity": 1, "harvestTime": 4,
+    "depletionChance": 0.50, "respawnTime": 12,
+    "successChances": { "31": [64, 200], "32": [96, 300], "36": [128, 400], "37": [160, 500], "38": [176, 550] }
   },
   {
     "id": 11, "name": "Tin Rock", "category": "rock",
@@ -106,6 +110,16 @@
     "skill": "mining", "levelRequired": 30, "xpReward": 50,
     "harvestItemId": 35, "harvestQuantity": 1, "harvestTime": 5,
     "depletionChance": 0.30, "respawnTime": 20
+  },
+  {
+    "id": 14, "name": "Maple Tree", "category": "tree",
+    "actions": ["Chop", "Examine"],
+    "blocking": true, "width": 1.2, "height": 2.6,
+    "color": [120, 70, 20],
+    "skill": "woodcut", "levelRequired": 45, "xpReward": 100,
+    "harvestItemId": 39, "harvestQuantity": 1, "harvestTime": 4,
+    "depletionChance": 0.125, "respawnTime": 25,
+    "successChances": { "31": [8, 25], "32": [12, 37], "36": [16, 50], "37": [20, 62], "38": [22, 68] }
   },
   {
     "id": 13, "name": "Door", "category": "door",

@@ -162,9 +162,13 @@ export interface WorldObjectDef {
   xpReward?: number;
   harvestItemId?: number;
   harvestQuantity?: number;
-  harvestTime?: number; // ticks to harvest
+  harvestTime?: number; // ticks per attempt cycle (default 4)
   depletionChance?: number; // 0-1, chance per success
   respawnTime?: number; // ticks after depletion
+
+  // Probability-based harvesting (RS-style): keyed by item ID → [low, high]
+  // Each attempt rolls statRandom(level, low, high) against 256
+  successChances?: Record<string, [number, number]>;
 
   // Crafting station recipes (furnace, cooking range)
   recipes?: ObjectRecipe[];
