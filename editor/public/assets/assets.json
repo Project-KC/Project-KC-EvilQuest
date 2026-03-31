@@ -914,6 +914,16 @@
       "id": "halfwall 45 (stone)",
       "name": "halfwall 45 (Stone)",
       "path": "/assets/modular-assets/stone-modular/halfwall 45.glb"
+    },
+    {
+      "id": "wheat",
+      "name": "Wheat",
+      "path": "/assets/models/wheat.glb"
+    },
+    {
+      "id": "table1",
+      "name": "Table",
+      "path": "/assets/models/table1.glb"
     }
   ]
 }

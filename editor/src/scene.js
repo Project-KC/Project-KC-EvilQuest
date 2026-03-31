@@ -5,6 +5,7 @@ import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight'
 import { DirectionalLight } from '@babylonjs/core/Lights/directionalLight'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
 import { Mesh } from '@babylonjs/core/Meshes/mesh'
+import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData'
 import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder'
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode'
 import { Vector3, Matrix, Quaternion } from '@babylonjs/core/Maths/math.vector'
@@ -649,6 +650,7 @@ const state = {
 }
 
 let brushRadius = 3.2
+let paintBrushRadius = 1
 
   // RAF dirty-flag: terrain edits mark this dirty; the actual rebuild happens once per animation frame.
   let _terrainDirty = false
@@ -712,11 +714,12 @@ let brushRadius = 3.2
     <button id="serverSaveBtn" title="Save map to game server (overwrites!)">Save Server</button>
     <button id="serverReloadBtn" title="Hot-reload map in running game">Reload Game</button>
     <span class="top-sep"></span>
-    <span class="top-label">W</span>
-    <input id="mapWidthInput" type="number" min="4" value="64" />
-    <span class="top-label">H</span>
-    <input id="mapHeightInput" type="number" min="4" value="64" />
-    <button id="resizeMapBtn">Resize</button>
+    <span class="top-label" id="mapSizeLabel">192 x 64</span>
+    <button id="chunkGridBtn" title="Add/remove chunks">Chunks</button>
+    <div id="chunkGridPopup" style="display:none;position:absolute;top:32px;background:#1a1a1a;border:1px solid #555;border-radius:6px;padding:8px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.5);">
+      <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Click to add · Shift+click to remove</div>
+      <div id="chunkGridContainer" style="display:inline-grid;gap:2px;"></div>
+    </div>
     <span class="top-sep"></span>
     <span class="top-label">World X</span>
     <input id="worldOffsetX" type="number" value="0" style="width:60px;" />
@@ -758,25 +761,13 @@ let brushRadius = 3.2
       <button id="toolCollision" class="tool-btn" title="Collision (7)">Collision</button>
       <button id="toolItemSpawn" class="tool-btn" title="Item Spawn (8)">Items</button>
       <!-- Layers panel removed -->
-      <button id="heightCullBtn" class="tool-btn" title="Toggle height cull (H)">Height Cull</button>
-      <div id="heightCullControls" style="display:none;margin-top:4px;">
-        <div style="display:flex;align-items:center;gap:4px;">
-          <input id="heightCullSlider" type="range" min="0" max="20" step="0.5" value="3.5" style="flex:1;">
-          <span id="heightCullValue" style="font-size:10px;color:#ccc;min-width:28px;">3.5</span>
-        </div>
-        <div style="display:flex;gap:2px;margin-top:3px;">
-          <button class="tool-btn" data-cull="1.8" style="flex:1;font-size:9px;padding:2px;">1F</button>
-          <button class="tool-btn" data-cull="3.5" style="flex:1;font-size:9px;padding:2px;">1F+Roof</button>
-          <button class="tool-btn" data-cull="5.5" style="flex:1;font-size:9px;padding:2px;">2F</button>
-          <button class="tool-btn" data-cull="7.5" style="flex:1;font-size:9px;padding:2px;">2F+Roof</button>
-        </div>
-      </div>
+      <button id="heightCullBtn" class="tool-btn" title="Height cull cycle (H)">H: Off</button>
     </div>
     <div class="ctx-divider"></div>
 
     <div class="ctx-panel" id="ctx-terrain">
       <label style="margin-top:0;font-size:11px;color:rgba(255,255,255,0.45);">Brush Size <span id="brushSizeLabel">3.2</span></label>
-      <input id="brushSizeSlider" type="range" min="0.4" max="7" step="0.2" value="3.2" style="margin-top:3px;" />
+      <input id="brushSizeSlider" type="range" min="0.4" max="16" step="0.2" value="3.2" style="margin-top:3px;" />
       <button id="toggleSmoothMode" style="margin-top:8px;">Smooth Mode: Off</button>
       <button id="toggleLevelMode" style="margin-top:4px;">Level Mode: Off</button>
       <div id="levelHeightRow" style="display:none;margin-top:6px;">
@@ -790,6 +781,8 @@ let brushRadius = 3.2
     </div>
 
     <div class="ctx-panel" id="ctx-paint" style="display:none">
+      <label style="margin-top:0;font-size:11px;color:rgba(255,255,255,0.45);">Brush Size <span id="paintBrushSizeLabel">1</span></label>
+      <input id="paintBrushSizeSlider" type="range" min="1" max="16" step="1" value="1" style="margin-top:3px;" />
       <div class="ground-swatches" id="groundSwatches"></div>
       <div class="row">
         <label><input id="toggleHalfPaint" type="checkbox" /> Half Tile Paint</label>
@@ -1311,9 +1304,7 @@ let brushRadius = 3.2
   const smoothModeBtn = sidebar.querySelector('#toggleSmoothMode')
   const levelModeBtn = sidebar.querySelector('#toggleLevelMode')
   const saveMapBtn = topBar.querySelector('#saveMapBtn')
-  const mapWidthInput = topBar.querySelector('#mapWidthInput')
-  const mapHeightInput = topBar.querySelector('#mapHeightInput')
-  const resizeMapBtn = topBar.querySelector('#resizeMapBtn')
+  const mapSizeLabel = topBar.querySelector('#mapSizeLabel')
   const statusText = statusBar.querySelector('#statusText')
   const hoverText = statusBar.querySelector('#hoverText')
 
@@ -1463,8 +1454,7 @@ let brushRadius = 3.2
   })
   replaceTextureSearchEl?.addEventListener('input', buildReplaceTextureGrid)
 
-  mapWidthInput.value = map.width
-  mapHeightInput.value = map.height
+  mapSizeLabel.textContent = `${map.width} x ${map.height}`
 
 
 
@@ -1535,6 +1525,8 @@ let brushRadius = 3.2
         mesh.isVisible = layer ? layer.visible : true
       }
     }
+    // Ensure texture overlays are visible when not culling
+    if (textureOverlayGroup) textureOverlayGroup.setEnabled(true)
   }
 
   function refreshLayersPanel() { /* removed */ }
@@ -1963,8 +1955,7 @@ let brushRadius = 3.2
     loadItemSpawns(data.itemSpawns)
     loadCollisionData(data.collisionData)
 
-    mapWidthInput.value = map.width
-    mapHeightInput.value = map.height
+    mapSizeLabel.textContent = `${map.width} x ${map.height}`
     worldOffsetX.value = map.worldOffset.x
     worldOffsetZ.value = map.worldOffset.z
     applyMapType()
@@ -2066,8 +2057,7 @@ let brushRadius = 3.2
     loadItemSpawns(snapshot.itemSpawns)
     loadCollisionData(snapshot.collisionData)
 
-    mapWidthInput.value = map.width
-    mapHeightInput.value = map.height
+    mapSizeLabel.textContent = `${map.width} x ${map.height}`
 
     if (map.terrainGeneration !== prevTerrainGen) {
       // Terrain geometry changed — full rebuild required
@@ -2356,6 +2346,8 @@ let brushRadius = 3.2
     if (!textureOverlayGroup) {
       textureOverlayGroup = new TransformNode('texture-overlays', scene)
     }
+    // Ensure the group is enabled so newly added overlays are visible
+    if (!textureOverlayGroup.isEnabled()) textureOverlayGroup.setEnabled(true)
     // Remove existing overlay meshes for this tile
     const prefix = `texoverlay_${tx}_${tz}`
     for (const child of [...textureOverlayGroup.getChildMeshes()]) {
@@ -2428,6 +2420,7 @@ let brushRadius = 3.2
       mat.zOffset = -2
       mesh.material = mat
       mesh.parent = textureOverlayGroup
+      console.log(`[TexOverlay] Created overlay at (${tx},${tz}), group enabled: ${textureOverlayGroup.isEnabled()}, mesh verts: ${mesh.getTotalVertices()}, textureId: ${textureId}`)
     }
 
     if (tile.textureHalfMode) {
@@ -3131,33 +3124,36 @@ function applyToolAtTile(tile, eventLike = null) {
       return
     }
 
-    if (state.paintType === 'water') {
-      map.paintWaterTile(tile.x, tile.z)
-    } else if (state.halfPaint) {
-      const u = tile.u ?? 0.5
-      const v = tile.v ?? 0.5
-      // Auto-set split direction based on which corner the cursor is nearest,
-      // then paint the triangle that covers that corner.
-      // TL corner: forward split, first half    TR corner: back split, first half
-      // BL corner: back split, second half      BR corner: forward split, second half
-      const nearLeft = u < 0.5
-      const nearTop = v < 0.5
-      if (nearLeft === nearTop) {
-        // TL or BR corner → forward split (diagonal TL→BR)
-        map.setTileSplit(tile.x, tile.z, 'forward')
-        if (nearTop) map.paintTileFirst(tile.x, tile.z, state.paintType)
-        else map.paintTileSecond(tile.x, tile.z, state.paintType)
-      } else {
-        // TR or BL corner → back split (diagonal TR→BL)
-        map.setTileSplit(tile.x, tile.z, 'back')
-        if (nearTop) map.paintTileFirst(tile.x, tile.z, state.paintType)
-        else map.paintTileSecond(tile.x, tile.z, state.paintType)
+    const _pbr = paintBrushRadius - 1
+    const cx = tile.x, cz = tile.z
+    for (let dz = -_pbr; dz <= _pbr; dz++) {
+      for (let dx = -_pbr; dx <= _pbr; dx++) {
+        if (dx * dx + dz * dz > _pbr * _pbr + _pbr) continue
+        const tx = cx + dx, tz = cz + dz
+        if (tx < 0 || tz < 0 || tx >= map.width || tz >= map.height) continue
+        if (state.paintType === 'water') {
+          map.paintWaterTile(tx, tz)
+        } else if (state.halfPaint && dx === 0 && dz === 0) {
+          const u = tile.u ?? 0.5
+          const v = tile.v ?? 0.5
+          const nearLeft = u < 0.5
+          const nearTop = v < 0.5
+          if (nearLeft === nearTop) {
+            map.setTileSplit(tx, tz, 'forward')
+            if (nearTop) map.paintTileFirst(tx, tz, state.paintType)
+            else map.paintTileSecond(tx, tz, state.paintType)
+          } else {
+            map.setTileSplit(tx, tz, 'back')
+            if (nearTop) map.paintTileFirst(tx, tz, state.paintType)
+            else map.paintTileSecond(tx, tz, state.paintType)
+          }
+        } else if (!state.halfPaint) {
+          map.paintTile(tx, tz, state.paintType)
+        }
       }
-    } else {
-      map.paintTile(tile.x, tile.z, state.paintType)
     }
 
-    markTerrainDirty({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true, heightsOnly: true, region: { x1: tile.x, z1: tile.z, x2: tile.x, z2: tile.z } })
+    markTerrainDirty({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true, heightsOnly: true, region: { x1: cx - _pbr, z1: cz - _pbr, x2: cx + _pbr, z2: cz + _pbr } })
     return
   }
 
@@ -4053,6 +4049,14 @@ function applyToolAtTile(tile, eventLike = null) {
     brushSizeLabel.textContent = brushRadius.toFixed(1)
   })
 
+  const paintBrushSizeSlider = sidebar.querySelector('#paintBrushSizeSlider')
+  const paintBrushSizeLabel = sidebar.querySelector('#paintBrushSizeLabel')
+
+  paintBrushSizeSlider.addEventListener('input', (e) => {
+    paintBrushRadius = parseInt(e.target.value)
+    paintBrushSizeLabel.textContent = paintBrushRadius
+  })
+
 
   const levelHeightRow = sidebar.querySelector('#levelHeightRow')
   const levelHeightInput = sidebar.querySelector('#levelHeightInput')
@@ -4319,27 +4323,142 @@ function applyToolAtTile(tile, eventLike = null) {
     if (Number.isFinite(v)) map.worldOffset.z = v
   })
 
-  resizeMapBtn.addEventListener('click', () => {
-    const newWidth = Number(mapWidthInput.value)
-    const newHeight = Number(mapHeightInput.value)
-    if (!Number.isFinite(newWidth) || !Number.isFinite(newHeight)) return
-    if (newWidth < 4 || newHeight < 4) return
+  const CHUNK = 64
+  const chunkGridBtn = topBar.querySelector('#chunkGridBtn')
+  const chunkGridPopup = topBar.querySelector('#chunkGridPopup')
+  const chunkGridContainer = topBar.querySelector('#chunkGridContainer')
 
+  chunkGridBtn.addEventListener('click', () => {
+    chunkGridPopup.style.display = chunkGridPopup.style.display === 'none' ? 'block' : 'none'
+    if (chunkGridPopup.style.display === 'block') rebuildChunkGrid()
+  })
+
+  // Close popup when clicking outside
+  document.addEventListener('mousedown', (e) => {
+    if (chunkGridPopup.style.display === 'block' && !chunkGridPopup.contains(e.target) && e.target !== chunkGridBtn) {
+      chunkGridPopup.style.display = 'none'
+    }
+  })
+
+  function getChunkBounds() {
+    // Get bounding box of active chunks
+    let minCx = Infinity, minCz = Infinity, maxCx = -Infinity, maxCz = -Infinity
+    for (const key of map.activeChunks) {
+      const [cx, cz] = key.split(',').map(Number)
+      minCx = Math.min(minCx, cx); minCz = Math.min(minCz, cz)
+      maxCx = Math.max(maxCx, cx); maxCz = Math.max(maxCz, cz)
+    }
+    if (minCx === Infinity) { minCx = 0; minCz = 0; maxCx = 0; maxCz = 0 }
+    return { minCx, minCz, maxCx, maxCz }
+  }
+
+  function rebuildChunkGrid() {
+    const { minCx, minCz, maxCx, maxCz } = getChunkBounds()
+    // Show 1 empty cell border around active chunks for adding new ones
+    const gx0 = minCx - 1, gz0 = minCz - 1
+    const gx1 = maxCx + 1, gz1 = maxCz + 1
+    const cols = gx1 - gx0 + 1
+    chunkGridContainer.style.gridTemplateColumns = `repeat(${cols}, 28px)`
+    chunkGridContainer.innerHTML = ''
+    for (let gz = gz0; gz <= gz1; gz++) {
+      for (let gx = gx0; gx <= gx1; gx++) {
+        const active = map.activeChunks.has(`${gx},${gz}`)
+        // Only show inactive cells if they're adjacent to an active chunk
+        const adjacent = !active && (
+          map.activeChunks.has(`${gx-1},${gz}`) || map.activeChunks.has(`${gx+1},${gz}`) ||
+          map.activeChunks.has(`${gx},${gz-1}`) || map.activeChunks.has(`${gx},${gz+1}`)
+        )
+        const cell = document.createElement('div')
+        cell.style.cssText = `width:28px;height:28px;border-radius:3px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:9px;color:#fff;`
+        if (active) {
+          cell.style.background = '#2d6cdf'
+          cell.textContent = `${gx},${gz}`
+          cell.title = `Chunk (${gx},${gz}) — Shift+click to remove`
+        } else if (adjacent) {
+          cell.style.background = '#333'
+          cell.style.border = '1px dashed #666'
+          cell.textContent = '+'
+          cell.title = `Click to add chunk (${gx},${gz})`
+        } else {
+          cell.style.background = 'transparent'
+          cell.style.cursor = 'default'
+        }
+        if (active || adjacent) {
+          const cx = gx, cz = gz
+          cell.addEventListener('click', (e) => {
+            if (active && e.shiftKey) {
+              removeChunk(cx, cz)
+            } else if (!active && adjacent) {
+              addChunk(cx, cz)
+            }
+            rebuildChunkGrid()
+          })
+        }
+        chunkGridContainer.appendChild(cell)
+      }
+    }
+  }
+
+  function addChunk(cx, cz) {
     pushUndoState()
-    map = map.resize(newWidth, newHeight)
+    // Expand backing array if needed
+    const needRight = (cx + 1) * CHUNK
+    const needBottom = (cz + 1) * CHUNK
+    const needLeft = cx * CHUNK
+    const needTop = cz * CHUNK
+    let ox = 0, oz = 0
+    let newW = map.width, newH = map.height
+    if (needLeft < 0) { ox = -needLeft; newW += ox }
+    if (needTop < 0) { oz = -needTop; newH += oz }
+    if (needRight + ox > newW) newW = needRight + ox
+    if (needBottom + oz > newH) newH = needBottom + oz
+
+    if (newW !== map.width || newH !== map.height || ox !== 0 || oz !== 0) {
+      map = map.resize(newW, newH, ox, oz)
+      if (ox !== 0 || oz !== 0) {
+        for (const child of placedGroup.getChildren()) {
+          child.position.x += ox
+          child.position.z += oz
+          if (child.metadata) {
+            if (child.metadata.x != null) child.metadata.x += ox
+            if (child.metadata.z != null) child.metadata.z += oz
+          }
+        }
+        for (const s of npcSpawns) { s.x += ox; s.z += oz }
+        for (const s of itemSpawns) { s.x += ox; s.z += oz }
+        _spatialGrid.clear()
+        for (const child of placedGroup.getChildren()) _spatialRegister(child)
+      }
+    }
+    // The chunk coord may have shifted if we expanded left/up
+    const finalCx = cx + Math.floor(ox / CHUNK)
+    const finalCz = cz + Math.floor(oz / CHUNK)
+    map.activeChunks.add(`${finalCx},${finalCz}`)
+    afterChunkChange()
+  }
+
+  function removeChunk(cx, cz) {
+    if (map.activeChunks.size <= 1) return // keep at least one chunk
+    pushUndoState()
+    map.activeChunks.delete(`${cx},${cz}`)
+    afterChunkChange()
+  }
+
+  function afterChunkChange() {
     selectedPlacedObject = null
     selectedPlacedObjects = []
     selectedTexturePlane = null
-      selectedTexturePlanes = []
+    selectedTexturePlanes = []
     transformMode = null
     transformStart = null
     transformLift = 0
     movePlaneStart = null
-
+    mapSizeLabel.textContent = `${map.width} x ${map.height}`
     rebuildTexturePlanesOnly()
     updateSelectionHelper()
     updateToolUI()
-  })
+    markTerrainDirty({ rebuildTexturePlanes: true, rebuildTextureOverlays: true })
+  }
 
   sidebar.querySelector('#toggleSplitLines').addEventListener('change', (e) => {
     state.showSplitLines = e.target.checked
@@ -4370,36 +4489,32 @@ function applyToolAtTile(tile, eventLike = null) {
 
   // Layers toggle removed
 
-  function toggleHeightCull() {
-    heightCullEnabled = !heightCullEnabled
+  const heightCullLevels = [
+    { label: 'Off', value: Infinity },
+    { label: '1F', value: 1.8 },
+    { label: '1F+Roof', value: 3.5 },
+    { label: '2F', value: 5.5 },
+    { label: '2F+Roof', value: 7.5 },
+    { label: '3F', value: 9.5 },
+    { label: '3F+Roof', value: 11.5 },
+  ]
+  let heightCullIndex = 0
+
+  function cycleHeightCull() {
+    heightCullIndex = (heightCullIndex + 1) % heightCullLevels.length
+    const level = heightCullLevels[heightCullIndex]
+    heightCullEnabled = level.value !== Infinity
+    heightCullThreshold = level.value
     const btn = sidebar.querySelector('#heightCullBtn')
-    const controls = sidebar.querySelector('#heightCullControls')
-    if (btn) btn.classList.toggle('active-tool', heightCullEnabled)
-    if (controls) controls.style.display = heightCullEnabled ? 'block' : 'none'
+    if (btn) {
+      btn.textContent = `H: ${level.label}`
+      btn.classList.toggle('active-tool', heightCullEnabled)
+    }
     if (heightCullEnabled) applyHeightCull()
     else applyLayerVisibility()
   }
 
-  sidebar.querySelector('#heightCullBtn')?.addEventListener('click', toggleHeightCull)
-
-  const heightCullSlider = sidebar.querySelector('#heightCullSlider')
-  const heightCullValueLabel = sidebar.querySelector('#heightCullValue')
-  heightCullSlider?.addEventListener('input', () => {
-    heightCullThreshold = parseFloat(heightCullSlider.value)
-    if (heightCullValueLabel) heightCullValueLabel.textContent = heightCullThreshold.toFixed(1)
-    if (heightCullEnabled) applyHeightCull()
-  })
-
-  // Preset floor buttons
-  for (const btn of sidebar.querySelectorAll('[data-cull]')) {
-    btn.addEventListener('click', () => {
-      heightCullThreshold = parseFloat(btn.dataset.cull)
-      if (heightCullSlider) heightCullSlider.value = heightCullThreshold
-      if (heightCullValueLabel) heightCullValueLabel.textContent = heightCullThreshold.toFixed(1)
-      if (!heightCullEnabled) toggleHeightCull()
-      else applyHeightCull()
-    })
-  }
+  sidebar.querySelector('#heightCullBtn')?.addEventListener('click', cycleHeightCull)
 
   function assignSelectedToLayer(layerId) {
     if (!selectedPlacedObjects.length && !selectedTexturePlane) return
@@ -4929,6 +5044,10 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
         // Shadow cache is stale after terrain edits, but a full rebuild is expensive.
         // Just invalidate the cache so the NEXT rebuild (e.g. from undo) picks it up.
         invalidateShadowCache()
+        // Rebuild texture overlays so they align with new terrain heights
+        if (state.tool === ToolMode.TERRAIN) {
+          markTerrainDirty({ rebuildTextureOverlays: true })
+        }
       }
 
       if (isDragSelecting && dragSelectStart) {
@@ -5006,6 +5125,12 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
         const layer = layers.find((l) => l.id === (plane.layerId || 'layer_0'))
         const layerVisible = layer ? layer.visible : true
         mesh.isVisible = layerVisible && plane.position.y <= cullY
+      }
+    }
+    // Also cull texture overlays by height
+    if (textureOverlayGroup) {
+      for (const mesh of textureOverlayGroup.getChildMeshes()) {
+        mesh.isVisible = mesh.position.y <= cullY
       }
     }
   }
@@ -5266,7 +5391,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
     }
 
     if (key === 'h') {
-      toggleHeightCull()
+      cycleHeightCull()
       return
     }
 
@@ -5324,6 +5449,20 @@ if (key === 'e') {
   markTerrainDirty({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true, heightsOnly: true, region: { x1: x - _er, z1: z - _er, x2: x + _er, z2: z + _er } })
   return
 }
+
+    if (key === '[' || key === ']') {
+      const delta = key === ']' ? 1 : -1
+      if (state.tool === ToolMode.PAINT) {
+        paintBrushRadius = Math.max(1, Math.min(16, paintBrushRadius + delta))
+        paintBrushSizeSlider.value = paintBrushRadius
+        paintBrushSizeLabel.textContent = paintBrushRadius
+      } else if (state.tool === ToolMode.TERRAIN) {
+        brushRadius = Math.max(0.4, Math.min(16, brushRadius + delta * 0.4))
+        brushSizeSlider.value = brushRadius
+        brushSizeLabel.textContent = brushRadius.toFixed(1)
+      }
+      return
+    }
 
     if (key === 'k') {
       snapSelectedThingNow()

@@ -377,7 +377,8 @@
   {
     "id": "tex77",
     "name": "Texture 77",
-    "path": "/assets/textures/77.png"
+    "path": "/assets/textures/77.png",
+    "defaultScale": 4
   },
   {
     "id": "tex0",
@@ -464,82 +465,98 @@
   {
     "id": "tex78",
     "name": "Texture 78",
-    "path": "/assets/textures/78.png"
+    "path": "/assets/textures/78.png",
+    "defaultScale": 4
   },
   {
     "id": "tex79",
     "name": "Texture 79",
-    "path": "/assets/textures/79.jpg"
+    "path": "/assets/textures/79.jpg",
+    "defaultScale": 4
   },
   {
     "id": "tex80",
     "name": "Texture 80",
-    "path": "/assets/textures/80.jpg"
+    "path": "/assets/textures/80.jpg",
+    "defaultScale": 4
   },
   {
     "id": "tex81",
     "name": "Texture 81",
-    "path": "/assets/textures/81.jpg"
+    "path": "/assets/textures/81.jpg",
+    "defaultScale": 4
   },
   {
     "id": "tex82",
     "name": "Texture 82",
-    "path": "/assets/textures/82.jpg"
+    "path": "/assets/textures/82.jpg",
+    "defaultScale": 4
   },
   {
     "id": "tex83",
     "name": "Texture 83",
-    "path": "/assets/textures/83.jpg"
+    "path": "/assets/textures/83.jpg",
+    "defaultScale": 4
   },
   {
     "id": "tex84",
     "name": "Texture 84",
-    "path": "/assets/textures/84.jpg"
+    "path": "/assets/textures/84.jpg",
+    "defaultScale": 4
   },
   {
     "id": "tex85",
     "name": "Texture 85",
-    "path": "/assets/textures/85.jpg"
+    "path": "/assets/textures/85.jpg",
+    "defaultScale": 4
   },
   {
     "id": "tex86",
     "name": "Texture 86",
-    "path": "/assets/textures/86.png"
+    "path": "/assets/textures/86.png",
+    "defaultScale": 4
   },
   {
     "id": "tex87",
     "name": "Texture 87",
-    "path": "/assets/textures/87.tif"
+    "path": "/assets/textures/87.tif",
+    "defaultScale": 4
   },
   {
     "id": "tex88",
     "name": "Texture 88",
-    "path": "/assets/textures/88.tif"
+    "path": "/assets/textures/88.tif",
+    "defaultScale": 4
   },
   {
     "id": "tex89",
     "name": "Texture 89",
-    "path": "/assets/textures/89.tif"
+    "path": "/assets/textures/89.tif",
+    "defaultScale": 4
   },
   {
     "id": "tex90",
     "name": "Texture 90",
-    "path": "/assets/textures/90.jpg"
+    "path": "/assets/textures/90.jpg",
+    "defaultScale": 4
   },
   {
     "id": "tex91",
     "name": "Texture 91",
-    "path": "/assets/textures/91.jpg"
+    "path": "/assets/textures/91.jpg",
+    "defaultScale": 4
   },
   {
     "id": "tex92",
     "name": "Texture 92",
-    "path": "/assets/textures/92.jpg"
+    "path": "/assets/textures/92.jpg",
+    "defaultScale": 4
   },
   {
     "id": "tex93",
     "name": "Texture 93",
-    "path": "/assets/textures/93.tif"
+    "path": "/assets/textures/93.tif",
+    "defaultScale": 4
   },
   {
     "id": "tex94",

@@ -280,14 +280,15 @@ const server = Bun.serve<SocketData>({
           return new Response('Forbidden', { status: 403 });
         }
 
-        // Preserve existing meta dimensions and spawn point
+        // Use editor's dimensions (may have changed via chunk add/remove), preserve spawn point
         const metaPath = resolve(mapDir, 'meta.json');
         try {
           const existingMeta = JSON.parse(readFileSync(metaPath, 'utf-8'));
-          if (existingMeta.width) meta.width = existingMeta.width;
-          if (existingMeta.height) meta.height = existingMeta.height;
           if (existingMeta.spawnPoint) meta.spawnPoint = existingMeta.spawnPoint;
         } catch { /* first save */ }
+        // Use dimensions from map data if available (editor backing array may have grown)
+        if (mapData.map?.width) meta.width = mapData.map.width;
+        if (mapData.map?.height) meta.height = mapData.map.height;
         writeFileSync(metaPath, JSON.stringify(meta, null, 2));
 
         // Save spawns (NPCs, items, and any sprite-only objects from editor)

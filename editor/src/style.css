@@ -127,6 +127,7 @@ canvas {
   gap: 3px;
   padding: 7px 7px 5px;
   flex-shrink: 0;
+  position: relative;
 }
 
 .tool-btn {

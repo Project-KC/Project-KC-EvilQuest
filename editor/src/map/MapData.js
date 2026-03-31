@@ -10,6 +10,14 @@ export class MapData {
     this.chunkWaterLevels = {}   // keyed "chunkX,chunkZ", overrides waterLevel per 64x64 chunk
     this.texturePlanes = []
     this.selectedTexturePlaneId = null
+    this.activeChunks = new Set() // "cx,cz" keys for active 64x64 chunks
+    // Initialize all chunks within bounds as active
+    const CHUNK = 64
+    for (let cz = 0; cz < Math.ceil(height / CHUNK); cz++) {
+      for (let cx = 0; cx < Math.ceil(width / CHUNK); cx++) {
+        this.activeChunks.add(`${cx},${cz}`)
+      }
+    }
 
     this.tiles = []
     for (let z = 0; z < height; z++) {
@@ -42,6 +50,14 @@ export class MapData {
       }
       this.heights.push(row)
     }
+  }
+
+  isChunkActive(cx, cz) {
+    return this.activeChunks.has(`${cx},${cz}`)
+  }
+
+  isTileInActiveChunk(x, z) {
+    return this.activeChunks.has(`${Math.floor(x / 64)},${Math.floor(z / 64)}`)
   }
 
   getTile(x, z) {
@@ -323,24 +339,62 @@ export class MapData {
     return plane
   }
 
-  resize(newWidth, newHeight) {
+  resize(newWidth, newHeight, offsetX = 0, offsetZ = 0) {
     const next = new MapData(newWidth, newHeight)
     next.mapType = this.mapType
     next.worldOffset = { ...this.worldOffset }
     next.waterLevel = this.waterLevel
-    next.chunkWaterLevels = { ...this.chunkWaterLevels }
+    // Shift chunk water level keys by the offset
+    next.chunkWaterLevels = {}
+    if (offsetX !== 0 || offsetZ !== 0) {
+      const CHUNK = 64
+      for (const [key, val] of Object.entries(this.chunkWaterLevels)) {
+        const [kx, kz] = key.split(',').map(Number)
+        next.chunkWaterLevels[`${kx + Math.floor(offsetX / CHUNK)},${kz + Math.floor(offsetZ / CHUNK)}`] = val
+      }
+    } else {
+      Object.assign(next.chunkWaterLevels, this.chunkWaterLevels)
+    }
     next.texturePlanes = JSON.parse(JSON.stringify(this.texturePlanes))
     next.selectedTexturePlaneId = this.selectedTexturePlaneId
 
-    for (let z = 0; z < Math.min(this.height, newHeight); z++) {
-      for (let x = 0; x < Math.min(this.width, newWidth); x++) {
-        next.tiles[z][x] = JSON.parse(JSON.stringify(this.tiles[z][x]))
+    // Carry over active chunks with offset
+    const CHUNK = 64
+    const coxChunks = Math.floor(offsetX / CHUNK)
+    const cozChunks = Math.floor(offsetZ / CHUNK)
+    next.activeChunks = new Set()
+    for (const key of this.activeChunks) {
+      const [cx, cz] = key.split(',').map(Number)
+      next.activeChunks.add(`${cx + coxChunks},${cz + cozChunks}`)
+    }
+
+    // Offset texture planes by the resize shift
+    if (offsetX !== 0 || offsetZ !== 0) {
+      for (const tp of next.texturePlanes) {
+        if (tp.position) {
+          if (tp.position.x != null) tp.position.x += offsetX
+          if (tp.position.z != null) tp.position.z += offsetZ
+        }
       }
     }
 
-    for (let z = 0; z <= Math.min(this.height, newHeight); z++) {
-      for (let x = 0; x <= Math.min(this.width, newWidth); x++) {
-        next.heights[z][x] = this.heights[z][x]
+    for (let sz = 0; sz < this.height; sz++) {
+      const dz = sz + offsetZ
+      if (dz < 0 || dz >= newHeight) continue
+      for (let sx = 0; sx < this.width; sx++) {
+        const dx = sx + offsetX
+        if (dx < 0 || dx >= newWidth) continue
+        next.tiles[dz][dx] = JSON.parse(JSON.stringify(this.tiles[sz][sx]))
+      }
+    }
+
+    for (let sz = 0; sz <= this.height; sz++) {
+      const dz = sz + offsetZ
+      if (dz < 0 || dz > newHeight) continue
+      for (let sx = 0; sx <= this.width; sx++) {
+        const dx = sx + offsetX
+        if (dx < 0 || dx > newWidth) continue
+        next.heights[dz][dx] = this.heights[sz][sx]
       }
     }
 
@@ -359,7 +413,8 @@ export class MapData {
       texturePlanes: this.texturePlanes,
       tiles: this.tiles,
       heights: this.heights,
-      terrainGeneration: this.terrainGeneration
+      terrainGeneration: this.terrainGeneration,
+      activeChunks: [...this.activeChunks]
     }
   }
 
@@ -426,6 +481,12 @@ export class MapData {
     }
 
     map.terrainGeneration = data.terrainGeneration ?? 0
+
+    // Restore active chunks (default: all chunks active for backwards compat)
+    if (Array.isArray(data.activeChunks)) {
+      map.activeChunks = new Set(data.activeChunks)
+    }
+
     return map
   }
 }

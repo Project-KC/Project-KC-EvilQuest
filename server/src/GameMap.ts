@@ -20,6 +20,9 @@ export class GameMap {
   /** Placed objects from the editor (for deriving world object spawns) */
   readonly placedObjects: { assetId: string; position: { x: number; y: number; z: number }; rotation?: { x: number; y: number; z: number }; scale?: { x: number; y: number; z: number } }[] = [];
 
+  /** Active editor chunks (64x64) — tiles outside active chunks are treated as impassable void */
+  private activeChunks: Set<string> | null = null;
+
   /** Cached tile types for fast collision checks */
   private tileTypes: Uint8Array;
 
@@ -78,6 +81,11 @@ export class GameMap {
       assetId: o.assetId, position: o.position, rotation: o.rotation, scale: o.scale
     }));
 
+    // Load active chunks from editor data
+    if (Array.isArray((mapFile.map as any).activeChunks)) {
+      this.activeChunks = new Set((mapFile.map as any).activeChunks as string[]);
+    }
+
     // Build height cache (flat Float32Array for fast access)
     const vw = this.width + 1;
     const vh = this.height + 1;
@@ -92,6 +100,11 @@ export class GameMap {
     this.tileTypes = new Uint8Array(this.width * this.height);
     for (let z = 0; z < this.height; z++) {
       for (let x = 0; x < this.width; x++) {
+        // Tiles in inactive chunks are impassable void
+        if (this.activeChunks && !this.activeChunks.has(`${Math.floor(x / 64)},${Math.floor(z / 64)}`)) {
+          this.tileTypes[z * this.width + x] = TileType.WALL;
+          continue;
+        }
         const tile = this.mapData.tiles[z]?.[x];
         if (!tile) {
           this.tileTypes[z * this.width + x] = TileType.GRASS;

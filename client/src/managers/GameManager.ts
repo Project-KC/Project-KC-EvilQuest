@@ -1803,8 +1803,8 @@ export class GameManager {
     // WASD camera rotation
     const camSpeed = 2.0 * dt;
     const cam = this.camera.getCamera();
-    if (this.keysDown.has('a') || this.keysDown.has('arrowleft')) cam.alpha -= camSpeed;
-    if (this.keysDown.has('d') || this.keysDown.has('arrowright')) cam.alpha += camSpeed;
+    if (this.keysDown.has('a') || this.keysDown.has('arrowleft')) cam.alpha += camSpeed;
+    if (this.keysDown.has('d') || this.keysDown.has('arrowright')) cam.alpha -= camSpeed;
     if (this.keysDown.has('w') || this.keysDown.has('arrowup')) cam.beta = Math.max(0.2, cam.beta - camSpeed);
     if (this.keysDown.has('s') || this.keysDown.has('arrowdown')) cam.beta = Math.min(Math.PI / 2.2, cam.beta + camSpeed);
     // Escape resets camera rotation to default

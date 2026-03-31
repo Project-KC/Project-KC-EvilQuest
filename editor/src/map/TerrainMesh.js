@@ -440,6 +440,7 @@ export function buildTerrainMeshes(map, waterTexture, shadowInf = null, scene) {
   for (let z = 0; z < map.height; z++) {
     for (let x = 0; x < map.width; x++) {
       newTileOff[z * map.width + x] = landBase
+      if (!map.isTileInActiveChunk(x, z)) continue
       const h = map.getTileCornerHeights(x, z)
       const landType = map.getBaseGroundType(x, z)
 
@@ -475,6 +476,7 @@ export function buildTerrainMeshes(map, waterTexture, shadowInf = null, scene) {
   const _swColor = { r: 0.55, g: 0.72, b: 0.78 }
   for (let z = 0; z < map.height; z++) {
     for (let x = 0; x < map.width; x++) {
+      if (!map.isTileInActiveChunk(x, z)) continue
       const tile = map.getTile(x, z)
       if (!tile?.waterSurface) continue
 
@@ -600,6 +602,7 @@ export function buildWaterMeshes(map, waterTexture, scene) {
   const _swColor = { r: 0.55, g: 0.72, b: 0.78 }
   for (let z = 0; z < map.height; z++) {
     for (let x = 0; x < map.width; x++) {
+      if (!map.isTileInActiveChunk(x, z)) continue
       const tile = map.getTile(x, z)
       if (!tile?.waterSurface) continue
       const h = map.getTileCornerHeights(x, z)
@@ -687,6 +690,7 @@ export function buildCliffMeshes(map, scene) {
 
   for (let z = 0; z < map.height; z++) {
     for (let x = 0; x < map.width; x++) {
+      if (!map.isTileInActiveChunk(x, z)) continue
       const h = map.getTileCornerHeights(x, z)
       const wLevel = map.getTileWaterLevel(x, z)
 
@@ -817,6 +821,7 @@ export function buildTextureOverlays(map, textureRegistry, textureCache, scene) 
 
   for (let z = 0; z < map.height; z++) {
     for (let x = 0; x < map.width; x++) {
+      if (!map.isTileInActiveChunk(x, z)) continue
       const tile = map.getTile(x, z)
       if (!tile || (!tile.textureId && !tile.textureIdB)) continue
 

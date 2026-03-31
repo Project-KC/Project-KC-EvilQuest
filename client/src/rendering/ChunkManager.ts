@@ -49,7 +49,7 @@ function groundColor(type: GroundType, shade: number): RGB {
 
   // Desert-family types: steep slopes blend toward exposed cliff rock
   if (DESERT_SLOPE_TYPES.has(type) && shade < 0.85) {
-    const t = Math.min(1.0, (0.85 - shade) * 2.5); // 0 at shade=0.85, 1 at shade=0.45
+    const t = Math.min(1.0, (0.85 - shade) * 2.5);
     r = r * (1 - t) + CLIFF_R * t;
     g = g * (1 - t) + CLIFF_G * t;
     b = b * (1 - t) + CLIFF_B * t;
@@ -71,22 +71,6 @@ function getNoiseExtra(type: GroundType, vx: number, vz: number): number {
       + sampleNoise(vx * 3.0, vz * 3.0, 2.0, 1.5) * 0.01;
   } else if (type === 'dirt' || type === 'sand') {
     return sampleNoise(vx * 0.5, vz * 0.5, 0.8, 1.1) * 0.02;
-  } else if (type === 'desert') {
-    // Broad dune-like waves with fine grain
-    return sampleNoise(vx * 0.12, vz * 0.12, 0.7, 1.3) * 0.06
-      + sampleNoise(vx * 0.8, vz * 0.8, 1.2, 0.9) * 0.02;
-  } else if (type === 'sandstone') {
-    // Layered strata look
-    return sampleNoise(vx * 0.3, vz * 0.3, 1.0, 0.6) * 0.04
-      + sampleNoise(vx * 2.0, vz * 2.0, 1.8, 1.4) * 0.015;
-  } else if (type === 'rock') {
-    // Craggy variation
-    return sampleNoise(vx * 0.4, vz * 0.4, 1.1, 0.8) * 0.05
-      + sampleNoise(vx * 1.5, vz * 1.5, 2.0, 1.6) * 0.02;
-  } else if (type === 'drysand') {
-    // Rough desert sand
-    return sampleNoise(vx * 0.25, vz * 0.25, 0.9, 1.0) * 0.04
-      + sampleNoise(vx * 1.2, vz * 1.2, 1.4, 1.1) * 0.015;
   }
   return 0;
 }
@@ -134,6 +118,7 @@ export class ChunkManager {
   private mapData: KCMapData | null = null;
   private mapWidth: number = 0;
   private mapHeight: number = 0;
+  private activeChunks: Set<string> | null = null; // editor 64x64 chunks
 
   // Cached flat arrays for fast access
   private heights: Float32Array | null = null;
@@ -232,6 +217,9 @@ export class ChunkManager {
     const mapRes = await fetch(`/maps/${mapId}/map.json${cacheBust}`);
     const mapFile: KCMapFile = await mapRes.json();
     this.mapData = mapFile.map;
+    this.activeChunks = Array.isArray((this.mapData as any).activeChunks)
+      ? new Set((this.mapData as any).activeChunks as string[])
+      : null;
 
     // Build height cache
     const vw = this.mapWidth + 1;
@@ -247,6 +235,10 @@ export class ChunkManager {
     this.tileTypes = new Uint8Array(this.mapWidth * this.mapHeight);
     for (let z = 0; z < this.mapHeight; z++) {
       for (let x = 0; x < this.mapWidth; x++) {
+        if (this.activeChunks && !this.activeChunks.has(`${Math.floor(x / 64)},${Math.floor(z / 64)}`)) {
+          this.tileTypes[z * this.mapWidth + x] = TileType.WALL;
+          continue;
+        }
         const tile = this.getTileRaw(x, z);
         if (!tile) { this.tileTypes[z * this.mapWidth + x] = TileType.GRASS; continue; }
         const corners = this.getTileCornerHeights(x, z);
@@ -487,7 +479,7 @@ export class ChunkManager {
     for (const [nx, nz] of sharingTiles) {
       if (!this.getTileRaw(nx, nz)) continue;
       const type = this.getBaseGroundType(nx, nz);
-      if (type === 'road') continue; // road doesn't bleed into neighbours
+      if (type === 'road') continue;
       const c = groundColor(type, 1.0);
       r += c.r; g += c.g; b += c.b;
       noise += getNoiseExtra(type, cornerX, cornerZ);
@@ -545,6 +537,22 @@ export class ChunkManager {
     for (const key of desired) {
       if (!this.chunks.has(key)) {
         const [chunkX, chunkZ] = key.split(',').map(Number);
+        // Skip if entire game chunk falls in an inactive editor chunk
+        if (this.activeChunks) {
+          const ecx = Math.floor((chunkX * CHUNK_SIZE) / 64);
+          const ecz = Math.floor((chunkZ * CHUNK_SIZE) / 64);
+          // Check all editor chunks this game chunk could overlap
+          const ecx2 = Math.floor(((chunkX + 1) * CHUNK_SIZE - 1) / 64);
+          const ecz2 = Math.floor(((chunkZ + 1) * CHUNK_SIZE - 1) / 64);
+          let anyActive = false;
+          for (let ez = ecz; ez <= ecz2; ez++) {
+            for (let ex = ecx; ex <= ecx2; ex++) {
+              if (this.activeChunks.has(`${ex},${ez}`)) { anyActive = true; break; }
+            }
+            if (anyActive) break;
+          }
+          if (!anyActive) continue;
+        }
         const meshes = this.buildChunkMeshes(chunkX, chunkZ);
         this.chunks.set(key, meshes);
       }
@@ -605,6 +613,7 @@ export class ChunkManager {
 
     for (let x = startX; x < endX; x++) {
       for (let z = startZ; z < endZ; z++) {
+        if (this.activeChunks && !this.activeChunks.has(`${Math.floor(x / 64)},${Math.floor(z / 64)}`)) continue;
         const tile = this.getTileRaw(x, z);
         const tileType = tile?.ground ?? 'grass';
         const h = this.getTileCornerHeights(x, z);
@@ -672,7 +681,6 @@ export class ChunkManager {
           cBR = this.getCornerBlendedColor(x + 1, z + 1, shadeBR);
         }
 
-        const nearCliff = this.isCliffNearby(x, z);
         const wLevel = this.getChunkWaterLevel(x, z);
 
         if (tileType !== 'water') {
@@ -694,11 +702,6 @@ export class ChunkManager {
             c.r *= 1 - depth * 0.60; c.g *= 1 - depth * 0.45; c.b *= 1 - depth * 0.20;
           };
           applyDepth(cTL, h.tl); applyDepth(cTR, h.tr); applyDepth(cBL, h.bl); applyDepth(cBR, h.br);
-        }
-
-        // Cliff saturation boost
-        if (tileType !== 'water' && nearCliff) {
-          for (const c of [cTL, cTR, cBL, cBR]) { c.r *= 1.04; c.g *= 0.92; c.b *= 0.84; }
         }
 
         // Vertex AO
@@ -2301,6 +2304,7 @@ export class ChunkManager {
     this.heights = null;
     this.tileTypes = null;
     this.mapData = null;
+    this.activeChunks = null;
     this.walls = null;
     this.wallHeights.clear();
     this.floorHeights.clear();
