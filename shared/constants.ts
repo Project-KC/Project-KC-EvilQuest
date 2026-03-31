@@ -9,3 +9,4 @@ export const VIEW_DISTANCE = 15; // tiles
 export const SERVER_PORT = 4000;
 export const GAME_WS_PATH = '/ws/game';
 export const CHAT_WS_PATH = '/ws/chat';
+export const EDITOR_CHUNK_SIZE = 64;

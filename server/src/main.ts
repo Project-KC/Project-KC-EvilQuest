@@ -764,9 +764,13 @@ const server = Bun.serve<SocketData>({
         if (mapPath.endsWith('/map.json')) {
           const mapDir = resolve(filePath, '..');
           const mapFile: KCMapFile = JSON.parse(readFileSync(filePath, 'utf-8'));
-          const chunked = loadChunkedObjects(mapDir);
-          if (chunked) mapFile.placedObjects = chunked;
-          reassembleChunkedMapData(mapDir, mapFile);
+          // If ?chunked=1, skip reassembly — serve metadata-only map.json
+          // (empty tiles/heights arrays, but all metadata intact)
+          if (url.searchParams.get('chunked') !== '1') {
+            const chunked = loadChunkedObjects(mapDir);
+            if (chunked) mapFile.placedObjects = chunked;
+            reassembleChunkedMapData(mapDir, mapFile);
+          }
           return new Response(JSON.stringify(mapFile), {
             headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
           });

@@ -153,6 +153,12 @@ export class ChunkManager {
 
   private loaded: boolean = false;
 
+  // On-demand per-editor-chunk loading
+  private chunkedMode: boolean = false;
+  private loadedEditorChunks: Set<string> = new Set();
+  private loadingEditorChunks: Set<string> = new Set();
+  private pendingGameChunks: Set<string> = new Set();
+
   // Water texture + animation
   private waterTexture: Texture | null = null;
   private waterStartTime: number = 0;
@@ -213,42 +219,58 @@ export class ChunkManager {
     this.mapWidth = this.meta.width;
     this.mapHeight = this.meta.height;
 
-    // Fetch KC map data
-    const mapRes = await fetch(`/maps/${mapId}/map.json${cacheBust}`);
+    // Fetch KC map data — request chunked mode (metadata only, no tiles/heights)
+    const mapRes = await fetch(`/maps/${mapId}/map.json${cacheBust}&chunked=1`);
     const mapFile: KCMapFile = await mapRes.json();
     this.mapData = mapFile.map;
     this.activeChunks = Array.isArray((this.mapData as any).activeChunks)
       ? new Set((this.mapData as any).activeChunks as string[])
       : null;
 
-    // Build height cache
+    // Detect if server returned full tiles (backward compat) or empty (chunked mode)
+    const hasFullTiles = this.mapData.tiles?.length > 0 && this.mapData.tiles[0]?.length > 0;
+
     const vw = this.mapWidth + 1;
     const vh = this.mapHeight + 1;
-    this.heights = new Float32Array(vw * vh);
-    for (let z = 0; z <= this.mapHeight; z++) {
-      for (let x = 0; x <= this.mapWidth; x++) {
-        this.heights[z * vw + x] = this.mapData.heights[z]?.[x] ?? 0;
-      }
-    }
 
-    // Build tile type cache for collision/pathfinding
-    this.tileTypes = new Uint8Array(this.mapWidth * this.mapHeight);
-    for (let z = 0; z < this.mapHeight; z++) {
-      for (let x = 0; x < this.mapWidth; x++) {
-        if (this.activeChunks && !this.activeChunks.has(`${Math.floor(x / 64)},${Math.floor(z / 64)}`)) {
-          this.tileTypes[z * this.mapWidth + x] = TileType.WALL;
-          continue;
-        }
-        const tile = this.getTileRaw(x, z);
-        if (!tile) { this.tileTypes[z * this.mapWidth + x] = TileType.GRASS; continue; }
-        const corners = this.getTileCornerHeights(x, z);
-        const wl = this.getChunkWaterLevel(x, z);
-        if (shouldTileRenderWater(tile, corners, wl)) {
-          this.tileTypes[z * this.mapWidth + x] = TileType.WATER;
-        } else {
-          this.tileTypes[z * this.mapWidth + x] = groundTypeToTileType(tile.ground);
+    if (hasFullTiles) {
+      // Legacy path: server returned all tiles/heights inline
+      this.chunkedMode = false;
+      this.heights = new Float32Array(vw * vh);
+      for (let z = 0; z <= this.mapHeight; z++) {
+        for (let x = 0; x <= this.mapWidth; x++) {
+          this.heights[z * vw + x] = this.mapData.heights[z]?.[x] ?? 0;
         }
       }
+      this.tileTypes = new Uint8Array(this.mapWidth * this.mapHeight);
+      for (let z = 0; z < this.mapHeight; z++) {
+        for (let x = 0; x < this.mapWidth; x++) {
+          if (this.activeChunks && !this.activeChunks.has(`${Math.floor(x / 64)},${Math.floor(z / 64)}`)) {
+            this.tileTypes[z * this.mapWidth + x] = TileType.WALL;
+            continue;
+          }
+          const tile = this.getTileRaw(x, z);
+          if (!tile) { this.tileTypes[z * this.mapWidth + x] = TileType.GRASS; continue; }
+          const corners = this.getTileCornerHeights(x, z);
+          const wl = this.getChunkWaterLevel(x, z);
+          if (shouldTileRenderWater(tile, corners, wl)) {
+            this.tileTypes[z * this.mapWidth + x] = TileType.WATER;
+          } else {
+            this.tileTypes[z * this.mapWidth + x] = groundTypeToTileType(tile.ground);
+          }
+        }
+      }
+    } else {
+      // Chunked mode: allocate empty arrays, load per-chunk on demand
+      this.chunkedMode = true;
+      this.heights = new Float32Array(vw * vh); // all zeros
+      this.tileTypes = new Uint8Array(this.mapWidth * this.mapHeight);
+      this.tileTypes.fill(TileType.WALL); // sentinel: unloaded = impassable
+      // Initialize tiles as empty 2D array
+      this.mapData.tiles = [];
+      this.loadedEditorChunks.clear();
+      this.loadingEditorChunks.clear();
+      this.pendingGameChunks.clear();
     }
 
     // Fetch walls data
@@ -355,11 +377,20 @@ export class ChunkManager {
     await this.loadAssetRegistry();
 
     // Register horizontal texture planes as walkable floors (bridges, platforms)
-    this.registerTexturePlaneFloors();
+    // Only run if we have tile data loaded (legacy mode) — in chunked mode this runs after chunks load
+    if (hasFullTiles) {
+      this.registerTexturePlaneFloors();
+    }
 
     // Index placed objects by chunk (no mesh instantiation — loaded per-chunk in updatePlayerPosition)
-    this.indexPlacedObjectsByChunk(mapFile.placedObjects || []);
-    this.buildShadowInfluences();
+    if (hasFullTiles) {
+      this.indexPlacedObjectsByChunk(mapFile.placedObjects || []);
+      this.buildShadowInfluences();
+    } else {
+      // Chunked mode: placed objects loaded per-chunk on demand, no pre-indexing
+      this.placedObjectsByChunk.clear();
+      this.shadowInf = null;
+    }
     this.loadTexturePlanes(this.mapData!.texturePlanes || []);
 
     this.loaded = true;
@@ -534,6 +565,33 @@ export class ChunkManager {
       }
     }
 
+    // In chunked mode, trigger on-demand loading of needed editor chunks
+    if (this.chunkedMode) {
+      const ECHUNK = 64;
+      const neededEditorChunks = new Set<string>();
+      for (const key of desired) {
+        const [gcx, gcz] = key.split(',').map(Number);
+        const sx = Math.floor((gcx * CHUNK_SIZE) / ECHUNK);
+        const sz = Math.floor((gcz * CHUNK_SIZE) / ECHUNK);
+        const ex = Math.floor(((gcx + 1) * CHUNK_SIZE - 1) / ECHUNK);
+        const ez = Math.floor(((gcz + 1) * CHUNK_SIZE - 1) / ECHUNK);
+        // Include neighbors for vertex blending at edges
+        for (let ecz = sz - 1; ecz <= ez + 1; ecz++) {
+          for (let ecx = sx - 1; ecx <= ex + 1; ecx++) {
+            if (ecx >= 0 && ecz >= 0) {
+              neededEditorChunks.add(`${ecx},${ecz}`);
+            }
+          }
+        }
+      }
+
+      // Trigger loading of needed editor chunks (async, non-blocking)
+      for (const ec of neededEditorChunks) {
+        const [ecx, ecz] = ec.split(',').map(Number);
+        this.loadEditorChunk(ecx, ecz);
+      }
+    }
+
     for (const key of desired) {
       if (!this.chunks.has(key)) {
         const [chunkX, chunkZ] = key.split(',').map(Number);
@@ -553,9 +611,18 @@ export class ChunkManager {
           }
           if (!anyActive) continue;
         }
-        const meshes = this.buildChunkMeshes(chunkX, chunkZ);
-        this.chunks.set(key, meshes);
+
+        if (this.isGameChunkReady(chunkX, chunkZ)) {
+          const meshes = this.buildChunkMeshes(chunkX, chunkZ);
+          this.chunks.set(key, meshes);
+        } else {
+          this.pendingGameChunks.add(key);
+        }
       }
+    }
+    // Clean up pending chunks no longer desired
+    for (const key of this.pendingGameChunks) {
+      if (!desired.has(key)) this.pendingGameChunks.delete(key);
     }
 
     // Unload placed objects for chunks leaving radius
@@ -570,6 +637,143 @@ export class ChunkManager {
         this.loadChunkPlacedObjects(key);
       }
     }
+  }
+
+  // --- On-demand editor chunk loading ---
+
+  /** Check if all editor chunks needed by a game chunk are loaded */
+  private isGameChunkReady(gcx: number, gcz: number): boolean {
+    // Legacy mode: all data was loaded upfront, always ready
+    if (!this.chunkedMode) return true;
+    const ECHUNK = 64;
+    // Check all editor chunks this game chunk overlaps (including +1 margin for vertex blending)
+    const startX = gcx * CHUNK_SIZE - 1;
+    const endX = (gcx + 1) * CHUNK_SIZE;
+    const startZ = gcz * CHUNK_SIZE - 1;
+    const endZ = (gcz + 1) * CHUNK_SIZE;
+    const neededECs = new Set<string>();
+    for (let x = startX; x <= endX; x++) {
+      for (let z = startZ; z <= endZ; z++) {
+        if (x >= 0 && z >= 0 && x < this.mapWidth && z < this.mapHeight) {
+          neededECs.add(`${Math.floor(x / ECHUNK)},${Math.floor(z / ECHUNK)}`);
+        }
+      }
+    }
+    for (const ec of neededECs) {
+      if (!this.loadedEditorChunks.has(ec)) return false;
+    }
+    return true;
+  }
+
+  /** Build any pending game chunks whose editor chunk data is now available */
+  private buildPendingGameChunks(): void {
+    for (const key of this.pendingGameChunks) {
+      const [cx, cz] = key.split(',').map(Number);
+      if (this.isGameChunkReady(cx, cz)) {
+        this.pendingGameChunks.delete(key);
+        const meshes = this.buildChunkMeshes(cx, cz);
+        this.chunks.set(key, meshes);
+        // Load placed objects for newly built chunk
+        if (!this.chunkPlacedNodes.has(key) && !this.loadingObjectChunks.has(key)) {
+          this.loadChunkPlacedObjects(key);
+        }
+      }
+    }
+  }
+
+  /** Load tile/height data for a single 64x64 editor chunk from the server */
+  private async loadEditorChunk(ecx: number, ecz: number): Promise<void> {
+    const key = `${ecx},${ecz}`;
+    if (this.loadedEditorChunks.has(key) || this.loadingEditorChunks.has(key)) return;
+    this.loadingEditorChunks.add(key);
+
+    const ECHUNK = 64;
+
+    try {
+      // Fetch tiles and heights in parallel
+      const [tilesRes, heightsRes] = await Promise.all([
+        fetch(`/maps/${this.mapId}/tiles/chunk_${ecx}_${ecz}.json`),
+        fetch(`/maps/${this.mapId}/heights/chunk_${ecx}_${ecz}.json`),
+      ]);
+
+      const startX = ecx * ECHUNK, startZ = ecz * ECHUNK;
+
+      // Populate heights
+      if (heightsRes.ok) {
+        const hData: Record<string, number> = await heightsRes.json();
+        const vw = this.mapWidth + 1;
+        for (const [k, val] of Object.entries(hData)) {
+          const [lz, lx] = k.split(',').map(Number);
+          const gx = startX + lx, gz = startZ + lz;
+          if (gx <= this.mapWidth && gz <= this.mapHeight && this.heights) {
+            this.heights[gz * vw + gx] = val;
+          }
+        }
+      }
+
+      // Populate tiles
+      if (tilesRes.ok) {
+        const tData: Record<string, Partial<KCTile>> = await tilesRes.json();
+        for (const [k, partial] of Object.entries(tData)) {
+          const [lz, lx] = k.split(',').map(Number);
+          const gx = startX + lx, gz = startZ + lz;
+          if (gx < this.mapWidth && gz < this.mapHeight) {
+            const tile = this.expandTile(partial);
+            if (!this.mapData!.tiles[gz]) this.mapData!.tiles[gz] = [];
+            this.mapData!.tiles[gz][gx] = tile;
+          }
+        }
+      }
+
+      // Populate tileTypes for this region
+      const endX = Math.min(startX + ECHUNK, this.mapWidth);
+      const endZ = Math.min(startZ + ECHUNK, this.mapHeight);
+      for (let z = startZ; z < endZ; z++) {
+        for (let x = startX; x < endX; x++) {
+          if (this.activeChunks && !this.activeChunks.has(`${Math.floor(x / 64)},${Math.floor(z / 64)}`)) {
+            this.tileTypes![z * this.mapWidth + x] = TileType.WALL;
+            continue;
+          }
+          const tile = this.getTileRaw(x, z);
+          if (!tile) { this.tileTypes![z * this.mapWidth + x] = TileType.GRASS; continue; }
+          const corners = this.getTileCornerHeights(x, z);
+          const wl = this.getChunkWaterLevel(x, z);
+          if (shouldTileRenderWater(tile, corners, wl)) {
+            this.tileTypes![z * this.mapWidth + x] = TileType.WATER;
+          } else {
+            this.tileTypes![z * this.mapWidth + x] = groundTypeToTileType(tile.ground);
+          }
+        }
+      }
+
+      this.loadedEditorChunks.add(key);
+    } catch (e) {
+      console.warn(`[ChunkManager] Failed to load editor chunk ${key}:`, e);
+    } finally {
+      this.loadingEditorChunks.delete(key);
+    }
+
+    // After loading, try to build any pending game chunks that may now be ready
+    this.buildPendingGameChunks();
+  }
+
+  /** Expand a sparse/partial tile object into a full KCTile */
+  private expandTile(partial: Partial<KCTile>): KCTile {
+    return {
+      ground: partial.ground ?? 'grass',
+      groundB: partial.groundB ?? null,
+      split: partial.split ?? 'forward',
+      textureId: partial.textureId ?? null,
+      textureRotation: partial.textureRotation ?? 0,
+      textureScale: partial.textureScale ?? 1,
+      textureWorldUV: partial.textureWorldUV ?? false,
+      textureHalfMode: partial.textureHalfMode ?? false,
+      textureIdB: partial.textureIdB ?? null,
+      textureRotationB: partial.textureRotationB ?? 0,
+      textureScaleB: partial.textureScaleB ?? 1,
+      waterPainted: partial.waterPainted ?? false,
+      waterSurface: partial.waterSurface ?? false,
+    };
   }
 
   private buildChunkMeshes(chunkX: number, chunkZ: number): ChunkMeshes {
@@ -1902,7 +2106,21 @@ export class ChunkManager {
   /** Load and instantiate placed objects for a single chunk */
   private async loadChunkPlacedObjects(chunkKey: string): Promise<void> {
     if (this.chunkPlacedNodes.has(chunkKey) || this.loadingObjectChunks.has(chunkKey)) return;
-    const objects = this.placedObjectsByChunk.get(chunkKey);
+    let objects = this.placedObjectsByChunk.get(chunkKey);
+    // If no pre-indexed objects, try fetching per-chunk file from server (chunked mode)
+    if ((!objects || objects.length === 0) && this.loadedEditorChunks.size > 0) {
+      try {
+        const [cx, cz] = chunkKey.split(',').map(Number);
+        const res = await fetch(`/maps/${this.mapId}/objects/chunk_${cx}_${cz}.json`);
+        if (res.ok) {
+          const fetched: PlacedObject[] = await res.json();
+          if (fetched.length > 0) {
+            this.placedObjectsByChunk.set(chunkKey, fetched);
+            objects = fetched;
+          }
+        }
+      } catch { /* no per-chunk objects file */ }
+    }
     if (!objects || objects.length === 0) {
       this.chunkPlacedNodes.set(chunkKey, []);
       return;
@@ -2199,7 +2417,7 @@ export class ChunkManager {
       const mesh = MeshBuilder.CreatePlane(`texplane_${plane.id}`, {
         width: plane.width,
         height: plane.height,
-        sideOrientation: plane.doubleSided ? Mesh.DOUBLESIDE : Mesh.FRONTANDBACKSIDE,
+        sideOrientation: plane.doubleSided ? Mesh.DOUBLESIDE : Mesh.DEFAULTSIDE,
       }, this.scene);
       const texClone = tex.clone();
       const uvScale = plane.uvRepeat ? 1 / plane.uvRepeat : 1;
@@ -2313,6 +2531,10 @@ export class ChunkManager {
     this.roofData.clear();
     this.floorLayerData.clear();
     this.currentFloor = 0;
+    this.chunkedMode = false;
+    this.loadedEditorChunks.clear();
+    this.loadingEditorChunks.clear();
+    this.pendingGameChunks.clear();
     this.loaded = false;
     this.lastChunkX = -999;
     this.lastChunkZ = -999;
