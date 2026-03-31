@@ -90,15 +90,7 @@ export class ServerChunkManager {
   /** Get all entity IDs within CHUNK_LOAD_RADIUS of the given chunk coords */
   getEntitiesNearChunk(cx: number, cz: number): Set<number> {
     const result = new Set<number>();
-    for (let dx = -CHUNK_LOAD_RADIUS; dx <= CHUNK_LOAD_RADIUS; dx++) {
-      for (let dz = -CHUNK_LOAD_RADIUS; dz <= CHUNK_LOAD_RADIUS; dz++) {
-        const key = this.chunkKey(cx + dx, cz + dz);
-        const set = this.chunkEntities.get(key);
-        if (set) {
-          for (const id of set) result.add(id);
-        }
-      }
-    }
+    this.forEachEntityNearChunk(cx, cz, id => result.add(id));
     return result;
   }
 
@@ -114,18 +106,43 @@ export class ServerChunkManager {
     const cx = Math.floor(worldX / CHUNK_SIZE);
     const cz = Math.floor(worldZ / CHUNK_SIZE);
     const result: number[] = [];
+    this.forEachPlayerNearChunk(cx, cz, id => result.push(id));
+    return result;
+  }
+
+  /** Zero-allocation: call fn for each entity within CHUNK_LOAD_RADIUS of chunk coords */
+  forEachEntityNearChunk(cx: number, cz: number, fn: (entityId: number) => void): void {
+    for (let dx = -CHUNK_LOAD_RADIUS; dx <= CHUNK_LOAD_RADIUS; dx++) {
+      for (let dz = -CHUNK_LOAD_RADIUS; dz <= CHUNK_LOAD_RADIUS; dz++) {
+        const key = this.chunkKey(cx + dx, cz + dz);
+        const set = this.chunkEntities.get(key);
+        if (set) {
+          for (const id of set) fn(id);
+        }
+      }
+    }
+  }
+
+  /** Zero-allocation: call fn for each player within CHUNK_LOAD_RADIUS of chunk coords */
+  forEachPlayerNearChunk(cx: number, cz: number, fn: (playerId: number) => void): void {
     for (let dx = -CHUNK_LOAD_RADIUS; dx <= CHUNK_LOAD_RADIUS; dx++) {
       for (let dz = -CHUNK_LOAD_RADIUS; dz <= CHUNK_LOAD_RADIUS; dz++) {
         const key = this.chunkKey(cx + dx, cz + dz);
         const set = this.chunkEntities.get(key);
         if (set) {
           for (const id of set) {
-            if (this.playerIds.has(id)) result.push(id);
+            if (this.playerIds.has(id)) fn(id);
           }
         }
       }
     }
-    return result;
+  }
+
+  /** Zero-allocation: call fn for each player within CHUNK_LOAD_RADIUS of world position */
+  forEachPlayerNear(worldX: number, worldZ: number, fn: (playerId: number) => void): void {
+    const cx = Math.floor(worldX / CHUNK_SIZE);
+    const cz = Math.floor(worldZ / CHUNK_SIZE);
+    this.forEachPlayerNearChunk(cx, cz, fn);
   }
 
   getEntityChunk(entityId: number): [number, number] | null {

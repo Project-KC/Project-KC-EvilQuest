@@ -57,6 +57,10 @@ export function handleGameSocketMessage(
   const playerId = ws.data.playerId;
   if (!playerId) return;
 
+  // Rate limit: drop excessive messages to prevent spam/abuse
+  const player = world.getPlayer(playerId);
+  if (player && !player.checkRateLimit()) return;
+
   switch (opcode) {
     case ClientOpcode.PLAYER_MOVE: {
       const pathLength = values[0];

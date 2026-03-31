@@ -10,6 +10,7 @@ import { GameDatabase } from './Database';
 import { processPlayerCombat, processNpcCombat, rollLoot } from './combat/Combat';
 import { broadcastPlayerInfo } from './network/ChatSocket';
 import { ServerChunkManager } from './ChunkManager';
+import { readdirSync } from 'fs';
 
 /** Map string IDs to small integers for blockedObjectTiles encoding */
 const mapIdRegistry: Map<string, number> = new Map();
@@ -19,9 +20,9 @@ function getMapIdx(mapId: string): number {
   if (idx === undefined) { idx = nextMapIdx++; mapIdRegistry.set(mapId, idx); }
   return idx;
 }
-/** Encode map+tile into a single number. Supports tiles up to 4095x4095 with up to 16 maps. */
+/** Encode map+tile into a single number. Supports tiles up to 65535x65535 with up to ~2000 maps. */
 function blockedKey(mapIdx: number, tileX: number, tileZ: number): number {
-  return (mapIdx << 24) | (tileX << 12) | tileZ;
+  return mapIdx * 4294967296 + tileX * 65536 + tileZ;
 }
 const HITPOINTS_SKILL_INDEX = ALL_SKILLS.indexOf('hitpoints' as SkillId);
 
@@ -65,13 +66,31 @@ export class World {
     this.db = db;
     this.data = new DataLoader();
 
-    // Load all maps
-    this.loadMap('kcmap');
-    this.loadMap('underground');
+    // Auto-discover maps from server/data/maps/
+    this.discoverAndLoadMaps();
 
     // Spawn NPCs and objects from data files
     this.spawnNpcs();
     this.spawnWorldObjects();
+  }
+
+  private discoverAndLoadMaps(): void {
+    const mapsDir = `${import.meta.dir}/../data/maps`;
+    try {
+      const entries = readdirSync(mapsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          try {
+            this.loadMap(entry.name);
+          } catch (e) {
+            console.warn(`Failed to load map '${entry.name}':`, e);
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Failed to discover maps:', e);
+    }
+    console.log(`Loaded ${this.maps.size} maps: ${[...this.maps.keys()].join(', ')}`);
   }
 
   private loadMap(mapId: string): void {
@@ -445,26 +464,27 @@ export class World {
            Math.abs(cz - player.currentChunkZ) <= CHUNK_LOAD_RADIUS;
   }
 
-  /** Send an opcode to all players near a world position on a given map */
+  /** Send an opcode to all players near a world position on a given map (zero-allocation) */
   private broadcastNearby(mapId: string, worldX: number, worldZ: number, opcode: ServerOpcode, ...values: number[]): void {
     const cm = this.chunkManagers.get(mapId);
     if (!cm) return;
-    const playerIds = cm.getPlayersNear(worldX, worldZ);
-    for (const pid of playerIds) {
+    const packet = encodePacket(opcode, ...values);
+    cm.forEachPlayerNear(worldX, worldZ, (pid) => {
       const p = this.players.get(pid);
-      if (p) this.sendToPlayer(p, opcode, ...values);
-    }
+      if (p) {
+        try { p.ws.sendBinary(packet); } catch { /* connection closed */ }
+      }
+    });
   }
 
-  /** Call fn for each player near a world position on a given map */
+  /** Call fn for each player near a world position on a given map (zero-allocation) */
   private forEachPlayerNear(mapId: string, worldX: number, worldZ: number, fn: (p: Player) => void): void {
     const cm = this.chunkManagers.get(mapId);
     if (!cm) return;
-    const playerIds = cm.getPlayersNear(worldX, worldZ);
-    for (const pid of playerIds) {
+    cm.forEachPlayerNear(worldX, worldZ, (pid) => {
       const p = this.players.get(pid);
       if (p) fn(p);
-    }
+    });
   }
 
   private setCombatTarget(playerId: number, npcId: number): void {
@@ -806,7 +826,12 @@ export class World {
     }
   }
 
+  // Tick performance monitoring
+  private tickOverrunCount: number = 0;
+  private lastTickWarnTime: number = 0;
+
   private tick(): void {
+    const tickStart = performance.now();
     this.currentTick++;
 
     // Process player movement + update chunk tracking + pending pickups
@@ -839,21 +864,20 @@ export class World {
 
       const map = this.getMap(npc.currentMapLevel);
 
-      // Aggressive NPC targeting — use chunk manager to find nearby players
+      // Aggressive NPC targeting — use chunk manager to find nearby players (zero-allocation)
       if (npc.def.aggressive && !npc.combatTarget) {
         const cm = this.chunkManagers.get(npc.currentMapLevel);
         if (cm) {
-          const nearbyPlayerIds = cm.getPlayersNear(npc.position.x, npc.position.y);
-          for (const pid of nearbyPlayerIds) {
+          cm.forEachPlayerNear(npc.position.x, npc.position.y, (pid) => {
+            if (npc.combatTarget) return; // already found a target
             const player = this.players.get(pid);
-            if (!player) continue;
+            if (!player) return;
             const dx = Math.abs(npc.position.x - player.position.x);
             const dz = Math.abs(npc.position.y - player.position.y);
             if (dx <= 5 && dz <= 5) {
               npc.combatTarget = player;
-              break;
             }
-          }
+          });
         }
       }
 
@@ -1180,6 +1204,20 @@ export class World {
 
     // Broadcast positions (chunk-filtered)
     this.broadcastSync();
+
+    // Tick performance monitoring
+    const tickDuration = performance.now() - tickStart;
+    if (tickDuration > TICK_RATE * 0.8) {
+      this.tickOverrunCount++;
+      const now = Date.now();
+      // Log at most once every 10 seconds to avoid spam
+      if (now - this.lastTickWarnTime > 10_000) {
+        this.lastTickWarnTime = now;
+        console.warn(`[perf] Tick ${this.currentTick} took ${tickDuration.toFixed(1)}ms (budget: ${TICK_RATE}ms), ` +
+          `${this.tickOverrunCount} slow ticks, ${this.players.size} players, ${this.npcs.size} NPCs`);
+        this.tickOverrunCount = 0;
+      }
+    }
   }
 
   private handleMapTransition(player: Player, transition: { targetMap: string; targetX: number; targetZ: number }): void {
@@ -1295,35 +1333,73 @@ export class World {
       }
     }
 
-    // Phase 2: Send dirty entities to nearby viewers
+    // Phase 2a: Dirty players → push updates to nearby viewers (O(dirty_players × viewers_per_area))
+    for (const [, subject] of this.players) {
+      if (!subject.syncDirty) continue;
+      const cm = this.chunkManagers.get(subject.currentMapLevel);
+      if (!cm) continue;
+      const packet = encodePacket(ServerOpcode.PLAYER_SYNC,
+        subject.id,
+        Math.round(subject.position.x * 10),
+        Math.round(subject.position.y * 10),
+        subject.health,
+        subject.maxHealth
+      );
+      cm.forEachPlayerNearChunk(subject.currentChunkX, subject.currentChunkZ, (viewerId) => {
+        const viewer = this.players.get(viewerId);
+        if (viewer) {
+          try { viewer.ws.sendBinary(packet); } catch { /* closed */ }
+        }
+      });
+    }
+
+    // Phase 2b: Dirty NPCs → push updates to nearby viewers (O(dirty_npcs × viewers_per_area))
+    for (const [, npc] of this.npcs) {
+      if (!npc.syncDirty || npc.dead) continue;
+      const cm = this.chunkManagers.get(npc.currentMapLevel);
+      if (!cm) continue;
+      const packet = encodePacket(ServerOpcode.NPC_SYNC,
+        npc.id,
+        npc.npcId,
+        Math.round(npc.position.x * 10),
+        Math.round(npc.position.y * 10),
+        npc.health,
+        npc.maxHealth
+      );
+      const ncx = Math.floor(npc.position.x / CHUNK_SIZE);
+      const ncz = Math.floor(npc.position.y / CHUNK_SIZE);
+      cm.forEachPlayerNearChunk(ncx, ncz, (viewerId) => {
+        const viewer = this.players.get(viewerId);
+        if (viewer) {
+          try { viewer.ws.sendBinary(packet); } catch { /* closed */ }
+        }
+      });
+    }
+
+    // Phase 2c: Viewers who changed chunks get a full sync of non-dirty nearby entities
+    // (Dirty ones were already sent in 2a/2b)
     for (const [, viewer] of this.players) {
+      const chunkChanged = viewer.currentChunkX !== viewer.lastBroadcastChunkX ||
+                            viewer.currentChunkZ !== viewer.lastBroadcastChunkZ;
+      if (!chunkChanged) continue;
+      viewer.lastBroadcastChunkX = viewer.currentChunkX;
+      viewer.lastBroadcastChunkZ = viewer.currentChunkZ;
+
       const cm = this.chunkManagers.get(viewer.currentMapLevel);
       if (!cm) continue;
 
-      // If viewer moved to a new chunk, they need a full sync of all nearby entities
-      const viewerChunkChanged = viewer.currentChunkX !== viewer.lastBroadcastChunkX ||
-                                  viewer.currentChunkZ !== viewer.lastBroadcastChunkZ;
-      if (viewerChunkChanged) {
-        viewer.lastBroadcastChunkX = viewer.currentChunkX;
-        viewer.lastBroadcastChunkZ = viewer.currentChunkZ;
-      }
-
-      const nearbyIds = cm.getEntitiesNearChunk(viewer.currentChunkX, viewer.currentChunkZ);
-
-      for (const eid of nearbyIds) {
+      cm.forEachEntityNearChunk(viewer.currentChunkX, viewer.currentChunkZ, (eid) => {
+        if (eid === viewer.id) return;
         const subject = this.players.get(eid);
         if (subject) {
-          if (subject.syncDirty || viewerChunkChanged) this.sendPlayerUpdate(viewer, subject);
-          continue;
+          if (!subject.syncDirty) this.sendPlayerUpdate(viewer, subject);
+          return;
         }
         const npc = this.npcs.get(eid);
-        if (npc && !npc.dead && (npc.syncDirty || viewerChunkChanged)) {
+        if (npc && !npc.dead && !npc.syncDirty) {
           this.sendNpcUpdate(viewer, npc);
         }
-      }
-
-      // Always sync self if dirty
-      if (viewer.syncDirty) this.sendPlayerUpdate(viewer, viewer);
+      });
     }
 
     // Phase 3: Clear dirty flags
@@ -1390,22 +1466,26 @@ export class World {
   }
 
   sendInventory(player: Player): void {
+    // Batch: [slot0_itemId, slot0_qty, slot1_itemId, slot1_qty, ...] — 1 packet instead of 28
+    const values: number[] = [];
     for (let i = 0; i < player.inventory.length; i++) {
       const slot = player.inventory[i];
-      this.sendToPlayer(player, ServerOpcode.PLAYER_INVENTORY,
-        i,
-        slot ? slot.itemId : 0,
-        slot ? slot.quantity : 0
-      );
+      values.push(slot ? slot.itemId : 0, slot ? slot.quantity : 0);
     }
+    this.sendToPlayer(player, ServerOpcode.PLAYER_INVENTORY_BATCH, ...values);
   }
 
   sendSkills(player: Player): void {
+    // Batch: [skill0_level, skill0_currentLevel, skill0_xpHigh, skill0_xpLow, ...] — 1 packet instead of 13
+    const values: number[] = [];
     for (let i = 0; i < ALL_SKILLS.length; i++) {
-      this.sendSingleSkill(player, i);
+      const skill = player.skills[ALL_SKILLS[i]];
+      values.push(skill.level, skill.currentLevel, (skill.xp >> 16) & 0xFFFF, skill.xp & 0xFFFF);
     }
+    this.sendToPlayer(player, ServerOpcode.PLAYER_SKILLS_BATCH, ...values);
   }
 
+  /** Send a single skill update (used for XP gains during gameplay) */
   private sendSingleSkill(player: Player, skillIndex: number): void {
     const skill = player.skills[ALL_SKILLS[skillIndex]];
     const xpHigh = (skill.xp >> 16) & 0xFFFF;
@@ -1416,11 +1496,13 @@ export class World {
   }
 
   sendEquipment(player: Player): void {
+    // Batch: [slot0_itemId, slot1_itemId, ...] — 1 packet instead of 10
     const slotNames: EquipSlot[] = ['weapon', 'shield', 'head', 'body', 'legs', 'neck', 'ring', 'hands', 'feet', 'cape'];
+    const values: number[] = [];
     for (let i = 0; i < slotNames.length; i++) {
-      const itemId = player.equipment.get(slotNames[i]) ?? 0;
-      this.sendToPlayer(player, ServerOpcode.PLAYER_EQUIPMENT, i, itemId);
+      values.push(player.equipment.get(slotNames[i]) ?? 0);
     }
+    this.sendToPlayer(player, ServerOpcode.PLAYER_EQUIPMENT_BATCH, ...values);
   }
 
   private sendToPlayer(player: Player, opcode: ServerOpcode, ...values: number[]): void {

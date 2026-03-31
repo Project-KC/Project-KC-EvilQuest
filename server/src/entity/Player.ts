@@ -38,6 +38,23 @@ export class Player extends Entity {
   attackTarget: Entity | null = null;
   attackCooldown: number = 0;
 
+  // Rate limiting: max messages per window
+  private _rlCount: number = 0;
+  private _rlWindowStart: number = 0;
+  private static RL_MAX_MESSAGES = 30;   // max messages per window
+  private static RL_WINDOW_MS = 1000;    // 1-second window
+
+  /** Returns true if the message should be processed, false if rate-limited */
+  checkRateLimit(): boolean {
+    const now = Date.now();
+    if (now - this._rlWindowStart > Player.RL_WINDOW_MS) {
+      this._rlWindowStart = now;
+      this._rlCount = 0;
+    }
+    this._rlCount++;
+    return this._rlCount <= Player.RL_MAX_MESSAGES;
+  }
+
   constructor(
     name: string,
     x: number,

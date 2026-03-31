@@ -1155,6 +1155,15 @@ export class GameManager {
       }
     });
 
+    // Batch inventory: [slot0_itemId, slot0_qty, slot1_itemId, slot1_qty, ...]
+    this.network.on(ServerOpcode.PLAYER_INVENTORY_BATCH, (_op, v) => {
+      if (this.sidePanel) {
+        for (let i = 0; i < v.length; i += 2) {
+          this.sidePanel.updateInvSlot(i / 2, v[i], v[i + 1]);
+        }
+      }
+    });
+
     this.network.on(ServerOpcode.PLAYER_SKILLS, (_op, v) => {
       const [skillIndex, level, currentLevel, xpHigh, xpLow] = v;
       const xp = (xpHigh << 16) | (xpLow & 0xFFFF);
@@ -1168,10 +1177,36 @@ export class GameManager {
       }
     });
 
+    // Batch skills: [skill0_level, skill0_currentLevel, skill0_xpHigh, skill0_xpLow, ...]
+    this.network.on(ServerOpcode.PLAYER_SKILLS_BATCH, (_op, v) => {
+      if (this.sidePanel) {
+        for (let i = 0; i < v.length; i += 4) {
+          const skillIndex = i / 4;
+          const level = v[i], currentLevel = v[i + 1];
+          const xp = (v[i + 2] << 16) | (v[i + 3] & 0xFFFF);
+          this.sidePanel.updateSkill(skillIndex, level, currentLevel, xp);
+          if (skillIndex === ALL_SKILLS.indexOf('hitpoints')) {
+            this.playerHealth = currentLevel;
+            this.playerMaxHealth = level;
+            this.updateHUD();
+          }
+        }
+      }
+    });
+
     this.network.on(ServerOpcode.PLAYER_EQUIPMENT, (_op, v) => {
       const [slotIndex, itemId] = v;
       if (this.sidePanel) {
         this.sidePanel.updateEquipSlot(slotIndex, itemId);
+      }
+    });
+
+    // Batch equipment: [slot0_itemId, slot1_itemId, ...]
+    this.network.on(ServerOpcode.PLAYER_EQUIPMENT_BATCH, (_op, v) => {
+      if (this.sidePanel) {
+        for (let i = 0; i < v.length; i++) {
+          this.sidePanel.updateEquipSlot(i, v[i]);
+        }
       }
     });
 
