@@ -7,3 +7,4 @@ dist/
 *.db-wal
 server/data/maps/overworld.bak/
 server/data/maps/overworld/standby.json
+server/data/maps/*/backup.json
