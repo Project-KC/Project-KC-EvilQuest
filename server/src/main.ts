@@ -575,7 +575,7 @@ const server = Bun.serve<SocketData>({
 
     if (url.pathname === '/api/editor/new-map' && req.method === 'POST') {
       try {
-        const body = await req.json() as { mapId: string; name: string; width: number; height: number };
+        const body = await req.json() as { mapId: string; name: string; width: number; height: number; dungeon?: boolean };
         const { mapId, name, width, height } = body;
         if (!mapId || !name || !width || !height) {
           return jsonResponse({ ok: false, error: 'Missing fields' }, 400);
@@ -592,16 +592,17 @@ const server = Bun.serve<SocketData>({
         mkdirSync(mapDir, { recursive: true });
 
         // Default meta
+        const isDungeon = body.dungeon === true;
         const meta: MapMeta = {
           id: mapId,
           name,
           width,
           height,
-          waterLevel: -0.3,
+          waterLevel: isDungeon ? -10 : -0.3,
           spawnPoint: { x: Math.floor(width / 2) + 0.5, z: Math.floor(height / 2) + 0.5 },
-          fogColor: [0.4, 0.6, 0.9] as [number, number, number],
-          fogStart: 30,
-          fogEnd: 50,
+          fogColor: isDungeon ? [0.05, 0.02, 0.08] as [number, number, number] : [0.4, 0.6, 0.9] as [number, number, number],
+          fogStart: isDungeon ? 8 : 30,
+          fogEnd: isDungeon ? 25 : 50,
           transitions: [],
         };
 

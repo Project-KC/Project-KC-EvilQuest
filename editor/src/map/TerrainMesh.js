@@ -912,8 +912,9 @@ export function buildSingleTexturePlane(plane, textureRegistry, textureCache, sc
   mat.diffuseTexture = texture
   mat.emissiveTexture = texture
   mat.useAlphaFromDiffuseTexture = true
+  const tint = plane.tintColor || { r: 1, g: 1, b: 1 }
   mat.diffuseColor = new Color3(0, 0, 0)
-  mat.emissiveColor = isSelected ? new Color3(0.2, 0.4, 0.8) : new Color3(1, 1, 1)
+  mat.emissiveColor = isSelected ? new Color3(0.2, 0.4, 0.8) : new Color3(tint.r, tint.g, tint.b)
   mat.specularColor = new Color3(0, 0, 0)
   mat.transparencyMode = 1
   mat.alphaCutOff = 0.05

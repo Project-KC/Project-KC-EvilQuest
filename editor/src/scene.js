@@ -26,7 +26,7 @@ import '@babylonjs/loaders/glTF'
 import { MapData } from './map/MapData.js'
 import { ToolMode, toolLabel } from './editor/Tools.js'
 import { loadAssetRegistry } from './assets-system/AssetRegistry.js'
-import { loadAssetModel, makeGhostMaterial, initAssetLoader } from './assets-system/AssetLoader.js'
+import { loadAssetModel, cloneAssetModelSync, warmAssetCache, makeGhostMaterial, initAssetLoader } from './assets-system/AssetLoader.js'
 import { loadTextureRegistry } from './assets-system/TextureRegistry.js'
 import {
   buildTerrainMeshes,
@@ -492,6 +492,7 @@ function tuneModelLighting(model) {
     else layer.holes[`${x},${z}`] = true
   }
 
+
   function serializeCollisionData() {
     return JSON.parse(JSON.stringify(collisionData))
   }
@@ -755,6 +756,7 @@ let paintBrushRadius = 1
     <button id="serverLoadBtn" title="Load map from game server">Load Server</button>
     <button id="serverSaveBtn" title="Save map to game server (overwrites!)">Save Server</button>
     <button id="serverReloadBtn" title="Hot-reload map in running game">Reload Game</button>
+    <button id="newDungeonBtn" title="Create a new dungeon map">+ Dungeon</button>
     <span class="top-sep"></span>
     <span class="top-label" id="mapSizeLabel">192 x 64</span>
     <button id="chunkGridBtn" title="Add/remove chunks">Chunks</button>
@@ -966,6 +968,25 @@ let paintBrushRadius = 1
       <label style="margin-top:6px;font-size:11px;color:rgba(255,255,255,0.45);">Scale <span id="textureScaleVal">1</span></label>
       <input id="textureScale" type="range" min="1" max="8" step="1" value="1" />
       <label style="margin-top:5px;"><input id="toggleTexturePlaneV" type="checkbox" checked /> Vertical plane (V)</label>
+      <div id="texTintRow" style="margin-top:8px;border-top:1px solid #444;padding-top:6px;">
+        <div style="font-size:11px;color:rgba(255,255,255,0.45);margin-bottom:3px;">Tint Color</div>
+        <div style="display:flex;gap:4px;align-items:center;">
+          <span style="font-size:10px;color:#f66;">R</span>
+          <input id="texTintR" type="range" min="0" max="100" value="100" style="flex:1;" />
+        </div>
+        <div style="display:flex;gap:4px;align-items:center;">
+          <span style="font-size:10px;color:#6f6;">G</span>
+          <input id="texTintG" type="range" min="0" max="100" value="100" style="flex:1;" />
+        </div>
+        <div style="display:flex;gap:4px;align-items:center;">
+          <span style="font-size:10px;color:#66f;">B</span>
+          <input id="texTintB" type="range" min="0" max="100" value="100" style="flex:1;" />
+        </div>
+        <div style="display:flex;gap:4px;margin-top:3px;">
+          <div id="texTintPreview" style="width:24px;height:24px;border:1px solid #555;border-radius:3px;background:#fff;"></div>
+          <button id="texTintReset" style="flex:1;font-size:10px;padding:3px;">Reset White</button>
+        </div>
+      </div>
     </div>
 
     <div class="ctx-panel" id="ctx-npc-spawn" style="display:none">
@@ -1038,7 +1059,7 @@ let paintBrushRadius = 1
         <div class="hint">Click to place stair · Shift+Click to remove</div>
       </div>
       <div id="collHolePanel" style="display:none;">
-        <div class="hint">Click to toggle terrain hole<br>Shift+Click to remove<br>Use with Floor tool to set cave floor height</div>
+        <div class="hint">Click to toggle terrain hole<br>Shift+Click to remove</div>
       </div>
       <div style="margin-top:8px;border-top:1px solid #444;padding-top:6px;">
         <label style="font-size:11px;color:rgba(255,255,255,0.45);">Floor Level <span id="collFloorLevel">0</span></label>
@@ -1410,7 +1431,7 @@ let paintBrushRadius = 1
     btn.addEventListener('click', () => {
       if (!selectedPlacedObject) return
       const tiles = parseFloat(btn.dataset.tiles)
-      pushUndoState()
+      pushUndoState('objects')
       scaleObjectToTiles(selectedPlacedObject, tiles)
       updateSelectionHelper()
       invalidateShadowCache()
@@ -1422,7 +1443,7 @@ let paintBrushRadius = 1
     if (!selectedPlacedObject) return
     const tiles = parseFloat(customTileSizeInput.value)
     if (!isFinite(tiles) || tiles <= 0) return
-    pushUndoState()
+    pushUndoState('objects')
     scaleObjectToTiles(selectedPlacedObject, tiles)
     updateSelectionHelper()
     invalidateShadowCache()
@@ -1939,20 +1960,19 @@ let paintBrushRadius = 1
     clearPlacedModels()
 
     // Pre-load all unique models in parallel so cache is warm before sequential cloning.
-    // Dispose the returned instances — we only need the cache warmed, not extra scene nodes.
     const uniquePaths = [...new Set(
       (placedObjectsData || [])
         .map((p) => assetRegistry.find((a) => a.id === p.assetId)?.path)
         .filter(Boolean)
     )]
-    const preloaded = await Promise.all(uniquePaths.map((path) => loadAssetModel(path).catch(() => null)))
-    for (const inst of preloaded) { if (inst) inst.dispose() }
+    await warmAssetCache(uniquePaths)
 
+    // All models are now cached — clone synchronously (no per-object await)
     for (const placed of placedObjectsData || []) {
       const asset = assetRegistry.find((a) => a.id === placed.assetId)
       if (!asset) continue
 
-      const model = await loadAssetModel(asset.path)
+      const model = cloneAssetModelSync(asset.path)
       tuneModelLighting(model, asset.path)
 
       model.position.set(placed.position.x, placed.position.y, placed.position.z)
@@ -2131,6 +2151,21 @@ let paintBrushRadius = 1
     updateToolUI()
   }
 
+  function objectsFingerprint() {
+    const children = placedGroup.getChildren()
+    let h = children.length
+    for (const obj of children) {
+      const p = obj.position, s = obj.scale
+      // Combine position + scale into a fast numeric hash
+      h = (h * 31 + (p.x * 1000 | 0)) | 0
+      h = (h * 31 + (p.y * 1000 | 0)) | 0
+      h = (h * 31 + (p.z * 1000 | 0)) | 0
+      h = (h * 31 + (s.x * 1000 | 0)) | 0
+      h = (h * 31 + (s.y * 1000 | 0)) | 0
+    }
+    return h
+  }
+
   function captureSnapshot(scope) {
     const snap = { scope: scope || 'full' }
     if (!scope || scope === 'full' || scope === 'terrain') {
@@ -2138,6 +2173,7 @@ let paintBrushRadius = 1
     }
     if (!scope || scope === 'full' || scope === 'objects') {
       snap.placedObjects = serializePlacedObjects()
+      snap.objectsFingerprint = objectsFingerprint()
     }
     if (!scope || scope === 'full' || scope === 'collision') {
       snap.collisionData = serializeCollisionData()
@@ -2164,12 +2200,16 @@ let paintBrushRadius = 1
     }
 
     if (snapshot.placedObjects) {
-      selectedPlacedObject = null
-      selectedPlacedObjects = []
-      transformMode = null
-      transformStart = null
-      transformLift = 0
-      await rebuildPlacedObjectsFromData(snapshot.placedObjects || [])
+      // Skip expensive rebuild if objects haven't actually changed
+      const currentFp = objectsFingerprint()
+      if (snapshot.objectsFingerprint !== currentFp || snapshot.placedObjects.length !== placedGroup.getChildren().length) {
+        selectedPlacedObject = null
+        selectedPlacedObjects = []
+        transformMode = null
+        transformStart = null
+        transformLift = 0
+        await rebuildPlacedObjectsFromData(snapshot.placedObjects || [])
+      }
     }
 
     if (snapshot.collisionData) {
@@ -2448,7 +2488,8 @@ let paintBrushRadius = 1
     if (!texturePlaneGroup) {
       texturePlaneGroup = new TransformNode('texture-planes', scene)
     }
-    const mesh = buildSingleTexturePlane(plane, textureRegistry, textureCache, scene, true)
+    const isSelected = selectedTexturePlanes.includes(plane)
+    const mesh = buildSingleTexturePlane(plane, textureRegistry, textureCache, scene, isSelected)
     if (mesh) mesh.parent = texturePlaneGroup
     updateSelectionHelper()
   }
@@ -3163,9 +3204,9 @@ function applySmoothBrush(centerX, centerZ, strength = 0.55) {
   }
 }
 
-function captureStrokeHistoryOnce() {
+function captureStrokeHistoryOnce(scope) {
   if (!state.historyCapturedThisStroke) {
-    pushUndoState()
+    pushUndoState(scope || 'terrain')
     state.historyCapturedThisStroke = true
   }
 }
@@ -3401,7 +3442,7 @@ function applyToolAtTile(tile, eventLike = null) {
       model.scale.y = 1
     }
 
-    pushUndoState()
+    pushUndoState('objects')
 
     const pos = tileWorldPosition(tile.x, tile.z)
     if (asset.name?.toLowerCase().includes('wall')) {
@@ -3436,7 +3477,7 @@ function applyToolAtTile(tile, eventLike = null) {
 
   function replaceSelectedTexturesWith(textureId) {
     if (!selectedTexturePlanes.length) return
-    pushUndoState()
+    pushUndoState('terrain')
     for (const plane of selectedTexturePlanes) {
       plane.textureId = textureId
       removeTexturePlaneMesh(plane)
@@ -3450,7 +3491,7 @@ function applyToolAtTile(tile, eventLike = null) {
     if (!selectedPlacedObjects.length) return
     const newAsset = assetRegistry.find((a) => a.id === assetId)
     if (!newAsset) return
-    pushUndoState()
+    pushUndoState('objects')
     const replacements = []
     for (const obj of [...selectedPlacedObjects]) {
       const model = await loadAssetModel(newAsset.path)
@@ -3480,7 +3521,7 @@ function applyToolAtTile(tile, eventLike = null) {
   }
 
   async function duplicateSelected(mode = 'right') {
-    pushUndoState()
+    pushUndoState(selectedTexturePlane ? 'terrain' : 'objects')
 
     if (selectedTexturePlane) {
       if (selectedTexturePlanes.length > 1) {
@@ -3660,7 +3701,7 @@ function applyToolAtTile(tile, eventLike = null) {
   function beginTransform(mode) {
     if (!selectedTexturePlane && !selectedPlacedObject) return
 
-    pushUndoState()
+    pushUndoState(selectedTexturePlane ? 'terrain' : 'objects')
     transformMode = mode
     transformLift = 0
     movePlaneStart = null
@@ -4292,6 +4333,29 @@ function applyToolAtTile(tile, eventLike = null) {
   }
   refreshServerMapList()
 
+  topBar.querySelector('#newDungeonBtn').addEventListener('click', async () => {
+    const name = prompt('Dungeon name (e.g. "Goblin Cave"):')
+    if (!name) return
+    const mapId = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+    if (!mapId) { alert('Invalid name'); return }
+    const sizeStr = prompt('Size (tiles, e.g. 64):', '64')
+    const size = parseInt(sizeStr) || 64
+    try {
+      const res = await fetch(`${SERVER_API}/new-map`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mapId, name, width: size, height: size, dungeon: true })
+      })
+      const data = await res.json()
+      if (!data.ok) { alert(`Failed: ${data.error}`); return }
+      await refreshServerMapList()
+      serverMapSelect.value = mapId
+      statusText.textContent = `Created dungeon "${name}" (${size}x${size})`
+    } catch (e) {
+      alert('Server error: ' + e.message)
+    }
+  })
+
   serverLoadBtn.addEventListener('click', async () => {
     const mapId = serverMapSelect.value
     if (!mapId) return
@@ -4538,7 +4602,7 @@ function applyToolAtTile(tile, eventLike = null) {
   }
 
   function addChunk(cx, cz) {
-    pushUndoState()
+    pushUndoState('terrain')
     // Expand backing array if needed
     const needRight = (cx + 1) * CHUNK
     const needBottom = (cz + 1) * CHUNK
@@ -4577,7 +4641,7 @@ function applyToolAtTile(tile, eventLike = null) {
 
   function removeChunk(cx, cz) {
     if (map.activeChunks.size <= 1) return // keep at least one chunk
-    pushUndoState()
+    pushUndoState('terrain')
     map.activeChunks.delete(`${cx},${cz}`)
     afterChunkChange()
   }
@@ -4656,7 +4720,7 @@ function applyToolAtTile(tile, eventLike = null) {
 
   function assignSelectedToLayer(layerId) {
     if (!selectedPlacedObjects.length && !selectedTexturePlane) return
-    pushUndoState()
+    pushUndoState(selectedTexturePlane ? 'terrain' : 'objects')
     for (const obj of selectedPlacedObjects) obj.userData.layerId = layerId
     for (const plane of selectedTexturePlanes) plane.layerId = layerId
     applyLayerVisibility()
@@ -4686,6 +4750,35 @@ function applyToolAtTile(tile, eventLike = null) {
       removeTexturePlaneMesh(selectedTexturePlane)
       appendTexturePlane(selectedTexturePlane)
     }
+  })
+
+  // Tint color sliders
+  const texTintR = sidebar.querySelector('#texTintR')
+  const texTintG = sidebar.querySelector('#texTintG')
+  const texTintB = sidebar.querySelector('#texTintB')
+  const texTintPreview = sidebar.querySelector('#texTintPreview')
+
+  function getTexTint() {
+    return { r: texTintR.value / 100, g: texTintG.value / 100, b: texTintB.value / 100 }
+  }
+  function updateTintPreview() {
+    const t = getTexTint()
+    texTintPreview.style.background = `rgb(${Math.round(t.r*255)},${Math.round(t.g*255)},${Math.round(t.b*255)})`
+  }
+  function applyTintToSelected() {
+    if (!selectedTexturePlane) return
+    const t = getTexTint()
+    selectedTexturePlane.tintColor = { r: t.r, g: t.g, b: t.b }
+    removeTexturePlaneMesh(selectedTexturePlane)
+    appendTexturePlane(selectedTexturePlane)
+  }
+  for (const slider of [texTintR, texTintG, texTintB]) {
+    slider.addEventListener('input', () => { updateTintPreview(); applyTintToSelected() })
+  }
+  sidebar.querySelector('#texTintReset').addEventListener('click', () => {
+    texTintR.value = 100; texTintG.value = 100; texTintB.value = 100
+    updateTintPreview()
+    applyTintToSelected()
   })
 
   canvas.addEventListener('mousemove', (event) => {
@@ -5031,7 +5124,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
       const planeSize = getTexturePlaneSize(selectedTextureId)
       const y = map.getAverageTileHeight(tile.x, tile.z) + (texturePlaneVertical ? planeSize.height / 2 : 0.05)
 
-      pushUndoState()
+      pushUndoState('terrain')
 
       const plane = map.addTexturePlane(
         selectedTextureId,
@@ -5064,7 +5157,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
       if (event.shiftKey) {
         const picked = pickNpcSpawn(event)
         if (picked) {
-          pushUndoState()
+          pushUndoState('spawns')
           removeNpcSpawn(picked)
           rebuildNpcSpawnMeshes()
           refreshNpcSpawnList()
@@ -5103,7 +5196,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
       if (event.shiftKey) {
         const picked = pickItemSpawn(event)
         if (picked) {
-          pushUndoState()
+          pushUndoState('spawns')
           removeItemSpawn(picked)
           rebuildItemSpawnMeshes()
           refreshItemSpawnList()
@@ -5112,7 +5205,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
       }
       const itemId = parseInt(sidebar.querySelector('#itemTypeSelect')?.value)
       if (!itemId) return
-      pushUndoState()
+      pushUndoState('spawns')
       addItemSpawn(itemId, tile.x + 0.5, tile.z + 0.5)
       rebuildItemSpawnMeshes()
       refreshItemSpawnList()
@@ -5529,7 +5622,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
 
     if (key === 'delete' || key === 'backspace') {
       if (selectedNpcSpawn && state.tool === ToolMode.NPC_SPAWN) {
-        pushUndoState()
+        pushUndoState('spawns')
         removeNpcSpawn(selectedNpcSpawn)
         rebuildNpcSpawnMeshes()
         refreshNpcSpawnList()
@@ -5537,7 +5630,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
         return
       }
       if (selectedTexturePlane) {
-        pushUndoState()
+        pushUndoState('terrain')
         removeTexturePlaneMesh(selectedTexturePlane)
         map.texturePlanes = map.texturePlanes.filter((p) => p.id !== selectedTexturePlane.id)
         selectedTexturePlane = null
@@ -5548,7 +5641,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
       }
 
       if (selectedPlacedObjects.length > 0) {
-        pushUndoState()
+        pushUndoState('objects')
         for (const obj of selectedPlacedObjects) removePlacedModel(obj)
         selectedPlacedObject = null
         selectedPlacedObjects = []
@@ -5602,7 +5695,7 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
     }
 
 if (key === 'q') {
-  if (!event.repeat) pushUndoState()
+  if (!event.repeat) pushUndoState('terrain')
   if (brushRadius < 0.6) {
     map.adjustVertexHeight(x,     z,     0.18)
     map.adjustVertexHeight(x + 1, z,     0.18)
@@ -5617,7 +5710,7 @@ if (key === 'q') {
 }
 
 if (key === 'e') {
-  if (!event.repeat) pushUndoState()
+  if (!event.repeat) pushUndoState('terrain')
   if (brushRadius < 0.6) {
     map.adjustVertexHeight(x,     z,     -0.18)
     map.adjustVertexHeight(x + 1, z,     -0.18)
@@ -5651,7 +5744,7 @@ if (key === 'e') {
     }
 
     if (key === 'f') {
-      pushUndoState()
+      pushUndoState('terrain')
       map.flipTileSplit(x, z)
       updateTileTextureOverlay(x, z)
       markTerrainDirty({ skipTexturePlanes: true, skipShadows: true, skipTextureOverlays: true, heightsOnly: true, region: { x1: x, z1: z, x2: x, z2: z } })
@@ -5699,6 +5792,12 @@ if (key === 'e') {
             textureScale = rep
             textureScaleSlider.value = rep
             if (textureScaleVal) textureScaleVal.textContent = rep
+            // Load tint color
+            const tint = selectedTexturePlane.tintColor || { r: 1, g: 1, b: 1 }
+            texTintR.value = Math.round(tint.r * 100)
+            texTintG.value = Math.round(tint.g * 100)
+            texTintB.value = Math.round(tint.b * 100)
+            updateTintPreview()
             setTool(ToolMode.SELECT)
             updateSelectionHelper()
           }

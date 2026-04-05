@@ -114,10 +114,55 @@ function handleCommand(
       break;
     }
 
+    case '/tp': {
+      const x = parseFloat(parts[1]);
+      const z = parseFloat(parts[2]);
+      if (!isFinite(x) || !isFinite(z)) {
+        ws.send(JSON.stringify({ type: 'system', message: 'Usage: /tp <x> <z>' }));
+        return;
+      }
+      const player = findPlayerByUsername(from, world);
+      if (player) {
+        world.teleportPlayer(player, x, z);
+      }
+      break;
+    }
+
+    case '/tpmap': {
+      const mapId = parts[1];
+      if (!mapId) {
+        ws.send(JSON.stringify({ type: 'system', message: 'Usage: /tpmap <mapId>' }));
+        return;
+      }
+      const player = findPlayerByUsername(from, world);
+      if (player) {
+        const targetMap = world.getMap(mapId);
+        if (!targetMap) {
+          ws.send(JSON.stringify({ type: 'system', message: `Map "${mapId}" not found` }));
+          return;
+        }
+        world.handleMapTransition(player, {
+          tileX: 0, tileZ: 0,
+          targetMap: mapId,
+          targetX: targetMap.meta.spawnPoint.x,
+          targetZ: targetMap.meta.spawnPoint.z,
+        });
+        ws.send(JSON.stringify({ type: 'system', message: `Teleported to map "${mapId}"` }));
+      }
+      break;
+    }
+
     default: {
       ws.send(JSON.stringify({ type: 'system', message: `Unknown command: ${cmd}` }));
     }
   }
+}
+
+function findPlayerByUsername(username: string, world: World) {
+  for (const [, p] of world.players) {
+    if (p.name.toLowerCase() === username.toLowerCase()) return p;
+  }
+  return null;
 }
 
 export function handleChatSocketClose(

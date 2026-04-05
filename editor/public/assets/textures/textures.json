@@ -607,5 +607,30 @@
     "id": "tex-stretched-93",
     "name": "Stretched 93",
     "path": "/assets/stretched-textures/93.tif"
+  },
+  {
+    "id": "tex87",
+    "name": "Texture 87",
+    "path": "/assets/textures/87.png"
+  },
+  {
+    "id": "tex88",
+    "name": "Texture 88",
+    "path": "/assets/textures/88.png"
+  },
+  {
+    "id": "tex89",
+    "name": "Texture 89",
+    "path": "/assets/textures/89.png"
+  },
+  {
+    "id": "tex95",
+    "name": "Texture 95",
+    "path": "/assets/textures/95.png"
+  },
+  {
+    "id": "tex96",
+    "name": "Texture 96",
+    "path": "/assets/textures/96.png"
   }
 ]

@@ -1120,26 +1120,10 @@ export class ChunkManager {
         if (isHole) {
           const floorH = this.floorHeights.get(tileIdx) ?? (Math.min(h.tl, h.tr, h.bl, h.br) - 2);
           const holeColor = cliffColor(Math.max(h.tl, h.tr, h.bl, h.br), floorH);
-          // East edge
-          if (x + 1 < this.mapWidth && !this.holeTiles.has(z * this.mapWidth + (x + 1))) {
-            hasCliff = true;
-            pushQuad([x + 1, h.tr, z], [x + 1, h.br, z + 1], [x + 1, floorH, z], [x + 1, floorH, z + 1], holeColor);
-          }
-          // West edge
-          if (x - 1 >= 0 && !this.holeTiles.has(z * this.mapWidth + (x - 1))) {
-            hasCliff = true;
-            pushQuad([x, h.bl, z + 1], [x, h.tl, z], [x, floorH, z + 1], [x, floorH, z], holeColor);
-          }
-          // South edge
-          if (z + 1 < this.mapHeight && !this.holeTiles.has((z + 1) * this.mapWidth + x)) {
-            hasCliff = true;
-            pushQuad([x + 1, h.br, z + 1], [x, h.bl, z + 1], [x + 1, floorH, z + 1], [x, floorH, z + 1], holeColor);
-          }
-          // North edge
-          if (z - 1 >= 0 && !this.holeTiles.has((z - 1) * this.mapWidth + x)) {
-            hasCliff = true;
-            pushQuad([x, h.tl, z], [x + 1, h.tr, z], [x, floorH, z], [x + 1, floorH, z], holeColor);
-          }
+          if (x + 1 < this.mapWidth && !this.holeTiles.has(z * this.mapWidth + (x + 1))) { hasCliff = true; pushQuad([x + 1, h.tr, z], [x + 1, h.br, z + 1], [x + 1, floorH, z], [x + 1, floorH, z + 1], holeColor); }
+          if (x - 1 >= 0 && !this.holeTiles.has(z * this.mapWidth + (x - 1))) { hasCliff = true; pushQuad([x, h.bl, z + 1], [x, h.tl, z], [x, floorH, z + 1], [x, floorH, z], holeColor); }
+          if (z + 1 < this.mapHeight && !this.holeTiles.has((z + 1) * this.mapWidth + x)) { hasCliff = true; pushQuad([x + 1, h.br, z + 1], [x, h.bl, z + 1], [x + 1, floorH, z + 1], [x, floorH, z + 1], holeColor); }
+          if (z - 1 >= 0 && !this.holeTiles.has((z - 1) * this.mapWidth + x)) { hasCliff = true; pushQuad([x, h.tl, z], [x + 1, h.tr, z], [x, floorH, z], [x + 1, floorH, z], holeColor); }
           continue; // don't render normal cliffs for hole tiles
         }
 
@@ -1205,7 +1189,7 @@ export class ChunkManager {
     return mesh;
   }
 
-  /** Build ceiling mesh — underside of terrain rendered at hole tiles */
+  /** Build ceiling mesh — cave ceiling at hole tiles, using ceilingHeights when set */
   private buildCeilingMesh(chunkX: number, chunkZ: number, startX: number, startZ: number, endX: number, endZ: number): Mesh | null {
     const positions: number[] = [];
     const indices: number[] = [];
@@ -1220,6 +1204,7 @@ export class ChunkManager {
         hasCeiling = true;
 
         const h = this.getTileCornerHeights(x, z);
+
         // Dark rock ceiling color with slight variation
         const shade = 0.25 + ((x * 7 + z * 13) % 10) * 0.01;
         const cr = 0.35 * shade, cg = 0.30 * shade, cb = 0.25 * shade;
@@ -2718,6 +2703,9 @@ export class ChunkManager {
       texClone.wrapV = Texture.WRAP_ADDRESSMODE;
       const mat = new PBRMaterial(`texplane_mat_${plane.id}`, this.scene);
       mat.albedoTexture = texClone;
+      if (plane.tintColor) {
+        mat.albedoColor = new Color3(plane.tintColor.r, plane.tintColor.g, plane.tintColor.b);
+      }
       mat.metallic = 0;
       mat.roughness = 1;
       mat.useAlphaFromAlbedoTexture = true;

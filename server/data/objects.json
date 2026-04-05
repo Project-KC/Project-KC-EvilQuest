@@ -127,5 +127,16 @@
     "blocking": true, "width": 1.0, "height": 1.8,
     "color": [120, 80, 40],
     "respawnTime": 15
+  },
+  {
+    "id": 15, "name": "Cave Entrance", "category": "scenery",
+    "actions": ["Enter", "Examine"],
+    "blocking": true, "width": 2.0, "height": 2.5,
+    "color": [60, 50, 40],
+    "transition": {
+      "targetMap": "underground",
+      "targetX": 130.5,
+      "targetZ": 130.5
+    }
   }
 ]

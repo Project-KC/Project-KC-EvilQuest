@@ -73,7 +73,17 @@ export async function loadAssetModel(path) {
     cache.set(path, { template, animGroups })
   }
 
-  const { template, animGroups } = cache.get(path)
+  return cloneFromCache(path)
+}
+
+/** Synchronous clone — only valid when the path is already cached (e.g. after warmAssetCache). */
+export function cloneAssetModelSync(path) {
+  if (!cache.has(path)) throw new Error(`cloneAssetModelSync: "${path}" not in cache`)
+  return cloneFromCache(path)
+}
+
+function cloneFromCache(path) {
+  const { template } = cache.get(path)
   const instance = template.instantiateHierarchy(null, undefined, (source, cloned) => {
     cloned.name = `placed_${source.name}`
   })
@@ -95,13 +105,16 @@ export async function loadAssetModel(path) {
     }
   }
 
-  // Note: AnimationGroup.clone() doesn't exist in Babylon.js 7.
-  // For placed objects in the editor, animations are not critical.
-  // The original animation groups from the template will still animate
-  // the template's meshes. Per-instance animations would require manual
-  // retargeting which is complex and not needed for an editor.
-
   return instance
+}
+
+/** Pre-warm the cache for a set of paths. After this, cloneAssetModelSync is safe. */
+export async function warmAssetCache(paths) {
+  await Promise.all(paths.map(p => loadAssetModel(p).then(inst => { if (inst) inst.dispose() }).catch(() => null)))
+}
+
+export function isAssetCached(path) {
+  return cache.has(path)
 }
 
 export function getAssetAnimations(path) {

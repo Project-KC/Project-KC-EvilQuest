@@ -1,0 +1,135 @@
+[
+  {
+    "assetId": "limestone slab",
+    "layerId": "layer_0",
+    "position": {
+      "x": 106.5,
+      "y": 0,
+      "z": 164.5
+    },
+    "rotation": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "scale": {
+      "x": 1,
+      "y": 1,
+      "z": 1
+    }
+  },
+  {
+    "assetId": "limestone stairs",
+    "layerId": "layer_0",
+    "position": {
+      "x": 108.5,
+      "y": 0,
+      "z": 164.5
+    },
+    "rotation": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "scale": {
+      "x": 1,
+      "y": 1,
+      "z": 1
+    }
+  },
+  {
+    "assetId": "limestone pillar",
+    "layerId": "layer_0",
+    "position": {
+      "x": 104.5,
+      "y": 0,
+      "z": 164.5
+    },
+    "rotation": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "scale": {
+      "x": 1,
+      "y": 1,
+      "z": 1
+    }
+  },
+  {
+    "assetId": "limestone halfpillar",
+    "layerId": "layer_0",
+    "position": {
+      "x": 110.5,
+      "y": -1.7763568394002505e-15,
+      "z": 164.5
+    },
+    "rotation": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "scale": {
+      "x": 1,
+      "y": 1,
+      "z": 1
+    }
+  },
+  {
+    "assetId": "limestone doorframe",
+    "layerId": "layer_0",
+    "position": {
+      "x": 110.5,
+      "y": 0,
+      "z": 165.5
+    },
+    "rotation": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "scale": {
+      "x": 1,
+      "y": 1,
+      "z": 1
+    }
+  },
+  {
+    "assetId": "basicTruedoor",
+    "layerId": "layer_0",
+    "position": {
+      "x": 105.5,
+      "y": 0,
+      "z": 166.5
+    },
+    "rotation": {
+      "x": 6.162975822039155e-33,
+      "y": 1.5707963267948963,
+      "z": 1.1102230246251568e-16
+    },
+    "scale": {
+      "x": 1,
+      "y": 1,
+      "z": 1
+    }
+  },
+  {
+    "assetId": "castleTruedoor",
+    "layerId": "layer_0",
+    "position": {
+      "x": 106.5,
+      "y": 0,
+      "z": 166.5
+    },
+    "rotation": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "scale": {
+      "x": 1,
+      "y": 1,
+      "z": 1
+    }
+  }
+]

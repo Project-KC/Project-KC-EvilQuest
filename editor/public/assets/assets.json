@@ -1,6 +1,11 @@
 {
   "assets": [
     {
+      "id": "cavedoor",
+      "name": "Cave Entrance",
+      "path": "/assets/models/cavedoor.glb"
+    },
+    {
       "id": "chair",
       "name": "Chair",
       "path": "/assets/models/chair.glb"

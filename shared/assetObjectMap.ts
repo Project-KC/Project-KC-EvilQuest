@@ -32,6 +32,8 @@ export const ASSET_TO_OBJECT_DEF: Record<string, number> = {
   // Doors (only Truedoor assets — other "door" assets are decorative door frames)
   'castleTruedoor': 13,
   'basicTruedoor': 13,
+  // Cave entrances
+  'cavedoor': 15,  // Cave Entrance -> map transition
 };
 
 /**

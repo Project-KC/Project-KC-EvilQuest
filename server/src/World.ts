@@ -137,11 +137,11 @@ export class World {
       cm.addEntity(npc.id, spawn.x, spawn.z);
     }
     // Derive world objects from placed objects in map.json (single source of truth)
-    const objectSpawns: { objectId: number; x: number; z: number; rotY?: number }[] = [];
+    const objectSpawns: { objectId: number; x: number; z: number; rotY?: number; trigger?: any }[] = [];
     for (const placed of gameMap.placedObjects) {
       const defId = ASSET_TO_OBJECT_DEF[placed.assetId];
       if (defId != null) {
-        objectSpawns.push({ objectId: defId, x: placed.position.x, z: placed.position.z, rotY: placed.rotation?.y });
+        objectSpawns.push({ objectId: defId, x: placed.position.x, z: placed.position.z, rotY: placed.rotation?.y, trigger: (placed as any).trigger });
       }
     }
     // Fallback: sprite-only objects from spawns.json
@@ -153,6 +153,7 @@ export class World {
       if (!objDef) continue;
       const obj = new WorldObject(objDef, spawn.x, spawn.z, mapId);
       if (spawn.rotY != null) obj.rotationY = spawn.rotY;
+      if (spawn.trigger) obj.trigger = spawn.trigger;
       this.worldObjects.set(obj.id, obj);
       if (objDef.blocking && objDef.category !== 'door') {
         this.blockedObjectTiles.add(this.blockedKeyFor(mapId, spawn.x, spawn.z));
@@ -373,6 +374,9 @@ export class World {
       Math.round(player.position.x * 10),
       Math.round(player.position.y * 10)
     );
+
+    // Send MAP_CHANGE so client loads the correct map (handles underground, dungeons, etc.)
+    this.sendMapChange(player, player.currentMapLevel);
 
     // Broadcast player name to all chat sockets
     broadcastPlayerInfo(player.id, player.name);
@@ -828,6 +832,30 @@ export class World {
       // Just send a chat message
       this.sendToPlayer(player, ServerOpcode.CHAT_SYSTEM, 0); // Will use chat socket instead
       return;
+    }
+
+    // Object-based map transition (cave doors, ladders, portals)
+    if (action === 'Enter') {
+      // Per-instance trigger from editor takes priority
+      if (obj.trigger?.type === 'teleport' && obj.trigger.destChunk) {
+        this.handleMapTransition(player, {
+          tileX: 0, tileZ: 0,
+          targetMap: obj.trigger.destChunk,
+          targetX: obj.trigger.entryX || 32.5,
+          targetZ: obj.trigger.entryZ || 32.5,
+        });
+        return;
+      }
+      // Fallback to def-level transition
+      if (obj.def.transition) {
+        this.handleMapTransition(player, {
+          tileX: 0, tileZ: 0,
+          targetMap: obj.def.transition.targetMap,
+          targetX: obj.def.transition.targetX,
+          targetZ: obj.def.transition.targetZ,
+        });
+        return;
+      }
     }
 
     // Door open/close
@@ -1409,7 +1437,26 @@ export class World {
     }
   }
 
-  private handleMapTransition(player: Player, transition: { targetMap: string; targetX: number; targetZ: number }): void {
+  /** Same-map teleport — moves player and sends MAP_CHANGE to force client reposition */
+  teleportPlayer(player: Player, x: number, z: number): void {
+    const mapId = player.currentMapLevel;
+    console.log(`[TP] teleportPlayer: ${player.name} on map="${mapId}" to (${x.toFixed(1)}, ${z.toFixed(1)})`);
+    const cm = this.chunkManagers.get(mapId);
+    if (cm) cm.removeEntity(player.id);
+    player.position.x = x;
+    player.position.y = z;
+    player.moveQueue = [];
+    player.attackTarget = null;
+    this.clearCombatTarget(player.id);
+    player.currentChunkX = Math.floor(x / CHUNK_SIZE);
+    player.currentChunkZ = Math.floor(z / CHUNK_SIZE);
+    if (cm) cm.addEntity(player.id, x, z);
+    // Send MAP_CHANGE with the SAME map — client reloads position
+    const packet = encodeStringPacket(ServerOpcode.MAP_CHANGE, mapId, Math.round(x * 10), Math.round(z * 10));
+    try { player.ws.sendBinary(packet); } catch {}
+  }
+
+  handleMapTransition(player: Player, transition: { targetMap: string; targetX: number; targetZ: number }): void {
     const oldMap = player.currentMapLevel;
     const newMap = transition.targetMap;
 

@@ -14,6 +14,8 @@ export class WorldObject {
   respawnTimer: number = 0;
   /** For doors: the Y rotation from the editor, used to derive wall edge direction */
   rotationY: number = 0;
+  /** Per-instance transition override from editor trigger data */
+  trigger?: { type: string; destChunk: string; entryX: number; entryY: number; entryZ: number };
 
   constructor(def: WorldObjectDef, x: number, z: number, mapLevel: string) {
     this.id = nextObjectEntityId++;

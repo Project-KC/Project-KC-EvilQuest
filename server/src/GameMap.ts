@@ -18,7 +18,7 @@ export class GameMap {
   private mapData: KCMapData;
 
   /** Placed objects from the editor (for deriving world object spawns) */
-  readonly placedObjects: { assetId: string; position: { x: number; y: number; z: number }; rotation?: { x: number; y: number; z: number }; scale?: { x: number; y: number; z: number } }[] = [];
+  readonly placedObjects: { assetId: string; position: { x: number; y: number; z: number }; rotation?: { x: number; y: number; z: number }; scale?: { x: number; y: number; z: number }; trigger?: any }[] = [];
 
   /** Active editor chunks (64x64) — tiles outside active chunks are treated as impassable void */
   private activeChunks: Set<string> | null = null;
@@ -98,7 +98,7 @@ export class GameMap {
       if (chunked.length > 0) rawObjects = chunked;
     }
     this.placedObjects = rawObjects.map(o => ({
-      assetId: o.assetId, position: o.position, rotation: o.rotation, scale: o.scale
+      assetId: o.assetId, position: o.position, rotation: o.rotation, scale: o.scale, trigger: o.trigger
     }));
 
     // Load active chunks from editor data

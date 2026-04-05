@@ -193,6 +193,10 @@ export class GameManager {
     this.inputManager.setGroundClickHandler((worldX, worldZ) => {
       this.handleGroundClick(worldX, worldZ);
     });
+    this.inputManager.setTeleportClickHandler((worldX, worldZ) => {
+      console.log(`[DEBUG] Shift+click teleport to ${worldX.toFixed(1)}, ${worldZ.toFixed(1)}`);
+      this.network.sendChat(`/tp ${worldX.toFixed(1)} ${worldZ.toFixed(1)}`);
+    });
     this.inputManager.setObjectClickHandler((objectEntityId) => {
       this.handleObjectClick(objectEntityId);
     });

@@ -7,6 +7,7 @@ import '@babylonjs/core/Culling/ray';
 import type { ChunkManager } from '../rendering/ChunkManager';
 
 export type GroundClickCallback = (worldX: number, worldZ: number) => void;
+export type TeleportClickCallback = (worldX: number, worldZ: number) => void;
 export type ObjectClickCallback = (objectEntityId: number) => void;
 
 /**
@@ -20,6 +21,7 @@ export class InputManager {
   private scene: Scene;
   private chunkManager: ChunkManager;
   private onGroundClick: GroundClickCallback | null = null;
+  private onTeleportClick: TeleportClickCallback | null = null;
   private onObjectClick: ObjectClickCallback | null = null;
   private playerY: number = 0;
 
@@ -30,6 +32,15 @@ export class InputManager {
     this.scene.onPointerObservable.add((pointerInfo) => {
       if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
         if (pointerInfo.event.button !== 0) return;
+
+        // Shift+click = debug teleport
+        if (pointerInfo.event.shiftKey && this.onTeleportClick) {
+          const groundPos = this.pickGround();
+          if (groundPos) {
+            this.onTeleportClick(groundPos.x, groundPos.z);
+          }
+          return;
+        }
 
         // Check for interactive object hit (trees, rocks, doors)
         // Use multiPick to check ALL meshes along the ray — walls won't block doors behind them
@@ -92,6 +103,10 @@ export class InputManager {
 
   setGroundClickHandler(callback: GroundClickCallback): void {
     this.onGroundClick = callback;
+  }
+
+  setTeleportClickHandler(callback: TeleportClickCallback): void {
+    this.onTeleportClick = callback;
   }
 
   setObjectClickHandler(callback: ObjectClickCallback): void {

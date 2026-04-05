@@ -173,6 +173,13 @@ export interface WorldObjectDef {
 
   // Crafting station recipes (furnace, cooking range)
   recipes?: ObjectRecipe[];
+
+  // Map transition (cave doors, ladders, portals)
+  transition?: {
+    targetMap: string;
+    targetX: number;
+    targetZ: number;
+  };
 }
 
 export interface ObjectRecipe {
@@ -259,6 +266,7 @@ export interface TexturePlane {
   scale: { x: number; y: number; z: number };
   uvRepeat: number;
   texRotation: number;
+  tintColor?: { r: number; g: number; b: number }; // RGB 0-1, default white
 }
 
 export interface PlacedObject {
