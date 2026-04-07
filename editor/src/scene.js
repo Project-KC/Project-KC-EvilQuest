@@ -1900,26 +1900,39 @@ let paintBrushRadius = 1
   function updateSelectionHelper() {
     clearSelectionHelper()
 
-    if (selectedPlacedObjects.length === 1) {
-      selectionHelper = createBoundingBoxHelper(selectedPlacedObjects[0], new Color3(0.4, 0.8, 1.0))
-      return
+    const totalSelected = selectedPlacedObjects.length + selectedTexturePlanes.length
+    const multiColor = new Color3(1.0, 0.67, 0.27)
+    const singleColor = new Color3(0.4, 0.8, 1.0)
+    const boxColor = totalSelected > 1 ? multiColor : singleColor
+
+    const helpers = []
+
+    for (const obj of selectedPlacedObjects) {
+      const h = createBoundingBoxHelper(obj, boxColor)
+      if (h) helpers.push(h)
     }
 
-    if (selectedPlacedObjects.length > 1) {
-      selectionHelper = selectedPlacedObjects.map((obj) => {
-        return createBoundingBoxHelper(obj, new Color3(1.0, 0.67, 0.27))
-      }).filter(Boolean)
-      return
+    // Update emissive colors on all texture plane meshes to reflect selection state
+    if (texturePlaneGroup) {
+      for (const mesh of texturePlaneGroup.getChildMeshes()) {
+        const plane = mesh.metadata?.texturePlane
+        if (!plane || !mesh.material) continue
+        const isSel = selectedTexturePlanes.includes(plane)
+        const tint = plane.tintColor || { r: 1, g: 1, b: 1 }
+        mesh.material.emissiveColor = isSel ? new Color3(0.2, 0.4, 0.8) : new Color3(tint.r, tint.g, tint.b)
+      }
     }
 
-    if (selectedTexturePlane && texturePlaneGroup) {
-      const color = selectedTexturePlanes.length > 1 ? new Color3(1.0, 0.67, 0.27) : new Color3(0.4, 0.8, 1.0)
-      selectionHelper = selectedTexturePlanes.map((plane) => {
+    if (texturePlaneGroup) {
+      for (const plane of selectedTexturePlanes) {
         const mesh = texturePlaneGroup.getChildMeshes().find((c) => c.metadata?.texturePlane?.id === plane.id)
-        if (!mesh) return null
-        return createBoundingBoxHelper(mesh, color)
-      }).filter(Boolean)
+        if (!mesh) continue
+        const h = createBoundingBoxHelper(mesh, boxColor)
+        if (h) helpers.push(h)
+      }
     }
+
+    selectionHelper = helpers.length === 1 ? helpers[0] : helpers.length > 0 ? helpers : null
   }
 
   function clearSelection() {
@@ -2488,8 +2501,7 @@ let paintBrushRadius = 1
     if (!texturePlaneGroup) {
       texturePlaneGroup = new TransformNode('texture-planes', scene)
     }
-    const isSelected = selectedTexturePlanes.includes(plane)
-    const mesh = buildSingleTexturePlane(plane, textureRegistry, textureCache, scene, isSelected)
+    const mesh = buildSingleTexturePlane(plane, textureRegistry, textureCache, scene, false)
     if (mesh) mesh.parent = texturePlaneGroup
     updateSelectionHelper()
   }
@@ -3521,7 +3533,71 @@ function applyToolAtTile(tile, eventLike = null) {
   }
 
   async function duplicateSelected(mode = 'right') {
-    pushUndoState(selectedTexturePlane ? 'terrain' : 'objects')
+    const hasBoth = selectedTexturePlanes.length > 0 && selectedPlacedObjects.length > 0
+    pushUndoState(hasBoth ? 'full' : (selectedTexturePlane ? 'terrain' : 'objects'))
+
+    // Mixed selection: duplicate both types together with a shared offset
+    if (hasBoth) {
+      // Compute offset from the primary placed object (GLB snap logic)
+      let offsetVec = new Vector3()
+      if (mode !== 'inplace' && mode !== 'stack' && selectedPlacedObject) {
+        const primaryFootprint = getObjectFootprint(selectedPlacedObject)
+        const newPos = snapObjectFlushAlongPosition(
+          selectedPlacedObject.position,
+          selectedPlacedObject.rotation.y,
+          primaryFootprint,
+          primaryFootprint,
+          ['forward', 'back'].includes(mode) ? mode : (mode === 'left' ? 'left' : 'right')
+        )
+        offsetVec = newPos.subtract(selectedPlacedObject.position)
+      }
+
+      // Duplicate texture planes
+      const newPlanes = []
+      for (const src of selectedTexturePlanes) {
+        const clone = JSON.parse(JSON.stringify(src))
+        clone.id = `plane_${Date.now()}_${Math.floor(Math.random() * 100000)}`
+        clone.position.x += offsetVec.x
+        clone.position.y += offsetVec.y
+        clone.position.z += offsetVec.z
+        map.texturePlanes.push(clone)
+        newPlanes.push(clone)
+      }
+      for (const p of newPlanes) appendTexturePlane(p)
+
+      // Duplicate GLB objects
+      const newModels = []
+      for (const src of selectedPlacedObjects) {
+        if (!src.userData?.assetId) continue
+        const asset = assetRegistry.find((a) => a.id === src.userData.assetId)
+        if (!asset) continue
+        const model = await loadAssetModel(asset.path)
+        tuneModelLighting(model, asset.path)
+        if (src.rotationQuaternion) {
+          model.rotationQuaternion = src.rotationQuaternion.clone()
+        } else {
+          model.rotationQuaternion = null
+          model.rotation.copyFrom(src.rotation)
+        }
+        model.scale.copyFrom(src.scale)
+        model.userData.assetId = asset.id
+        model.userData.type = 'asset'
+        model.userData.layerId = src.userData.layerId || activeLayerId
+        addPlacedModel(model)
+        model.computeWorldMatrix(true)
+        model.position.copyFrom(src.position.add(offsetVec))
+        newModels.push(model)
+      }
+
+      selectedTexturePlanes = newPlanes
+      selectedTexturePlane = newPlanes[newPlanes.length - 1] ?? null
+      selectedPlacedObjects = newModels
+      selectedPlacedObject = newModels[newModels.length - 1] ?? null
+      invalidateShadowCache()
+      updateSelectionHelper()
+      updateToolUI()
+      return
+    }
 
     if (selectedTexturePlane) {
       if (selectedTexturePlanes.length > 1) {
@@ -3701,15 +3777,29 @@ function applyToolAtTile(tile, eventLike = null) {
   function beginTransform(mode) {
     if (!selectedTexturePlane && !selectedPlacedObject) return
 
-    pushUndoState(selectedTexturePlane ? 'terrain' : 'objects')
+    const hasBoth = selectedTexturePlanes.length > 0 && selectedPlacedObjects.length > 0
+    pushUndoState(hasBoth ? 'full' : (selectedTexturePlane ? 'terrain' : 'objects'))
     transformMode = mode
     transformLift = 0
     movePlaneStart = null
 
     if (mode === 'scale') transformAxis = 'all'
 
-    if (selectedTexturePlane) {
+    // Determine primary anchor: prefer whichever was selected last
+    const primaryIsPlane = selectedTexturePlane && (!selectedPlacedObject ||
+      (selectedTexturePlanes.indexOf(selectedTexturePlane) >= selectedPlacedObjects.indexOf(selectedPlacedObject)))
+
+    const _getRotEuler = (o) => {
+      if (o.rotationQuaternion) {
+        const e = o.rotationQuaternion.toEulerAngles()
+        return { x: e.x, y: e.y, z: e.z }
+      }
+      return { x: o.rotation.x, y: o.rotation.y, z: o.rotation.z }
+    }
+
+    if (primaryIsPlane) {
       transformStart = JSON.parse(JSON.stringify({
+        primaryType: 'plane',
         position: selectedTexturePlane.position,
         rotation: selectedTexturePlane.rotation,
         scale: selectedTexturePlane.scale,
@@ -3726,15 +3816,16 @@ function applyToolAtTile(tile, eventLike = null) {
           transformStart.groupStarts[i].plane = others[i]
         }
       }
-    } else if (selectedPlacedObject) {
-      const _getRotEuler = (o) => {
-        if (o.rotationQuaternion) {
-          const e = o.rotationQuaternion.toEulerAngles()
-          return { x: e.x, y: e.y, z: e.z }
-        }
-        return { x: o.rotation.x, y: o.rotation.y, z: o.rotation.z }
+      // Also capture GLB objects as cross-type group members
+      if (selectedPlacedObjects.length > 0) {
+        transformStart.crossGroupStarts = selectedPlacedObjects.map((o) => ({
+          obj: o,
+          position: o.position.clone(),
+        }))
       }
+    } else if (selectedPlacedObject) {
       transformStart = {
+        primaryType: 'object',
         position: selectedPlacedObject.position.clone(),
         rotation: _getRotEuler(selectedPlacedObject),
         quaternion: selectedPlacedObject.rotationQuaternion?.clone() || null,
@@ -3748,6 +3839,13 @@ function applyToolAtTile(tile, eventLike = null) {
             quaternion: o.rotationQuaternion?.clone() || null
           }))
       }
+      // Also capture texture planes as cross-type group members
+      if (selectedTexturePlanes.length > 0) {
+        transformStart.crossPlaneStarts = selectedTexturePlanes.map((p) => ({
+          plane: p,
+          position: { ...p.position },
+        }))
+      }
     }
 
     updateToolUI()
@@ -3756,13 +3854,18 @@ function applyToolAtTile(tile, eventLike = null) {
   function cancelTransform() {
     if (!transformMode || !transformStart) return
 
-    if (selectedTexturePlane) {
-      selectedTexturePlane.position = { ...transformStart.position }
-      selectedTexturePlane.rotation = { ...transformStart.rotation }
-      selectedTexturePlane.scale = { ...transformStart.scale }
-      selectedTexturePlane.width = transformStart.width
-      selectedTexturePlane.height = transformStart.height
-      updateTexturePlaneMeshTransform(selectedTexturePlane)
+    const primaryIsPlane = transformStart.primaryType === 'plane'
+
+    if (primaryIsPlane) {
+      // Primary was a texture plane
+      if (selectedTexturePlane) {
+        selectedTexturePlane.position = { ...transformStart.position }
+        selectedTexturePlane.rotation = { ...transformStart.rotation }
+        selectedTexturePlane.scale = { ...transformStart.scale }
+        selectedTexturePlane.width = transformStart.width
+        selectedTexturePlane.height = transformStart.height
+        updateTexturePlaneMeshTransform(selectedTexturePlane)
+      }
       if (transformStart.groupStarts?.length) {
         for (const { plane, position, rotation } of transformStart.groupStarts) {
           plane.position = { ...position }
@@ -3770,22 +3873,27 @@ function applyToolAtTile(tile, eventLike = null) {
           updateTexturePlaneMeshTransform(plane)
         }
       }
-    }
-
-    if (selectedPlacedObject) {
-      selectedPlacedObject.position.copyFrom(transformStart.position)
-      if (transformStart.quaternion) {
-        selectedPlacedObject.rotationQuaternion = transformStart.quaternion.clone()
-      } else {
-        selectedPlacedObject.rotationQuaternion = null
-        selectedPlacedObject.rotation.set(
-          transformStart.rotation.x,
-          transformStart.rotation.y,
-          transformStart.rotation.z
-        )
+      if (transformStart.crossGroupStarts?.length) {
+        for (const { obj, position } of transformStart.crossGroupStarts) {
+          obj.position.copyFrom(position)
+        }
       }
-      selectedPlacedObject.scale.copyFrom(transformStart.scale)
-
+    } else {
+      // Primary was a GLB object
+      if (selectedPlacedObject) {
+        selectedPlacedObject.position.copyFrom(transformStart.position)
+        if (transformStart.quaternion) {
+          selectedPlacedObject.rotationQuaternion = transformStart.quaternion.clone()
+        } else {
+          selectedPlacedObject.rotationQuaternion = null
+          selectedPlacedObject.rotation.set(
+            transformStart.rotation.x,
+            transformStart.rotation.y,
+            transformStart.rotation.z
+          )
+        }
+        selectedPlacedObject.scale.copyFrom(transformStart.scale)
+      }
       if (transformStart.groupStarts?.length) {
         for (const { obj, position, rotation, quaternion } of transformStart.groupStarts) {
           obj.position.copyFrom(position)
@@ -3797,18 +3905,24 @@ function applyToolAtTile(tile, eventLike = null) {
           }
         }
       }
-
-      // Re-register moved objects at their restored positions
-      if (transformMode === 'move') {
-        for (const obj of selectedPlacedObjects) {
-          _spatialUnregister(obj)
-          _spatialRegister(obj)
+      if (transformStart.crossPlaneStarts?.length) {
+        for (const { plane, position } of transformStart.crossPlaneStarts) {
+          plane.position = { ...position }
+          updateTexturePlaneMeshTransform(plane)
         }
-        invalidateShadowCache()
       }
-
-      updateSelectionHelper()
     }
+
+    // Re-register moved GLB objects at their restored positions
+    if (transformMode === 'move' && selectedPlacedObjects.length) {
+      for (const obj of selectedPlacedObjects) {
+        _spatialUnregister(obj)
+        _spatialRegister(obj)
+      }
+      invalidateShadowCache()
+    }
+
+    updateSelectionHelper()
 
     if (transformMode === 'rotate') lastRotateAxis = transformAxis
     transformMode = null
@@ -4320,12 +4434,37 @@ function applyToolAtTile(tile, eventLike = null) {
   const serverSaveBtn = topBar.querySelector('#serverSaveBtn')
   const serverReloadBtn = topBar.querySelector('#serverReloadBtn')
 
-  async function refreshServerMapList() {
+  async function refreshServerMapList(preserveSelection) {
+    const prev = preserveSelection ? serverMapSelect.value : null
     try {
       const res = await fetch(`${SERVER_API}/maps`)
       const data = await res.json()
       if (data.ok && data.maps) {
-        serverMapSelect.innerHTML = data.maps.map(m => `<option value="${m.id}">${m.name || m.id} (${m.width}x${m.height})</option>`).join('')
+        // Sort: kcmap first, then other surface maps, then underground/dungeons last
+        const primary = data.maps.filter(m => m.id === 'kcmap')
+        const surface = data.maps.filter(m => m.id !== 'kcmap' && m.id !== 'underground' && m.id !== 'overworld')
+        const legacy = data.maps.filter(m => m.id === 'underground' || m.id === 'overworld')
+        let html = ''
+        if (primary.length) {
+          html += primary.map(m => `<option value="${m.id}">${m.name || m.id} (${m.width}x${m.height})</option>`).join('')
+        }
+        if (surface.length) {
+          html += `<optgroup label="── Other Maps ──">`
+          html += surface.map(m => `<option value="${m.id}">${m.name || m.id} (${m.width}x${m.height})</option>`).join('')
+          html += `</optgroup>`
+        }
+        if (legacy.length) {
+          html += `<optgroup label="── Legacy Maps ──">`
+          html += legacy.map(m => `<option value="${m.id}">${m.name || m.id} (${m.width}x${m.height})</option>`).join('')
+          html += `</optgroup>`
+        }
+        serverMapSelect.innerHTML = html
+        // Restore previous selection or default to kcmap
+        if (prev && serverMapSelect.querySelector(`option[value="${prev}"]`)) {
+          serverMapSelect.value = prev
+        } else {
+          serverMapSelect.value = 'kcmap'
+        }
       }
     } catch {
       serverMapSelect.innerHTML = '<option>Server offline</option>'
@@ -4348,7 +4487,7 @@ function applyToolAtTile(tile, eventLike = null) {
       })
       const data = await res.json()
       if (!data.ok) { alert(`Failed: ${data.error}`); return }
-      await refreshServerMapList()
+      await refreshServerMapList(true)
       serverMapSelect.value = mapId
       statusText.textContent = `Created dungeon "${name}" (${size}x${size})`
     } catch (e) {
@@ -4429,7 +4568,7 @@ function applyToolAtTile(tile, eventLike = null) {
       const data = await res.json()
       if (data.ok) {
         statusText.textContent = `Saved "${mapId}" to server`
-        refreshServerMapList()
+        refreshServerMapList(true)
       } else {
         statusText.textContent = `Save failed: ${data.error}`
       }
@@ -4810,7 +4949,7 @@ function applyToolAtTile(tile, eventLike = null) {
 
     const terrainPoint = transformMode === 'move' ? pickTerrainPoint(event) : null
 
-    if (transformMode === 'move' && selectedTexturePlane) {
+    if (transformMode === 'move' && selectedTexturePlane && transformStart?.primaryType === 'plane') {
       // For vertical planes, fall back to a virtual horizontal plane at the plane's current Y
       // so movement isn't blocked when the cursor passes over a wall model
       const cursorPoint = terrainPoint
@@ -4863,10 +5002,10 @@ function applyToolAtTile(tile, eventLike = null) {
       updateTexturePlaneMeshTransform(selectedTexturePlane)
 
       // Move group members by the same delta
+      const dx = selectedTexturePlane.position.x - transformStart.position.x
+      const dy = selectedTexturePlane.position.y - transformStart.position.y
+      const dz = selectedTexturePlane.position.z - transformStart.position.z
       if (transformStart?.groupStarts?.length) {
-        const dx = selectedTexturePlane.position.x - transformStart.position.x
-        const dy = selectedTexturePlane.position.y - transformStart.position.y
-        const dz = selectedTexturePlane.position.z - transformStart.position.z
         for (const { plane, position } of transformStart.groupStarts) {
           plane.position.x = position.x + dx
           plane.position.y = position.y + dy
@@ -4874,12 +5013,18 @@ function applyToolAtTile(tile, eventLike = null) {
           updateTexturePlaneMeshTransform(plane)
         }
       }
+      // Also move cross-type GLB objects
+      if (transformStart?.crossGroupStarts?.length) {
+        for (const { obj, position } of transformStart.crossGroupStarts) {
+          obj.position.set(position.x + dx, position.y + dy, position.z + dz)
+        }
+      }
 
       updateSelectionHelper()
       return
     }
 
-    if (transformMode === 'move' && selectedPlacedObject) {
+    if (transformMode === 'move' && selectedPlacedObject && transformStart?.primaryType !== 'plane') {
       if (transformAxis === 'height') {
         // Vertical: mouse Y delta
         if (!movePlaneStart) {
@@ -4942,12 +5087,21 @@ function applyToolAtTile(tile, eventLike = null) {
       }
 
       // Move group members by the same delta as the primary
+      const dx = selectedPlacedObject.position.x - transformStart.position.x
+      const dy = selectedPlacedObject.position.y - transformStart.position.y
+      const dz = selectedPlacedObject.position.z - transformStart.position.z
       if (transformStart?.groupStarts?.length) {
-        const dx = selectedPlacedObject.position.x - transformStart.position.x
-        const dy = selectedPlacedObject.position.y - transformStart.position.y
-        const dz = selectedPlacedObject.position.z - transformStart.position.z
         for (const { obj, position } of transformStart.groupStarts) {
           obj.position.set(position.x + dx, position.y + dy, position.z + dz)
+        }
+      }
+      // Also move cross-type texture planes
+      if (transformStart?.crossPlaneStarts?.length) {
+        for (const { plane, position } of transformStart.crossPlaneStarts) {
+          plane.position.x = position.x + dx
+          plane.position.y = position.y + dy
+          plane.position.z = position.z + dz
+          updateTexturePlaneMeshTransform(plane)
         }
       }
 
@@ -5071,9 +5225,9 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
           } else {
             selectedTexturePlane = plane
             selectedTexturePlanes = [plane]
+            selectedPlacedObject = null
+            selectedPlacedObjects = []
           }
-          selectedPlacedObject = null
-          selectedPlacedObjects = []
           updateSelectionHelper()
           updateToolUI()
           return
@@ -5094,9 +5248,9 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
         } else {
           selectedPlacedObjects = [pickedObject]
           selectedPlacedObject = pickedObject
+          selectedTexturePlane = null
+          selectedTexturePlanes = []
         }
-        selectedTexturePlane = null
-        selectedTexturePlanes = []
         updateSelectionHelper()
         updateToolUI()
         return
@@ -5478,7 +5632,11 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
         : transformAxis === 'height' ? 'z'
         : 'y'
 
-      if (selectedTexturePlane) {
+      const totalSelected = selectedPlacedObjects.length + selectedTexturePlanes.length
+      const hasBothTypes = selectedPlacedObjects.length > 0 && selectedTexturePlanes.length > 0
+
+      // Single texture plane only — rotate in place with Euler
+      if (selectedTexturePlane && !hasBothTypes && selectedTexturePlanes.length === 1) {
         if (e.shiftKey) {
           selectedTexturePlane.rotation[threeAxis] += (e.deltaY > 0 ? 1 : -1) * (Math.PI / 180) // 1° steps
         } else {
@@ -5492,40 +5650,84 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
         return
       }
 
-      if (selectedPlacedObject) {
-        const delta = (e.deltaY > 0 ? 1 : -1) * (e.shiftKey ? Math.PI / 180 : Math.PI / 12) // Shift = 1°, normal = 15°
+      // Multi-select or mixed selection: orbit all around group center
+      if (totalSelected > 1 || selectedPlacedObject) {
+        const delta = (e.deltaY > 0 ? 1 : -1) * (e.shiftKey ? Math.PI / 180 : Math.PI / 12)
         const worldAxis = threeAxis === 'x' ? new Vector3(1, 0, 0)
           : threeAxis === 'y' ? new Vector3(0, 1, 0)
           : new Vector3(0, 0, 1)
         const q = Quaternion.RotationAxis(worldAxis, delta)
 
-        if (selectedPlacedObjects.length > 1) {
-          // Multi-select: rotate all objects around the group center
+        if (totalSelected > 1) {
+          // Compute combined center across both types
           let cx = 0, cy = 0, cz = 0
           for (const obj of selectedPlacedObjects) {
             cx += obj.position.x; cy += obj.position.y; cz += obj.position.z
           }
-          cx /= selectedPlacedObjects.length
-          cy /= selectedPlacedObjects.length
-          cz /= selectedPlacedObjects.length
+          for (const p of selectedTexturePlanes) {
+            cx += p.position.x; cy += p.position.y; cz += p.position.z
+          }
+          cx /= totalSelected; cy /= totalSelected; cz /= totalSelected
 
+          const m = new Matrix()
+          q.toRotationMatrix(m)
+
+          // Orbit + rotate GLB objects
           for (const obj of selectedPlacedObjects) {
-            // Orbit position around group center
             const rel = new Vector3(obj.position.x - cx, obj.position.y - cy, obj.position.z - cz)
-            const m = new Matrix()
-            q.toRotationMatrix(m)
             const rotated = Vector3.TransformCoordinates(rel, m)
             obj.position.x = cx + rotated.x
             obj.position.y = cy + rotated.y
             obj.position.z = cz + rotated.z
-            // Rotate own orientation
             if (!obj.rotationQuaternion) obj.rotationQuaternion = Quaternion.FromEulerAngles(obj.rotation.x, obj.rotation.y, obj.rotation.z)
             obj.rotationQuaternion = q.multiply(obj.rotationQuaternion)
           }
+
+          // Orbit + rotate texture planes
+          for (const p of selectedTexturePlanes) {
+            const rel = new Vector3(p.position.x - cx, p.position.y - cy, p.position.z - cz)
+            const rotated = Vector3.TransformCoordinates(rel, m)
+            p.position.x = cx + rotated.x
+            p.position.y = cy + rotated.y
+            p.position.z = cz + rotated.z
+            p.rotation[threeAxis] += delta
+            updateTexturePlaneMeshTransform(p)
+          }
         } else {
-          // Single object: rotate in place
+          // Single GLB object: rotate in place
           if (!selectedPlacedObject.rotationQuaternion) selectedPlacedObject.rotationQuaternion = Quaternion.FromEulerAngles(selectedPlacedObject.rotation.x, selectedPlacedObject.rotation.y, selectedPlacedObject.rotation.z)
           selectedPlacedObject.rotationQuaternion = q.multiply(selectedPlacedObject.rotationQuaternion)
+        }
+
+        updateSelectionHelper()
+        return
+      }
+
+      // Single texture plane with multiple selected (no GLBs)
+      if (selectedTexturePlanes.length > 1) {
+        const delta = (e.deltaY > 0 ? 1 : -1) * (e.shiftKey ? Math.PI / 180 : Math.PI / 12)
+
+        let cx = 0, cy = 0, cz = 0
+        for (const p of selectedTexturePlanes) {
+          cx += p.position.x; cy += p.position.y; cz += p.position.z
+        }
+        cx /= selectedTexturePlanes.length; cy /= selectedTexturePlanes.length; cz /= selectedTexturePlanes.length
+
+        const worldAxis = threeAxis === 'x' ? new Vector3(1, 0, 0)
+          : threeAxis === 'y' ? new Vector3(0, 1, 0)
+          : new Vector3(0, 0, 1)
+        const q = Quaternion.RotationAxis(worldAxis, delta)
+        const m = new Matrix()
+        q.toRotationMatrix(m)
+
+        for (const p of selectedTexturePlanes) {
+          const rel = new Vector3(p.position.x - cx, p.position.y - cy, p.position.z - cz)
+          const rotated = Vector3.TransformCoordinates(rel, m)
+          p.position.x = cx + rotated.x
+          p.position.y = cy + rotated.y
+          p.position.z = cz + rotated.z
+          p.rotation[threeAxis] += delta
+          updateTexturePlaneMeshTransform(p)
         }
 
         updateSelectionHelper()
