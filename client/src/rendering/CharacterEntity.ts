@@ -204,7 +204,7 @@ export class CharacterEntity {
         if (bb.maximumWorld.y > maxY) maxY = bb.maximumWorld.y;
       }
       const modelHeight = maxY - minY;
-      const targetH = options.targetHeight ?? 1.7;
+      const targetH = options.targetHeight ?? 1.3;
       this.modelScale = modelHeight > 0 ? targetH / modelHeight : 1;
       this.yOffset = targetH / 2;
 

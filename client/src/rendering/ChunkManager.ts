@@ -2321,6 +2321,7 @@ export class ChunkManager {
   /** Load and instantiate placed objects for a single chunk */
   private async loadChunkPlacedObjects(chunkKey: string): Promise<void> {
     if (this.chunkPlacedNodes.has(chunkKey) || this.loadingObjectChunks.has(chunkKey)) return;
+    this.loadingObjectChunks.add(chunkKey);
     let objects = this.placedObjectsByChunk.get(chunkKey);
     // If no pre-indexed objects, try fetching per-chunk file from server
     if (!objects || objects.length === 0) {
@@ -2341,9 +2342,9 @@ export class ChunkManager {
     }
     if (!objects || objects.length === 0) {
       this.chunkPlacedNodes.set(chunkKey, []);
+      this.loadingObjectChunks.delete(chunkKey);
       return;
     }
-    this.loadingObjectChunks.add(chunkKey);
 
     const nodes: TransformNode[] = [];
     const anims: AnimationGroup[] = [];
