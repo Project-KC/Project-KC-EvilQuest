@@ -185,6 +185,7 @@ function tuneModelLighting(model) {
   let layers = [{ id: 'layer_0', name: 'Layer 1', visible: true }]
   let activeLayerId = 'layer_0'
   let _layerCount = 1
+  let shiftPanMode = localStorage.getItem('editor_shiftPanMode') === 'true'
 
   let selectedPlacedObject = null
   let selectedPlacedObjects = []
@@ -443,6 +444,7 @@ function tuneModelLighting(model) {
   let wallEraseMode = false
   let lockedWallEdge = 0  // locked edge direction during drag (0 = not locked)
   let wallLineStart = null  // {x, z, edge} for Ctrl+click line drawing
+  let blockLineStart = null // {x, z} for Ctrl+click block line drawing
   let collisionFloor = 0
   let stairDirection = 'N'
   const collisionGroup = new TransformNode('collisionGroup', scene)
@@ -1068,6 +1070,9 @@ let paintBrushRadius = 1
         <label style="font-size:11px;color:rgba(255,255,255,0.45);">Floor Level <span id="collFloorLevel">0</span></label>
         <input id="collFloorLevelSlider" type="range" min="0" max="3" step="1" value="0" style="width:100%;margin-top:3px;" />
       </div>
+    </div>
+    <div style="margin-top:8px;border-top:1px solid #555;padding-top:6px;">
+      <label style="font-size:11px;cursor:pointer;"><input id="togglePanMode" type="checkbox" /> Pan: Shift+MMB (default: MMB)</label>
     </div>
   `
   uiRoot.appendChild(sidebar)
@@ -2148,7 +2153,10 @@ let paintBrushRadius = 1
       model.position.set(placed.position.x + offsetX, placed.position.y, placed.position.z + offsetZ)
       model.rotationQuaternion = null
       model.rotation.set(placed.rotation.x, placed.rotation.y, placed.rotation.z)
-      model.scale.set(placed.scale.x, placed.scale.y, placed.scale.z)
+      const isTree = asset.path?.toLowerCase().includes('tree')
+      const isRock = asset.path?.toLowerCase().includes('rock')
+      const boost = isTree ? 1.15 : isRock ? 0.85 : 1.0
+      model.scale.set(placed.scale.x * boost, placed.scale.y * boost, placed.scale.z * boost)
       model.userData.assetId = asset.id
       model.userData.type = 'asset'
       model.userData.layerId = placed.layerId || activeLayerId
@@ -4830,6 +4838,13 @@ function applyToolAtTile(tile, eventLike = null) {
     state.halfPaint = e.target.checked
   })
 
+  const panModeCheckbox = sidebar.querySelector('#togglePanMode')
+  panModeCheckbox.checked = shiftPanMode
+  panModeCheckbox.addEventListener('change', (e) => {
+    shiftPanMode = e.target.checked
+    localStorage.setItem('editor_shiftPanMode', shiftPanMode)
+  })
+
   sidebar.querySelector('#toggleTexturePlaneV').addEventListener('change', (e) => {
     texturePlaneVertical = e.target.checked
     updateToolUI()
@@ -5426,8 +5441,32 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
           }
         }
       } else if (collisionMode === 'block') {
-        const current = getWallAt(tile.x, tile.z)
-        setBlockedTile(tile.x, tile.z, current !== 15)
+        if (event.shiftKey) {
+          setBlockedTile(tile.x, tile.z, false)
+          blockLineStart = null
+        } else if (event.ctrlKey || event.metaKey) {
+          if (!blockLineStart) {
+            blockLineStart = { x: tile.x, z: tile.z }
+            setBlockedTile(tile.x, tile.z, true)
+            statusText.textContent = `Block line start: (${tile.x},${tile.z}) — Ctrl+click end point`
+          } else {
+            const dx = tile.x - blockLineStart.x
+            const dz = tile.z - blockLineStart.z
+            const steps = Math.max(Math.abs(dx), Math.abs(dz))
+            for (let i = 0; i <= steps; i++) {
+              const t = steps === 0 ? 0 : i / steps
+              const tx = Math.round(blockLineStart.x + dx * t)
+              const tz = Math.round(blockLineStart.z + dz * t)
+              setBlockedTile(tx, tz, true)
+            }
+            statusText.textContent = `Block line: ${steps + 1} tiles blocked`
+            blockLineStart = null
+          }
+        } else {
+          const current = getWallAt(tile.x, tile.z)
+          setBlockedTile(tile.x, tile.z, current !== 15)
+          blockLineStart = null
+        }
       } else if (collisionMode === 'floor') {
         if (event.shiftKey) {
           setFloorAt(tile.x, tile.z, null)
@@ -5611,8 +5650,9 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
   canvas.addEventListener('mousedown', (e) => {
     if (e.button === 2) isRightDragging = true
     if (e.button === 1) {
-      if (e.shiftKey) isMiddleDragging = true
-      else isMiddlePanning = true
+      const wantPan = shiftPanMode ? e.shiftKey : !e.shiftKey
+      if (wantPan) isMiddlePanning = true
+      else isMiddleDragging = true
     }
   })
 

@@ -26,5 +26,7 @@
   { "id": 13, "name": "Leg Armorer", "health": 50, "attack": 1, "defence": 1, "strength": 1, "attackSpeed": 4, "respawnTime": 100, "aggressive": false, "wanderRange": 1,
     "lootTable": [] },
   { "id": 14, "name": "Shield Smith", "health": 50, "attack": 1, "defence": 1, "strength": 1, "attackSpeed": 4, "respawnTime": 100, "aggressive": false, "wanderRange": 1,
-    "lootTable": [] }
+    "lootTable": [] },
+  { "id": 15, "name": "Camel", "health": 20, "attack": 3, "defence": 3, "strength": 3, "attackSpeed": 5, "respawnTime": 25, "aggressive": false, "wanderRange": 4,
+    "lootTable": [{ "itemId": 1, "quantity": 1, "chance": 1.0 }] }
 ]

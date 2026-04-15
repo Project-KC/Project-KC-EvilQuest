@@ -83,6 +83,18 @@
       "x": 94.5,
       "z": 100.5,
       "wanderRange": 2
+    },
+    {
+      "npcId": 15,
+      "x": 113.5,
+      "z": 169.5,
+      "wanderRange": 4
+    },
+    {
+      "npcId": 15,
+      "x": 130.5,
+      "z": 148.5,
+      "wanderRange": 4
     }
   ],
   "objects": [],

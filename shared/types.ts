@@ -59,6 +59,7 @@ export interface ItemDef {
   toolBonus?: number;
   // Visual
   sprite?: string;
+  icon?: string;
   value: number;
 }
 

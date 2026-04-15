@@ -183,6 +183,18 @@ function handleCommand(
       break;
     }
 
+    case '/clearinv': {
+      const player = findPlayerByUsername(from, world);
+      if (player) {
+        for (let i = 0; i < player.inventory.length; i++) {
+          player.inventory[i] = null;
+        }
+        world.sendInventory(player);
+        ws.send(JSON.stringify({ type: 'system', message: 'Inventory cleared' }));
+      }
+      break;
+    }
+
     default: {
       ws.send(JSON.stringify({ type: 'system', message: `Unknown command: ${cmd}` }));
     }

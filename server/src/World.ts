@@ -156,7 +156,15 @@ export class World {
       if (spawn.trigger) obj.trigger = spawn.trigger;
       this.worldObjects.set(obj.id, obj);
       if (objDef.blocking && objDef.category !== 'door') {
-        this.blockedObjectTiles.add(this.blockedKeyFor(mapId, spawn.x, spawn.z));
+        if (objDef.category === 'tree') {
+          const bx = Math.floor(spawn.x);
+          const bz = Math.floor(spawn.z);
+          for (const [dx, dz] of [[-1,-1],[0,-1],[-1,0],[0,0]]) {
+            this.blockedObjectTiles.add(this.blockedKeyFor(mapId, bx + dx, bz + dz));
+          }
+        } else {
+          this.blockedObjectTiles.add(this.blockedKeyFor(mapId, spawn.x, spawn.z));
+        }
       }
       // Doors: set initial wall edges (closed state)
       if (objDef.category === 'door') {
@@ -286,7 +294,16 @@ export class World {
         if (spawn.rotY != null) obj.rotationY = spawn.rotY;
         this.worldObjects.set(obj.id, obj);
         if (objDef.blocking && objDef.category !== 'door') {
-          this.blockedObjectTiles.add(this.blockedKeyFor(mapId, spawn.x, spawn.z));
+          if (objDef.category === 'tree') {
+            // Trees block a 2x2 area around their trunk
+            const bx = Math.floor(spawn.x);
+            const bz = Math.floor(spawn.z);
+            for (const [dx, dz] of [[-1,-1],[0,-1],[-1,0],[0,0]]) {
+              this.blockedObjectTiles.add(this.blockedKeyFor(mapId, bx + dx, bz + dz));
+            }
+          } else {
+            this.blockedObjectTiles.add(this.blockedKeyFor(mapId, spawn.x, spawn.z));
+          }
         }
         if (objDef.category === 'door') {
           this.setDoorWallEdges(obj, gameMap);
@@ -562,6 +579,26 @@ export class World {
     return blockedKey(getMapIdx(mapId), Math.floor(x), Math.floor(z));
   }
 
+  /** Check if player is on a tile adjacent to the object (orthogonal only for harvestable). */
+  private isAdjacentToObject(player: Player, obj: { x: number; z: number; def: { category?: string; blocking?: boolean } }): boolean {
+    const ptx = Math.floor(player.position.x);
+    const ptz = Math.floor(player.position.y);
+    const otx = Math.floor(obj.x);
+    const otz = Math.floor(obj.z);
+    // Trees use a 2x2 footprint
+    const tiles = obj.def.category === 'tree'
+      ? [[-1,-1],[0,-1],[-1,0],[0,0]].map(([dx,dz]) => [otx+dx, otz+dz])
+      : [[otx, otz]];
+    const isHarvestable = obj.def.category === 'rock' || obj.def.category === 'tree';
+    return tiles.some(([tx, tz]) => {
+      const ddx = Math.abs(ptx - tx);
+      const ddz = Math.abs(ptz - tz);
+      if (ddx === 0 && ddz === 0) return false;
+      if (isHarvestable) return (ddx === 0 && ddz === 1) || (ddx === 1 && ddz === 0);
+      return ddx <= 1 && ddz <= 1;
+    });
+  }
+
   handlePlayerMove(playerId: number, path: { x: number; z: number }[]): void {
     const player = this.players.get(playerId);
     if (!player) return;
@@ -825,12 +862,8 @@ export class World {
     // Doors can be interacted with when open (to close) — other objects can't when depleted
     if (obj.depleted && obj.def.category !== 'door') return;
 
-    // Check distance — must be adjacent
-    const dx = Math.abs(player.position.x - obj.x);
-    const dz = Math.abs(player.position.y - obj.z);
-
-    if (dx > 2.0 || dz > 2.0) {
-      // Too far — queue interaction for when player arrives (client handles pathfinding)
+    // Check adjacency — player must be on a tile next to the object
+    if (!this.isAdjacentToObject(player, obj)) {
       player.pendingInteraction = { objectEntityId, actionIndex };
       return;
     }
@@ -902,10 +935,9 @@ export class World {
         toolBonus = bestTool.toolBonus ?? 0;
       }
 
-      // Probability-based harvesting (trees): fixed cycle, success rolled per attempt
-      // Fixed harvesting (mining, fishing): toolBonus reduces cycle time
+      // Cycle time between harvest rolls. toolBonus (from pickaxe/axe tier) reduces it.
       const baseTime = obj.def.harvestTime ?? 4;
-      const harvestTime = obj.def.successChances ? baseTime : Math.max(2, baseTime - toolBonus);
+      const harvestTime = Math.max(2, baseTime - toolBonus);
 
       // Start skilling action
       this.skillingActions.set(playerId, {
@@ -1110,9 +1142,7 @@ export class World {
         const obj = this.worldObjects.get(objectEntityId);
         if (obj && obj.mapLevel === player.currentMapLevel) {
           // Check range — player should be adjacent to the door
-          const pdx = Math.abs(player.position.x - obj.x);
-          const pdz = Math.abs(player.position.y - obj.z);
-          if (pdx <= 2.5 && pdz <= 2.5) {
+          if (this.isAdjacentToObject(player, obj)) {
             // Execute the action directly
             player.moveQueue = [];
             player.attackTarget = null;
@@ -1157,7 +1187,10 @@ export class World {
         }
       }
 
-      npc.processAI(map.isBlockedCb, map.isWallBlockedCb);
+      const mapId = npc.currentMapLevel;
+      const npcBlocked = (x: number, z: number) =>
+        map.isBlocked(x, z) || this.blockedObjectTiles.has(this.blockedKeyFor(mapId, x, z));
+      npc.processAI(npcBlocked, map.isWallBlockedCb);
 
       // Update NPC chunk position
       const cm = this.chunkManagers.get(npc.currentMapLevel);
@@ -1362,9 +1395,7 @@ export class World {
       }
 
       // Check still adjacent
-      const sdx = Math.abs(player.position.x - obj.x);
-      const sdz = Math.abs(player.position.y - obj.z);
-      if (sdx > 2.0 || sdz > 2.0) {
+      if (!this.isAdjacentToObject(player, obj)) {
         this.skillingActions.delete(playerId);
         this.sendToPlayer(player, ServerOpcode.SKILLING_STOP, 0);
         continue;
@@ -1397,41 +1428,66 @@ export class World {
         const qty = obj.def.harvestQuantity ?? 1;
         const xpReward = obj.def.xpReward ?? 0;
 
-        if (player.addItem(itemId, qty, this.data.itemDefs)) {
-          // Award XP
-          if (xpReward > 0) {
-            const result = addXp(player.skills, skillId, xpReward);
-            const skillIdx = ALL_SKILLS.indexOf(skillId);
-            if (skillIdx >= 0) {
-              this.sendToPlayer(player, ServerOpcode.XP_GAIN, skillIdx, xpReward);
-              if (result.leveled) {
-                this.sendToPlayer(player, ServerOpcode.LEVEL_UP, skillIdx, result.newLevel);
-              }
-            }
-          }
-
-          this.sendInventory(player);
-          const harvestSkillIdx = ALL_SKILLS.indexOf(skillId);
-          if (harvestSkillIdx >= 0) this.sendSingleSkill(player, harvestSkillIdx);
-
-          // Roll depletion
-          if (obj.def.depletionChance && Math.random() < obj.def.depletionChance) {
-            obj.deplete();
-            this.depletedObjectIds.add(obj.id);
-            if (obj.def.blocking) {
-              this.blockedObjectTiles.delete(this.blockedKeyFor(obj.mapLevel, obj.x, obj.z));
-            }
-            this.broadcastNearby(obj.mapLevel, obj.x, obj.z, ServerOpcode.WORLD_OBJECT_DEPLETED, obj.id, 1);
-            this.skillingActions.delete(playerId);
-            this.sendToPlayer(player, ServerOpcode.SKILLING_STOP, 0);
-          } else {
-            // Reset cycle for next harvest attempt
-            action.ticksLeft = cycleTime;
-          }
-        } else {
-          // Inventory full
+        const addedToInv = player.addItem(itemId, qty, this.data.itemDefs);
+        if (!addedToInv && obj.def.category === 'rock') {
+          // RSC-style: mining with full inventory drops ore on the ground
+          const groundItem: GroundItem = {
+            id: nextGroundItemId++,
+            itemId,
+            quantity: qty,
+            x: player.position.x,
+            z: player.position.y,
+            mapLevel: player.currentMapLevel,
+            despawnTimer: 200,
+          };
+          this.groundItems.set(groundItem.id, groundItem);
+          this.despawningItemIds.add(groundItem.id);
+          const dropCm = this.chunkManagers.get(groundItem.mapLevel);
+          if (dropCm) dropCm.addEntity(groundItem.id, groundItem.x, groundItem.z);
+          this.forEachPlayerNear(groundItem.mapLevel, groundItem.x, groundItem.z, p => this.sendGroundItemUpdate(p, groundItem));
+        } else if (!addedToInv) {
+          // Non-rock: inventory full — stop skilling
           this.skillingActions.delete(playerId);
           this.sendToPlayer(player, ServerOpcode.SKILLING_STOP, 0);
+          continue;
+        }
+
+        // Award XP
+        if (xpReward > 0) {
+          const result = addXp(player.skills, skillId, xpReward);
+          const skillIdx = ALL_SKILLS.indexOf(skillId);
+          if (skillIdx >= 0) {
+            this.sendToPlayer(player, ServerOpcode.XP_GAIN, skillIdx, xpReward);
+            if (result.leveled) {
+              this.sendToPlayer(player, ServerOpcode.LEVEL_UP, skillIdx, result.newLevel);
+            }
+          }
+        }
+
+        if (addedToInv) this.sendInventory(player);
+        const harvestSkillIdx = ALL_SKILLS.indexOf(skillId);
+        if (harvestSkillIdx >= 0) this.sendSingleSkill(player, harvestSkillIdx);
+
+        // Roll depletion
+        if (obj.def.depletionChance && Math.random() < obj.def.depletionChance) {
+          obj.deplete();
+          this.depletedObjectIds.add(obj.id);
+          if (obj.def.blocking) {
+            if (obj.def.category === 'tree') {
+              const bx = Math.floor(obj.x), bz = Math.floor(obj.z);
+              for (const [dx, dz] of [[-1,-1],[0,-1],[-1,0],[0,0]]) {
+                this.blockedObjectTiles.delete(this.blockedKeyFor(obj.mapLevel, bx + dx, bz + dz));
+              }
+            } else {
+              this.blockedObjectTiles.delete(this.blockedKeyFor(obj.mapLevel, obj.x, obj.z));
+            }
+          }
+          this.broadcastNearby(obj.mapLevel, obj.x, obj.z, ServerOpcode.WORLD_OBJECT_DEPLETED, obj.id, 1);
+          this.skillingActions.delete(playerId);
+          this.sendToPlayer(player, ServerOpcode.SKILLING_STOP, 0);
+        } else {
+          // Reset cycle for next harvest attempt
+          action.ticksLeft = cycleTime;
         }
       }
     }
@@ -1443,7 +1499,14 @@ export class World {
       if (obj.tickRespawn()) {
         this.depletedObjectIds.delete(objId);
         if (obj.def.blocking) {
-          this.blockedObjectTiles.add(this.blockedKeyFor(obj.mapLevel, obj.x, obj.z));
+          if (obj.def.category === 'tree') {
+            const bx = Math.floor(obj.x), bz = Math.floor(obj.z);
+            for (const [dx, dz] of [[-1,-1],[0,-1],[-1,0],[0,0]]) {
+              this.blockedObjectTiles.add(this.blockedKeyFor(obj.mapLevel, bx + dx, bz + dz));
+            }
+          } else {
+            this.blockedObjectTiles.add(this.blockedKeyFor(obj.mapLevel, obj.x, obj.z));
+          }
         }
         // Door auto-close: restore wall collision and action text
         if (obj.def.category === 'door') {

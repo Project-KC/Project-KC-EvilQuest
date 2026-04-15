@@ -26,7 +26,8 @@ const ANIM_DURATIONS: Record<string, number> = {
   attack_slash: 1.2,
   attack_punch: 1.2,
   bow_attack: 1.2,    // 2 ticks — draw and release
-  chop: 1.8,          // 3 ticks — rhythmic chop
+  chop: 1.2,          // 2 ticks — faster rhythmic chop
+  mine: 1.8,          // 3 ticks — rhythmic mining swing
   skill: 1.8,         // 3 ticks
   death: 1.8,         // 3 ticks — dramatic fall
 };
@@ -393,6 +394,13 @@ export class CharacterEntity {
             // Skip position and scale tracks for neck_01 and Head bones.
             // External animations carry the original (longer) neck rest pose —
             // without this filter they override the shortened rest pose in the GLB.
+            const boneName = ourTarget.name;
+            const prop = ta.animation.targetProperty;
+            const isNeckOrHead = boneName === 'neck_01' || boneName === 'Head';
+            const isPosOrScale = prop === 'position' || prop === 'scaling' || prop.startsWith('position') || prop.startsWith('scaling');
+            if (isNeckOrHead && isPosOrScale) {
+              continue;
+            }
             retargetedAnims.push({ animation: ta.animation, target: ourTarget });
           } else {
             missCount++;
@@ -418,8 +426,11 @@ export class CharacterEntity {
       }
     }
 
-    // Clean up all loaded GLB resources
+    // Clean up all loaded GLB resources — including animation groups
+    // that weren't retargeted, to prevent them from interfering with our
+    // character's skeleton (they share bone names with the source armatures).
     for (const [, result] of loadedFiles) {
+      for (const ag of result.animationGroups) ag.dispose();
       for (const sk of result.skeletons) sk.dispose();
       for (const mesh of result.meshes) mesh.dispose();
     }
@@ -450,7 +461,7 @@ export class CharacterEntity {
       case AnimState.Walk:
         return ['walk', 'run'];
       case AnimState.Skill:
-        return variant ? [variant, 'skill', 'chop', 'idle'] : ['skill', 'chop', 'idle'];
+        return variant ? [variant, 'skill', 'chop', 'idle'] : ['skill', 'chop', 'mine', 'idle'];
       case AnimState.Attack:
         return variant ? [variant, 'attack', 'attack_slash'] : ['attack', 'attack_slash', 'attack_punch'];
       case AnimState.Death:
@@ -481,24 +492,55 @@ export class CharacterEntity {
     console.warn(`[CharacterEntity] No animation found for state ${AnimState[state]}, tried: ${names.join(', ')}`);
   }
 
+  private blendInterval: ReturnType<typeof setInterval> | null = null;
+
   /** Low-level: play a named animation group. */
   private playAnim(name: string, loop: boolean, onEnd?: () => void): void {
     // Don't restart the same looping animation — prevents jarring resets mid-walk
     if (name === this.currentAnimName && loop) return;
 
-    // Stop current
-    if (this.currentAnimName) {
-      const current = this.animGroups.get(this.currentAnimName);
-      current?.stop();
+    // Clear any active blend
+    if (this.blendInterval) {
+      clearInterval(this.blendInterval);
+      this.blendInterval = null;
     }
 
+    const oldGroup = this.currentAnimName ? this.animGroups.get(this.currentAnimName) : null;
     const group = this.animGroups.get(name);
     if (!group) return;
 
+    // Cross-fade for skill animations (chop, mine) — blend over 300ms
+    const isSkillAnim = name === 'chop' || name === 'mine';
+    if (isSkillAnim && oldGroup && oldGroup !== group) {
+      // Start from the beginning, longer cross-fade handles the transition
+      group.start(loop, 1.0, group.from, group.to, false);
+      group.setWeightForAllAnimatables(0);
+      oldGroup.setWeightForAllAnimatables(1);
+
+      const blendDuration = 500; // ms
+      const stepMs = 16;
+      let elapsed = 0;
+      this.blendInterval = setInterval(() => {
+        elapsed += stepMs;
+        const t = Math.min(elapsed / blendDuration, 1);
+        group.setWeightForAllAnimatables(t);
+        oldGroup.setWeightForAllAnimatables(1 - t);
+        if (t >= 1) {
+          oldGroup.stop();
+          if (this.blendInterval) {
+            clearInterval(this.blendInterval);
+            this.blendInterval = null;
+          }
+        }
+      }, stepMs);
+    } else {
+      // Hard cut for all other animations
+      if (oldGroup) oldGroup.stop();
+      group.start(loop, 1.0, group.from, group.to, false);
+    }
+
     this.currentAnimName = name;
     this.oneShotCallback = onEnd ?? null;
-
-    group.start(loop, 1.0, group.from, group.to, false);
 
     if (!loop && onEnd) {
       group.onAnimationGroupEndObservable.addOnce(() => {
@@ -555,6 +597,11 @@ export class CharacterEntity {
     this.queuedState = AnimState.Skill;
     this.queuedAnimName = variant ?? '';
     this.playAnimByState(AnimState.Skill, variant, true);
+  }
+
+  /** Whether a skill animation is currently playing. */
+  isSkillAnimPlaying(): boolean {
+    return this.currentState === AnimState.Skill;
   }
 
   /** Stop skill animation, return to idle. */
@@ -729,6 +776,11 @@ export class CharacterEntity {
       existing.node.dispose();
       this.gearAttachments.delete(slot);
     }
+  }
+
+  /** Get the transform node for gear in a slot (for debug panel). */
+  getGearNode(slot: string): import('@babylonjs/core/Meshes/transformNode').TransformNode | null {
+    return this.gearAttachments.get(slot)?.node ?? null;
   }
 
   /** Remove all gear. */
@@ -931,10 +983,23 @@ export class CharacterEntity {
    * This gives animations the choppy, low-frame look of RuneScape Classic.
    * The animation is also retimed to match tick-aligned durations.
    */
+  /**
+   * Non-uniform sample curves for specific animations.
+   * Values are 0-1 positions in the source timeline, sampled at each of the QUANTIZE_FRAMES.
+   * Bunching values together = fast motion, spreading = slow/held pose.
+   */
+  private static readonly ANIM_SAMPLE_CURVES: Record<string, number[]> = {
+    // Chop: fast wind-up (0→0.45 in 3 frames), fast swing (0.45→0.65 in 1 frame), slow recovery (0.65→1.0 in 4 frames)
+    chop: [0, 0.15, 0.35, 0.50, 0.60, 0.72, 0.85, 1.0],
+    // Mine: fast raise (0→0.4 in 2 frames), fast strike (0.4→0.55 in 1 frame), slow pull-back (0.55→1.0 in 5 frames)
+    mine: [0, 0.2, 0.42, 0.55, 0.65, 0.77, 0.88, 1.0],
+  };
+
   private quantizeAnimationGroup(group: AnimationGroup, animName: string): void {
     const targetDuration = ANIM_DURATIONS[animName] ?? 1.2;
     // Target frame rate: QUANTIZE_FRAMES over targetDuration seconds
     const targetFps = QUANTIZE_FRAMES / targetDuration;
+    const sampleCurve = CharacterEntity.ANIM_SAMPLE_CURVES[animName];
 
     for (const ta of group.targetedAnimations) {
       const anim = ta.animation;
@@ -946,11 +1011,11 @@ export class CharacterEntity {
       const srcRange = srcTo - srcFrom;
       if (srcRange <= 0) continue;
 
-      // Sample the animation at QUANTIZE_FRAMES evenly spaced points
+      // Sample the animation at QUANTIZE_FRAMES points
       const newKeys: any[] = [];
       for (let i = 0; i < QUANTIZE_FRAMES; i++) {
-        // Sample position in original timeline
-        const t = i / (QUANTIZE_FRAMES - 1);
+        // Use custom sample curve if available, otherwise evenly spaced
+        const t = sampleCurve ? sampleCurve[i] : (i / (QUANTIZE_FRAMES - 1));
         const srcFrame = srcFrom + t * srcRange;
 
         // Find the two surrounding keyframes and interpolate

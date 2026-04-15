@@ -20,6 +20,7 @@ import { NetworkManager } from './NetworkManager';
 import { findPath } from '../rendering/Pathfinding';
 import { SidePanel } from '../ui/SidePanel';
 import { ChatPanel } from '../ui/ChatPanel';
+import { GearDebugPanel } from '../ui/GearDebugPanel';
 import { Minimap } from '../ui/Minimap';
 import { StatsPanel } from '../ui/StatsPanel';
 import { ShopPanel, type ShopItem } from '../ui/ShopPanel';
@@ -64,6 +65,7 @@ const NPC_3D_MODELS: Record<number, { file: string; scale: number; anims: { idle
   2:  { file: '/models/npcs/rat.glb', scale: 0.2, anims: { idle: 'RatArmature|RatArmature|Rat_Idle', walk: 'RatArmature|RatArmature|Rat_Walk', attack: 'RatArmature|RatArmature|Rat_Attack', death: 'RatArmature|RatArmature|Rat_Death' } },
   6:  { file: '/models/npcs/spider.glb', scale: 0.2, anims: { idle: 'SpiderArmature|SpiderArmature|Spider_Idle', walk: 'SpiderArmature|SpiderArmature|Spider_Walk', attack: 'SpiderArmature|SpiderArmature|Spider_Attack', death: 'SpiderArmature|SpiderArmature|Spider_Death' } },
   10: { file: '/models/npcs/cow.glb', scale: 0.2, anims: { idle: 'Armature|Armature|Idle', walk: 'Armature|Armature|WalkSlow', death: 'Armature|Armature|Death' } },
+  15: { file: '/models/npcs/Camel.glb', scale: 1.0, anims: { idle: 'ready', walk: 'walk', attack: 'attack', death: 'death' } },
 };
 
 /**
@@ -116,10 +118,16 @@ export class GameManager {
   private playerHealth: number = 10;
   private playerMaxHealth: number = 10;
 
-  // Movement
+  // Movement — tick-aligned tile stepping (RS-style)
   private path: { x: number; z: number }[] = [];
   private pathIndex: number = 0;
   private moveSpeed: number = 1.67; // RS2 walk speed: 1 tile per 600ms tick
+  private pendingPath: { x: number; z: number }[] | null = null; // queued path from click-while-moving
+  private pendingSkill: { objectId: number; variant?: string } | null = null; // deferred skilling until walk finishes
+  private skillCancelTime: number = 0; // timestamp when skilling was last cancelled
+  private skillingFacingAngle: number = 0; // locked facing angle while skilling
+  private tileProgress: number = 0; // 0→1 progress through current tile step
+  private tileFrom: { x: number; z: number } = { x: 0, z: 0 }; // where we started this tile step
   private _tempVec: Vector3 = new Vector3(); // reusable temp vector to avoid per-frame allocations
   // NOTE: do NOT reuse a single Vector3 for entity positions — the setter stores the reference
   private _splatVp = new Viewport(0, 0, 1, 1); // reusable viewport for hit splat projection
@@ -185,6 +193,7 @@ export class GameManager {
   private sidePanel: SidePanel | null = null;
   private chatPanel: ChatPanel | null = null;
   private minimap: Minimap | null = null;
+  private gearDebugPanel: GearDebugPanel | null = null;
   private statsPanel: StatsPanel | null = null;
   private shopPanel: ShopPanel | null = null;
 
@@ -262,7 +271,16 @@ export class GameManager {
     this.createHUD();
     this.sidePanel = new SidePanel(this.network, this.token);
     this.chatPanel = new ChatPanel();
-    this.chatPanel.setSendHandler((msg) => this.network.sendChat(msg));
+    this.chatPanel.setSendHandler((msg) => {
+      if (msg === '/geardebug') {
+        if (!this.gearDebugPanel) this.gearDebugPanel = new GearDebugPanel();
+        // Find currently equipped weapon node
+        const weaponGear = this.localPlayer?.getGearNode?.('weapon');
+        this.gearDebugPanel.toggle(weaponGear);
+        return;
+      }
+      this.network.sendChat(msg);
+    });
     this.shopPanel = new ShopPanel(this.network, this.itemDefsCache);
     this.shopPanel.setOnClose(() => {
       this.sidePanel?.setSellCallback(null);
@@ -402,17 +420,26 @@ export class GameManager {
     for (const [, data] of this.worldObjectDefs) {
       const def = this.objectDefsCache.get(data.defId);
       if (def?.blocking && !data.depleted) {
-        this.blockedObjectTiles.add(`${Math.floor(data.x)},${Math.floor(data.z)}`);
+        const bx = Math.floor(data.x);
+        const bz = Math.floor(data.z);
+        if (def.category === 'tree') {
+          // Trees block a 2x2 area around their trunk
+          for (const [dx, dz] of [[-1,-1],[0,-1],[-1,0],[0,0]]) {
+            this.blockedObjectTiles.add(`${bx + dx},${bz + dz}`);
+          }
+        } else {
+          this.blockedObjectTiles.add(`${bx},${bz}`);
+        }
       }
     }
   }
 
   /** Tree model config: defId → GLB files + target height + stump file */
   private static readonly TREE_MODEL_CONFIG: { defId: number; files: string[]; targetHeight: number; stumpFile: string }[] = [
-    { defId: 1, files: ['sTree_1.glb', 'sTree_2.glb', 'stree_3.glb', 'sTree4.glb', 'stree_autumn.glb'], targetHeight: 3.0, stumpFile: 'stump1.glb' },
-    { defId: 2, files: ['oaktree2.glb'], targetHeight: 3.75, stumpFile: 'oakstump.glb' },
-    { defId: 9, files: ['willow_tree.glb'], targetHeight: 4.0, stumpFile: 'willowstump.glb' },
-    { defId: 10, files: ['DeadTreeLam.glb'], targetHeight: 2.5, stumpFile: 'stump2.glb' },
+    { defId: 1, files: ['sTree_1.glb', 'sTree_2.glb', 'stree_3.glb', 'sTree4.glb', 'stree_autumn.glb'], targetHeight: 3.45, stumpFile: 'stump1.glb' },
+    { defId: 2, files: ['oaktree2.glb'], targetHeight: 4.3, stumpFile: 'oakstump.glb' },
+    { defId: 9, files: ['willow_tree.glb'], targetHeight: 4.6, stumpFile: 'willowstump.glb' },
+    { defId: 10, files: ['DeadTreeLam.glb'], targetHeight: 2.875, stumpFile: 'stump2.glb' },
   ];
   private treeModelVariants: Map<number, { template: TransformNode; scale: number }[]> = new Map();
   private stumpModels: Map<number, { template: TransformNode; scale: number }> = new Map();
@@ -938,8 +965,8 @@ export class GameManager {
       const mat = child.material as any;
       if (mat && mat.transparencyMode !== undefined) mat.transparencyMode = 1;
     }
-    const ss = depletedModel.scale;
-    depleted.scaling.set(ss, ss, ss);
+    // Match the placed node's scale so depleted model fits the same footprint
+    depleted.scaling.copyFrom(placedNode.scaling);
     depleted.position.set(placedNode.position.x, placedNode.position.y, placedNode.position.z);
     if (placedNode.rotationQuaternion) {
       depleted.rotationQuaternion = placedNode.rotationQuaternion.clone();
@@ -999,20 +1026,36 @@ export class GameManager {
       let promise = this.gearLoadingPromises.get(cacheKey);
       if (!promise) {
         promise = (async () => {
+          // Tools share a single model file by toolType
+          const toolType = itemDef?.toolType;
+          const toolModelMap: Record<string, string> = {
+            axe: '/assets/equipment/Tools/Axe.glb',
+            pickaxe: '/assets/equipment/Tools/Pickaxe.glb',
+          };
+          // Tool-specific transforms (grip position, rotation, scale)
+          const toolTransforms: Record<string, { pos: { x: number; y: number; z: number }; rot: { x: number; y: number; z: number }; scale: number; center: boolean }> = {
+            axe:     { pos: { x: -0.06, y: 0.09, z: -0.12 }, rot: { x: -1.65, y: 0.2, z: -3.15 }, scale: 0.6, center: false },
+            pickaxe: { pos: { x: -0.01, y: 0.54, z: 0.25 }, rot: { x: 2.7, y: 0.1, z: 0.1 }, scale: 0.9, center: false },
+          };
+          const toolTx = toolType ? toolTransforms[toolType] : null;
           const pos = isBow
             ? { x: -0.04, y: 0, z: 0 }
+            : toolTx ? toolTx.pos
             : boneConfig.localPosition;
           const rot = isBow
             ? { x: Math.PI / 2, y: 0, z: 0 }
+            : toolTx ? toolTx.rot
             : boneConfig.localRotation;
+          const gearScale = isBow ? 0.9 : toolTx ? toolTx.scale : boneConfig.scale;
+          const gearFile = (toolType && toolModelMap[toolType]) || `/gear/${slotName}/${itemId}.glb`;
           const gearDef: GearDef = {
             itemId,
-            file: `/gear/${slotName}/${itemId}.glb`,
+            file: gearFile,
             boneName: boneConfig.boneName,
             localPosition: pos,
             localRotation: rot,
-            scale: isBow ? 0.9 : boneConfig.scale,
-            centerOrigin: isBow,
+            scale: gearScale,
+            centerOrigin: isBow || (toolTx?.center ?? false),
           };
           const tmpl = await loadGearTemplate(this.scene, gearDef);
           if (tmpl) {
@@ -1055,7 +1098,8 @@ export class GameManager {
           { name: 'attack', path: '/Character models/animations/attack.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Sword_Attack' } },
           { name: 'attack_slash', path: '/Character models/animations/attack_slash.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Sword_Attack' } },
           { name: 'attack_punch', path: '/Character models/animations/attack_punch.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Punch_Cross' } },
-          { name: 'chop', path: '/Character models/animations/chop.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Interact' } },
+          { name: 'chop', path: '/Character models/animations/chop.glb', fallback: { path: '/Character models/Universal Animation Library 2[Source]/Unreal-Godot/UAL2.glb', animName: 'TreeChopping_Loop' } },
+          { name: 'mine', path: '/Character models/animations/mine.glb', fallback: { path: '/Character models/Universal Animation Library 2[Source]/Unreal-Godot/UAL2.glb', animName: 'Mining_Loop' } },
           { name: 'bow_attack', path: '/Character models/animations/bow_attack.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Spell_Simple_Shoot' } },
           { name: 'death', path: '/Character models/animations/death.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Death01' } },
         ],
@@ -1177,13 +1221,17 @@ export class GameManager {
       if (!this.groundItemSprites.has(groundItemId)) {
         const itemDef = this.itemDefsCache.get(itemId);
         const itemName = itemDef?.name ?? `Item ${itemId}`;
+        const iconPath = itemDef?.sprite ? `/sprites/items/${itemDef.sprite}`
+          : itemDef?.icon ? `/items/${itemDef.icon}`
+          : null;
         const sprite = new SpriteEntity(this.scene, {
           name: `gitem_${groundItemId}`,
           color: new Color3(0.8, 0.7, 0.2),
           label: itemName,
           labelColor: '#ffaa00',
-          width: 0.4,
-          height: 0.4,
+          width: 0.48,
+          height: 0.48,
+          iconUrl: iconPath ?? undefined,
         });
         sprite.position = new Vector3(x, this.getHeight(x, z), z);
         this.groundItemSprites.set(groundItemId, sprite);
@@ -1356,9 +1404,23 @@ export class GameManager {
         }
         // Don't add to blockedObjectTiles — tile stays walkable
       } else if (def?.blocking && !isDepleted) {
-        this.blockedObjectTiles.add(tileKey);
+        const bx = Math.floor(x), bz = Math.floor(z);
+        if (def.category === 'tree') {
+          for (const [dx, dz] of [[-1,-1],[0,-1],[-1,0],[0,0]]) {
+            this.blockedObjectTiles.add(`${bx + dx},${bz + dz}`);
+          }
+        } else {
+          this.blockedObjectTiles.add(tileKey);
+        }
       } else {
-        this.blockedObjectTiles.delete(tileKey);
+        if (def?.category === 'tree') {
+          const bx = Math.floor(x), bz = Math.floor(z);
+          for (const [dx, dz] of [[-1,-1],[0,-1],[-1,0],[0,0]]) {
+            this.blockedObjectTiles.delete(`${bx + dx},${bz + dz}`);
+          }
+        } else {
+          this.blockedObjectTiles.delete(tileKey);
+        }
       }
 
       // Try to link to an editor-placed GLB model
@@ -1431,9 +1493,23 @@ export class GameManager {
             this.chunkManager.setWall(tx, tz, this.chunkManager.getWallRawPublic(tx, tz) | edge);
           }
         } else if (def2?.blocking && isDepleted === 0) {
-          this.blockedObjectTiles.add(tileKey);
+          const bx = Math.floor(data.x), bz = Math.floor(data.z);
+          if (def2.category === 'tree') {
+            for (const [dx, dz] of [[-1,-1],[0,-1],[-1,0],[0,0]]) {
+              this.blockedObjectTiles.add(`${bx + dx},${bz + dz}`);
+            }
+          } else {
+            this.blockedObjectTiles.add(tileKey);
+          }
         } else {
-          this.blockedObjectTiles.delete(tileKey);
+          if (def2?.category === 'tree') {
+            const bx = Math.floor(data.x), bz = Math.floor(data.z);
+            for (const [dx, dz] of [[-1,-1],[0,-1],[-1,0],[0,0]]) {
+              this.blockedObjectTiles.delete(`${bx + dx},${bz + dz}`);
+            }
+          } else {
+            this.blockedObjectTiles.delete(tileKey);
+          }
         }
       }
 
@@ -1473,13 +1549,17 @@ export class GameManager {
         const actionName = def?.actions[0] ?? 'Working';
         this.chatPanel.addSystemMessage(`You begin to ${actionName.toLowerCase()}...`, '#8cf');
       }
-      // Show thinking bubble with tool icon
+      // Determine which animation to play
       const objData = this.worldObjectDefs.get(v[0]);
       const objDef = objData ? this.objectDefsCache.get(objData.defId) : null;
-      if (objDef?.category === 'tree') {
-        this.showThinkingBubble('/sprites/items/axe base.png');
-      } else if (objDef?.category === 'rock') {
-        this.showThinkingBubble('/sprites/items/pickaxe base.png');
+      const variant = objDef?.category === 'tree' ? 'chop' : objDef?.category === 'rock' ? 'mine' : undefined;
+
+      // If still walking, defer the skill animation until path completes
+      const stillWalking = this.pathIndex < this.path.length;
+      if (stillWalking) {
+        this.pendingSkill = { objectId: v[0], variant };
+      } else {
+        this.startSkillingVisual(v[0], variant);
       }
     });
 
@@ -1487,6 +1567,7 @@ export class GameManager {
       this.isSkilling = false;
       this.skillingObjectId = -1;
       this.hideThinkingBubble();
+      this.localPlayer?.stopSkillAnimation();
     });
 
     this.network.on(ServerOpcode.PLAYER_STATS, (_op, v) => {
@@ -1648,7 +1729,7 @@ export class GameManager {
     // Update player position
     this.playerX = newX;
     this.playerZ = newZ;
-    this.path = []; this.pathIndex = 0;
+    this.path = []; this.pathIndex = 0; this.tileProgress = 0; this.pendingPath = null;
     if (this.localPlayer) this.localPlayer.stopWalking();
     this.combatTargetId = -1;
 
@@ -1855,7 +1936,7 @@ export class GameManager {
         }
       }
       if (path.length > 0) {
-        this.path = path; this.pathIndex = 0;
+        this.path = path; this.pathIndex = 0; this.tileProgress = 0; this.tileFrom = { x: this.playerX, z: this.playerZ };
         this.destMarker.isVisible = false;
         this.minimap?.clearDestination();
       }
@@ -1878,7 +1959,7 @@ export class GameManager {
       }
     }
     if (path.length > 0) {
-      this.path = path; this.pathIndex = 0;
+      this.path = path; this.pathIndex = 0; this.tileProgress = 0; this.tileFrom = { x: this.playerX, z: this.playerZ };
       this.destMarker.isVisible = false;
       this.minimap?.clearDestination();
     }
@@ -1891,6 +1972,8 @@ export class GameManager {
   }
 
   private handleObjectClick(objectEntityId: number): void {
+    // Cooldown after cancelling a skill — prevent spam-restarting
+    if (performance.now() - this.skillCancelTime < 600) return;
     const data = this.worldObjectDefs.get(objectEntityId);
     if (!data) return;
     const def = this.objectDefsCache.get(data.defId);
@@ -1915,6 +1998,14 @@ export class GameManager {
   private interactObject(objectEntityId: number, actionIndex: number): void {
     this.combatTargetId = -1;
 
+    // Cancel current skilling if clicking a different object
+    if (this.isSkilling && this.skillingObjectId !== objectEntityId) {
+      this.isSkilling = false;
+      this.skillingObjectId = -1;
+      this.pendingSkill = null;
+      this.localPlayer?.stopSkillAnimation();
+    }
+
     const data = this.worldObjectDefs.get(objectEntityId);
     if (!data) return;
 
@@ -1922,15 +2013,45 @@ export class GameManager {
     const dz = data.z - this.playerZ;
     const dist = Math.hypot(dx, dz);
 
-    if (dist > 2.0) {
-      // Walk toward the object — pathfind to the object tile (goal fallback finds adjacent)
-      const path = findPath(this.playerX, this.playerZ, data.x, data.z,
-        this.isTileBlocked,
-        this.chunkManager.getMapWidth(), this.chunkManager.getMapHeight(), 500,
-        this.isWallBlockedForPath);
-      if (path.length > 0) {
-        this.path = path; this.pathIndex = 0;
-        this.network.sendMove(path);
+    // Find a reachable adjacent tile and walk there
+    const def = this.objectDefsCache.get(data.defId);
+    const isHarvestable = def?.category === 'rock' || def?.category === 'tree';
+    const otx = Math.floor(data.x);
+    const otz = Math.floor(data.z);
+    const objTiles = def?.category === 'tree'
+      ? [[-1,-1],[0,-1],[-1,0],[0,0]].map(([ddx,ddz]) => [otx+ddx, otz+ddz])
+      : [[otx, otz]];
+    const dirs = isHarvestable ? [[0,-1],[0,1],[-1,0],[1,0]] : [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+
+    // Check if already on a valid adjacent tile
+    const ptx = Math.floor(this.playerX);
+    const ptz = Math.floor(this.playerZ);
+    const alreadyAdj = objTiles.some(([tx, tz]) => {
+      return dirs.some(([ddx, ddz]) => ptx === tx + ddx && ptz === tz + ddz);
+    });
+
+    if (!alreadyAdj) {
+      // Find closest valid adjacent tile and pathfind there
+      let bestPath: { x: number; z: number }[] | null = null;
+      let bestLen = Infinity;
+      for (const [tx, tz] of objTiles) {
+        for (const [ddx, ddz] of dirs) {
+          const ax = tx + ddx, az = tz + ddz;
+          if (objTiles.some(([ox, oz]) => ox === ax && oz === az)) continue;
+          if (this.isTileBlocked(ax, az)) continue;
+          const path = findPath(this.playerX, this.playerZ, ax + 0.5, az + 0.5,
+            this.isTileBlocked,
+            this.chunkManager.getMapWidth(), this.chunkManager.getMapHeight(), 500,
+            this.isWallBlockedForPath);
+          if (path.length > 0 && path.length < bestLen) {
+            bestLen = path.length;
+            bestPath = path;
+          }
+        }
+      }
+      if (bestPath) {
+        this.path = bestPath; this.pathIndex = 0; this.tileProgress = 0; this.tileFrom = { x: this.playerX, z: this.playerZ };
+        this.network.sendMove(bestPath);
       }
     }
 
@@ -2105,18 +2226,66 @@ export class GameManager {
     return this.chunkManager.isWallBlocked(fx, fz, tx, tz, playerY);
   };
 
+  /** Get the cardinal facing angle (N/E/S/W) toward a target from a source position. */
+  private cardinalFacingAngle(dx: number, dz: number): number {
+    // Pick the axis with the larger absolute component
+    // If equal, prefer X axis (east/west)
+    if (Math.abs(dx) >= Math.abs(dz)) {
+      return dx > 0 ? Math.PI / 2 : -Math.PI / 2; // East or West
+    } else {
+      return dz > 0 ? 0 : Math.PI; // South or North
+    }
+  }
+
+  private startSkillingVisual(objectId: number, variant?: string): void {
+    this.path = []; this.pathIndex = 0; this.tileProgress = 0; this.pendingPath = null;
+    // Snap player to tile center
+    this.playerX = Math.round(this.playerX - 0.5) + 0.5;
+    this.playerZ = Math.round(this.playerZ - 0.5) + 0.5;
+    if (this.localPlayer) {
+      this.localPlayer.stopWalking();
+      const h = this.getHeight(this.playerX, this.playerZ);
+      this.localPlayer.position = new Vector3(this.playerX, h, this.playerZ);
+      // Face toward the object
+      const objData = this.worldObjectDefs.get(objectId);
+      if (objData) {
+        this.localPlayer.faceToward(new Vector3(objData.x, 0, objData.z));
+      }
+      this.localPlayer.startSkillAnimation(variant);
+    }
+  }
+
   private handleGroundClick(worldX: number, worldZ: number): void {
     this.combatTargetId = -1;
+    this.pendingSkill = null;
+    if (this.isSkilling) {
+      this.isSkilling = false;
+      this.skillingObjectId = -1;
+      // Clicking on own tile — delay the cancel so you can't spam restart
+      const clickedOwnTile = Math.floor(worldX) === Math.floor(this.playerX) && Math.floor(worldZ) === Math.floor(this.playerZ);
+      if (clickedOwnTile) {
+        this.skillCancelTime = performance.now();
+        setTimeout(() => {
+          if (!this.isSkilling) this.localPlayer?.stopSkillAnimation();
+        }, 600);
+      } else {
+        this.localPlayer?.stopSkillAnimation();
+      }
+    }
     if (this.interactMarker) this.interactMarker.isVisible = false;
 
     const tx = Math.floor(worldX), tz = Math.floor(worldZ);
     const blocked = this.isTileBlocked(tx, tz);
+
     const path = findPath(this.playerX, this.playerZ, worldX, worldZ,
       this.isTileBlocked,
       this.chunkManager.getMapWidth(), this.chunkManager.getMapHeight(), 200,
       this.isWallBlockedForPath);
     if (path.length > 0) {
       this.path = path; this.pathIndex = 0;
+      this.tileProgress = 0;
+      this.tileFrom = { x: this.playerX, z: this.playerZ };
+      this.pendingPath = null;
       const dest = path[path.length - 1];
       this.destMarker.position.x = dest.x;
       this.destMarker.position.y = this.getHeight(dest.x, dest.z) + 0.02;
@@ -2124,6 +2293,7 @@ export class GameManager {
       this.alignMarkerToTerrain(dest.x, dest.z);
       this.destMarker.isVisible = true;
       this.minimap?.setDestination(dest.x, dest.z);
+      // Always send the full new path to the server
       this.network.sendMove(path);
     }
   }
@@ -2304,11 +2474,11 @@ export class GameManager {
       }
     }
 
-    // Move local player
+    // Move local player — tick-aligned tile stepping
     if (this.pathIndex < this.path.length && this.localPlayer) {
-      // Start walk animation when path is active
       if (!this.localPlayer.isWalking()) this.localPlayer.startWalking();
 
+      // Combat range check
       if (this.combatTargetId >= 0) {
         const npcTarget = this.npcTargets.get(this.combatTargetId);
         if (npcTarget) {
@@ -2325,27 +2495,55 @@ export class GameManager {
 
       if (this.pathIndex < this.path.length) {
         const target = this.path[this.pathIndex];
-        const dx = target.x - this.playerX;
-        const dz = target.z - this.playerZ;
-        const dist = Math.hypot(dx, dz);
-        const step = this.moveSpeed * dt;
+        const dx = target.x - this.tileFrom.x;
+        const dz = target.z - this.tileFrom.z;
+        const tileDist = Math.hypot(dx, dz);
+        // Speed: 1 tile per 600ms = 1.67 tiles/sec. Diagonal tiles are ~1.41 tiles distance.
+        const stepRate = tileDist > 0 ? (this.moveSpeed * dt) / tileDist : 1;
+        this.tileProgress += stepRate;
 
-        // Update sprite direction based on movement + camera angle
-        if (camPos) this.localPlayer.updateMovementDirection(dx, dz, camPos);
-
-        if (dist <= step) {
+        if (this.tileProgress >= 1.0) {
+          // Arrived at tile center — snap
           this.playerX = target.x;
           this.playerZ = target.z;
+          this.tileProgress = 0;
+          this.tileFrom = { x: target.x, z: target.z };
           this.pathIndex++;
+
+          // Apply pending path at every tile boundary (max 1 tile delay on redirect)
+          if (this.pendingPath) {
+            this.path = this.pendingPath;
+            this.pathIndex = 0;
+            this.pendingPath = null;
+          }
+
           if (this.pathIndex >= this.path.length) {
             this.destMarker.isVisible = false;
             this.minimap?.clearDestination();
             this.localPlayer.stopWalking();
+            // Start deferred skilling animation now that we've arrived
+            if (this.pendingSkill) {
+              const { objectId, variant } = this.pendingSkill;
+              this.pendingSkill = null;
+              this.startSkillingVisual(objectId, variant);
+            }
           }
         } else {
-          this.playerX += (dx / dist) * step;
-          this.playerZ += (dz / dist) * step;
+          // Lerp between tile centers
+          this.playerX = this.tileFrom.x + dx * this.tileProgress;
+          this.playerZ = this.tileFrom.z + dz * this.tileProgress;
         }
+
+        // Update facing direction (skip if skilling — startSkillingVisual handles facing)
+        if (!this.isSkilling) {
+          if (camPos && this.pathIndex < this.path.length) {
+            const nextTarget = this.path[this.pathIndex];
+            this.localPlayer.updateMovementDirection(nextTarget.x - this.playerX, nextTarget.z - this.playerZ, camPos);
+          } else if (camPos && (dx !== 0 || dz !== 0)) {
+            this.localPlayer.updateMovementDirection(dx, dz, camPos);
+          }
+        }
+
         const playerH = this.getHeight(this.playerX, this.playerZ);
         this.localPlayer.position = new Vector3(this.playerX, playerH, this.playerZ);
         this.inputManager.setPlayerY(playerH);
@@ -2374,7 +2572,7 @@ export class GameManager {
       if (dist > 0.05) {
         if (!sprite.isWalking()) sprite.startWalking();
         if (camPos) sprite.updateMovementDirection(dx, dz, camPos);
-        const step = Math.min(4.0 * dt, dist);
+        const step = Math.min(1.67 * dt, dist);
         const nx = c.x + (dx / dist) * step;
         const nz = c.z + (dz / dist) * step;
         sprite.position = new Vector3(nx, this.getHeight(nx, nz), nz);

@@ -43,20 +43,32 @@ export class InputManager {
         }
 
         // Check for interactive object hit (trees, rocks, doors)
-        // Use multiPick to check ALL meshes along the ray — walls won't block doors behind them
+        // Use scene.pick (closest to camera) for objects — prevents clicking
+        // a rock behind another rock or through terrain
         if (this.onObjectClick) {
-          const picks = this.scene.multiPick(this.scene.pointerX, this.scene.pointerY);
-          if (picks) {
-            for (const pick of picks) {
-              if (!pick.hit || !pick.pickedMesh) continue;
-              let node: any = pick.pickedMesh;
+          const pick = this.scene.pick(
+            this.scene.pointerX,
+            this.scene.pointerY,
+            (mesh) => {
+              // Only pick meshes that belong to interactive objects
+              let node: any = mesh;
               while (node) {
-                if (node.metadata?.objectEntityId != null) {
-                  this.onObjectClick(node.metadata.objectEntityId);
-                  return;
-                }
+                if (node.metadata?.objectEntityId != null) return true;
                 node = node.parent;
               }
+              return false;
+            },
+            false,
+            this.scene.activeCamera!
+          );
+          if (pick?.hit && pick.pickedMesh) {
+            let node: any = pick.pickedMesh;
+            while (node) {
+              if (node.metadata?.objectEntityId != null) {
+                this.onObjectClick(node.metadata.objectEntityId);
+                return;
+              }
+              node = node.parent;
             }
           }
         }
@@ -77,12 +89,31 @@ export class InputManager {
   }
 
   /**
-   * Project the click ray onto a horizontal plane at the player's Y height.
-   * Simple, predictable, and never blocked by vertical geometry.
+   * Pick the ground tile the cursor is over by raycasting against terrain chunks.
+   * Falls back to horizontal plane projection if no terrain mesh is hit.
+   * Result is snapped to tile center for predictable RS2-style movement.
    */
   private pickGround(): { x: number; z: number } | null {
     if (!this.scene.activeCamera) return null;
 
+    // Raycast against terrain chunk meshes (named "chunk_X_Z")
+    const pick = this.scene.pick(
+      this.scene.pointerX,
+      this.scene.pointerY,
+      (mesh) => mesh.name.startsWith('chunk_') && mesh.isEnabled() && mesh.isVisible,
+      false,
+      this.scene.activeCamera
+    );
+
+    if (pick?.hit && pick.pickedPoint) {
+      // Snap to tile center
+      return {
+        x: Math.floor(pick.pickedPoint.x) + 0.5,
+        z: Math.floor(pick.pickedPoint.z) + 0.5,
+      };
+    }
+
+    // Fallback: project onto horizontal plane at player height
     const ray = this.scene.createPickingRay(
       this.scene.pointerX,
       this.scene.pointerY,
@@ -96,8 +127,8 @@ export class InputManager {
     if (t <= 0) return null;
 
     return {
-      x: ray.origin.x + ray.direction.x * t,
-      z: ray.origin.z + ray.direction.z * t,
+      x: Math.floor(ray.origin.x + ray.direction.x * t) + 0.5,
+      z: Math.floor(ray.origin.z + ray.direction.z * t) + 0.5,
     };
   }
 

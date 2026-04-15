@@ -5,7 +5,8 @@
     "description": "The remains of a skeleton.",
     "stackable": false,
     "equippable": false,
-    "value": 1
+    "value": 1,
+    "icon": "Bones_20.png"
   },
   {
     "id": 2,
@@ -121,7 +122,8 @@
     "description": "Lovely money!",
     "stackable": true,
     "equippable": false,
-    "value": 1
+    "value": 1,
+    "icon": "Coins_10.png"
   },
   {
     "id": 11,
@@ -129,7 +131,8 @@
     "description": "Raw chicken meat.",
     "stackable": false,
     "equippable": false,
-    "value": 2
+    "value": 2,
+    "icon": "raw_chicken_133.png"
   },
   {
     "id": 12,
@@ -138,7 +141,8 @@
     "stackable": false,
     "equippable": false,
     "healAmount": 3,
-    "value": 8
+    "value": 8,
+    "icon": "raw_chicken_133.png"
   },
   {
     "id": 13,
@@ -147,7 +151,8 @@
     "stackable": false,
     "equippable": false,
     "healAmount": 2,
-    "value": 5
+    "value": 5,
+    "icon": "bread_138.png"
   },
   {
     "id": 14,
@@ -155,7 +160,8 @@
     "description": "Raw meat from a rat.",
     "stackable": false,
     "equippable": false,
-    "value": 2
+    "value": 2,
+    "icon": "cookedmeat_132.png"
   },
   {
     "id": 15,
@@ -164,7 +170,8 @@
     "stackable": false,
     "equippable": false,
     "healAmount": 4,
-    "value": 10
+    "value": 10,
+    "icon": "cookedmeat_132.png"
   },
   {
     "id": 16,
@@ -215,7 +222,8 @@
     "description": "A soft feather.",
     "stackable": true,
     "equippable": false,
-    "value": 1
+    "value": 1,
+    "icon": "Feather_381.png"
   },
   {
     "id": 20,
@@ -223,7 +231,8 @@
     "description": "Big bones from a strong creature.",
     "stackable": false,
     "equippable": false,
-    "value": 5
+    "value": 5,
+    "icon": "Big_Bones_413.png"
   },
   {
     "id": 21,
@@ -260,7 +269,8 @@
     "description": "A set of logs.",
     "stackable": false,
     "equippable": false,
-    "value": 4
+    "value": 4,
+    "icon": "Logs_14.png"
   },
   {
     "id": 24,
@@ -268,7 +278,8 @@
     "description": "Logs cut from an oak tree.",
     "stackable": false,
     "equippable": false,
-    "value": 10
+    "value": 10,
+    "icon": "Oak_Logs_632.png"
   },
   {
     "id": 25,
@@ -294,7 +305,8 @@
     "description": "Some raw shrimp.",
     "stackable": false,
     "equippable": false,
-    "value": 3
+    "value": 3,
+    "icon": "Raw_Shrimp_349.png"
   },
   {
     "id": 28,
@@ -303,7 +315,8 @@
     "stackable": false,
     "equippable": false,
     "healAmount": 3,
-    "value": 8
+    "value": 8,
+    "icon": "Shrimp_350.png"
   },
   {
     "id": 29,

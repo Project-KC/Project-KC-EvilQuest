@@ -290,6 +290,8 @@ export interface SpriteEntityOptions {
   labelColor?: string;
   /** If provided, uses directional sprites instead of colored rectangle */
   directionalSprites?: DirectionalSpriteSet;
+  /** If provided, uses this image as the sprite texture (for ground items) */
+  iconUrl?: string;
 }
 
 /**
@@ -361,6 +363,39 @@ export class SpriteEntity {
       this.dirSprites = options.directionalSprites;
       this.plane.material = this.dirSprites.materials[DIR_S]; // default: south
       this.currentDirIndex = DIR_S;
+    } else if (options.iconUrl) {
+      // Ground item icon — load PNG texture with label underneath
+      const texSize = 128;
+      const texture = new DynamicTexture(`${options.name}_tex`, texSize, scene, false);
+      const ctx = texture.getContext();
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        // Draw icon centered, scaled to fit
+        const iconSize = 80;
+        const offsetX = (texSize - iconSize) / 2;
+        ctx.clearRect(0, 0, texSize, texSize);
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(img, offsetX, 8, iconSize, iconSize);
+        // Draw label below
+        ctx.fillStyle = options.labelColor || '#ffaa00';
+        ctx.font = 'bold 13px sans-serif';
+        (ctx as any).textAlign = 'center';
+        ctx.fillText(this.label, 64, 104);
+        texture.update();
+      };
+      img.src = options.iconUrl;
+
+      const mat = new StandardMaterial(`${options.name}_mat`, scene);
+      mat.diffuseTexture = texture;
+      mat.specularColor = new Color3(0, 0, 0);
+      mat.emissiveColor = new Color3(0.5, 0.5, 0.5);
+      mat.backFaceCulling = false;
+      texture.hasAlpha = true;
+      mat.useAlphaFromDiffuseTexture = true;
+      mat.transparencyMode = 1;
+
+      this.plane.material = mat;
     } else {
       // Fallback: colored rectangle with label (original behavior)
       const texSize = 128;

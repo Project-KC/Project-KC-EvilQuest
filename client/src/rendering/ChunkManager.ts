@@ -2281,6 +2281,17 @@ export class ChunkManager {
       root.position.y -= minY;
       root.position.z -= centerZ;
 
+      // Auto-scale rock models to fit within 1 tile
+      if (assetDef?.path?.toLowerCase().includes('rock')) {
+        const modelWidth = maxX - minX;
+        const modelDepth = maxZ - minZ;
+        const maxDim = Math.max(modelWidth, modelDepth);
+        if (maxDim > 1.0) {
+          const fit = 0.95 / maxDim; // 0.95 to keep a small margin
+          template.scaling.set(fit, fit, fit);
+        }
+      }
+
       template.setEnabled(false);
       this.loadedModelCache.set(assetId, template);
 
@@ -2402,7 +2413,9 @@ export class ChunkManager {
       root.rotationQuaternion = Quaternion.RotationAxis(new Vector3(1, 0, 0), orx)
         .multiply(Quaternion.RotationAxis(new Vector3(0, 1, 0), ory))
         .multiply(Quaternion.RotationAxis(new Vector3(0, 0, 1), orz));
-      root.scaling = new Vector3(obj.scale.x, obj.scale.y, obj.scale.z);
+      const assetDef = this.assetRegistry.get(obj.assetId);
+      const treeBoost = assetDef?.path?.toLowerCase().includes('tree') ? 1.15 : 1.0;
+      root.scaling = new Vector3(obj.scale.x * treeBoost, obj.scale.y * treeBoost, obj.scale.z * treeBoost);
       root.metadata = { ...root.metadata, assetId: obj.assetId };
 
       // Freeze static placed objects — they never move
@@ -2627,9 +2640,9 @@ export class ChunkManager {
         const cz = obj.position.z;
         const name = obj.assetId.toLowerCase();
         const isLarge = name.includes('tree') || name.includes('modular') || name.includes('wall') || name.includes('house') || name.includes('bush');
-        const footprint = 1.0;
-        const shadowR = footprint + (isLarge ? 2.8 : 1.0);
-        const maxDark = isLarge ? 0.82 : 0.42;
+        const isRock = name.includes('rock');
+        const shadowR = isLarge ? 3.8 : isRock ? 1.8 : 2.0;
+        const maxDark = isLarge ? 0.82 : isRock ? 0.5 : 0.42;
 
         const vx0 = Math.max(0, Math.floor(cx - shadowR));
         const vx1 = Math.min(w - 1, Math.ceil(cx + shadowR));
@@ -2665,8 +2678,9 @@ export class ChunkManager {
       const cz = obj.position.z;
       const name = obj.assetId.toLowerCase();
       const isLarge = name.includes('tree') || name.includes('modular') || name.includes('wall') || name.includes('house') || name.includes('bush');
-      const shadowR = 1.0 + (isLarge ? 2.8 : 1.0);
-      const maxDark = isLarge ? 0.82 : 0.42;
+      const isRock = name.includes('rock');
+      const shadowR = isLarge ? 3.8 : isRock ? 1.8 : 2.0;
+      const maxDark = isLarge ? 0.82 : isRock ? 0.5 : 0.42;
       const vx0 = Math.max(0, Math.floor(cx - shadowR));
       const vx1 = Math.min(w - 1, Math.ceil(cx + shadowR));
       const vz0 = Math.max(0, Math.floor(cz - shadowR));
@@ -2690,7 +2704,7 @@ export class ChunkManager {
     const affectedChunks = new Set<string>();
     for (const obj of objects) {
       const name = obj.assetId.toLowerCase();
-      const isShadowCaster = name.includes('tree') || name.includes('bush') || name.includes('modular') || name.includes('wall') || name.includes('house');
+      const isShadowCaster = name.includes('tree') || name.includes('bush') || name.includes('modular') || name.includes('wall') || name.includes('house') || name.includes('rock');
       if (!isShadowCaster) continue;
       const shadowR = 3.8;
       const cx0 = Math.floor((obj.position.x - shadowR) / CHUNK_SIZE);

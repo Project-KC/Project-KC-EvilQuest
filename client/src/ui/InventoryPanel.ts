@@ -111,9 +111,12 @@ export class InventoryPanel {
     const def = this.itemDefs.get(slot.itemId);
     const name = def?.name || `Item ${slot.itemId}`;
     const sprite = def?.sprite;
+    const icon = def?.icon;
 
     const iconHtml = sprite
       ? `<img src="/sprites/items/${sprite}" style="width:28px;height:28px;image-rendering:pixelated;object-fit:contain;" />`
+      : icon
+      ? `<img src="/items/${icon}" style="width:28px;height:28px;image-rendering:pixelated;object-fit:contain;" />`
       : `<div style="width:24px;height:24px;background:#aaa;border-radius:3px;"></div>`;
 
     el.innerHTML = `
