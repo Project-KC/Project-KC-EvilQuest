@@ -254,19 +254,31 @@
         "outputItemId": 30,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 15,
-        "xpReward": 13
+        "levelRequired": 11,
+        "xpReward": 13,
+        "secondInputItemId": 35,
+        "secondInputQuantity": 1
       },
       {
-        "inputItemId": 44,
+        "inputItemId": 26,
         "inputQuantity": 1,
+        "outputItemId": 30,
+        "outputQuantity": 1,
+        "skill": "smithing",
+        "levelRequired": 11,
+        "xpReward": 13,
+        "successChance": 0.5
+      },
+      {
+        "inputItemId": 26,
+        "inputQuantity": 2,
         "outputItemId": 48,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 30,
+        "levelRequired": 21,
         "xpReward": 18,
         "secondInputItemId": 35,
-        "secondInputQuantity": 2
+        "secondInputQuantity": 1
       },
       {
         "inputItemId": 45,
@@ -274,32 +286,32 @@
         "outputItemId": 49,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 50,
+        "levelRequired": 31,
         "xpReward": 30,
         "secondInputItemId": 35,
-        "secondInputQuantity": 4
+        "secondInputQuantity": 2
       },
       {
-        "inputItemId": 46,
+        "inputItemId": 142,
+        "inputQuantity": 1,
+        "outputItemId": 143,
+        "outputQuantity": 1,
+        "skill": "smithing",
+        "levelRequired": 35,
+        "xpReward": 14,
+        "secondInputItemId": 35,
+        "secondInputQuantity": 1
+      },
+      {
+        "inputItemId": 143,
         "inputQuantity": 1,
         "outputItemId": 50,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 70,
-        "xpReward": 38,
-        "secondInputItemId": 35,
-        "secondInputQuantity": 6
-      },
-      {
-        "inputItemId": 47,
-        "inputQuantity": 1,
-        "outputItemId": 51,
-        "outputQuantity": 1,
-        "skill": "smithing",
-        "levelRequired": 85,
-        "xpReward": 50,
-        "secondInputItemId": 35,
-        "secondInputQuantity": 8
+        "levelRequired": 39,
+        "xpReward": 25,
+        "secondInputItemId": 29,
+        "secondInputQuantity": 1
       }
     ]
   },
@@ -865,7 +877,7 @@
         "outputItemId": 62,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 7,
+        "levelRequired": 6,
         "xpReward": 10,
         "requiresTool": "hammer"
       },
@@ -875,7 +887,7 @@
         "outputItemId": 63,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 11,
+        "levelRequired": 8,
         "xpReward": 14,
         "requiresTool": "hammer"
       },
@@ -885,7 +897,7 @@
         "outputItemId": 64,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 15,
+        "levelRequired": 10,
         "xpReward": 14,
         "requiresTool": "hammer"
       },
@@ -905,7 +917,7 @@
         "outputItemId": 66,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 8,
+        "levelRequired": 7,
         "xpReward": 10,
         "requiresTool": "hammer"
       },
@@ -915,7 +927,7 @@
         "outputItemId": 67,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 9,
+        "levelRequired": 7,
         "xpReward": 10,
         "requiresTool": "hammer"
       },
@@ -925,7 +937,7 @@
         "outputItemId": 68,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 12,
+        "levelRequired": 8,
         "xpReward": 14,
         "requiresTool": "hammer"
       },
@@ -935,7 +947,7 @@
         "outputItemId": 69,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 13,
+        "levelRequired": 9,
         "xpReward": 14,
         "requiresTool": "hammer"
       },
@@ -945,7 +957,7 @@
         "outputItemId": 70,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 17,
+        "levelRequired": 9,
         "xpReward": 14,
         "requiresTool": "hammer"
       },
@@ -955,7 +967,7 @@
         "outputItemId": 71,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 19,
+        "levelRequired": 10,
         "xpReward": 24,
         "requiresTool": "hammer"
       },
@@ -965,7 +977,7 @@
         "outputItemId": 72,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 15,
+        "levelRequired": 11,
         "xpReward": 10,
         "requiresTool": "hammer"
       },
@@ -975,7 +987,7 @@
         "outputItemId": 73,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 16,
+        "levelRequired": 12,
         "xpReward": 10,
         "requiresTool": "hammer"
       },
@@ -985,7 +997,7 @@
         "outputItemId": 74,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 17,
+        "levelRequired": 13,
         "xpReward": 10,
         "requiresTool": "hammer"
       },
@@ -995,7 +1007,7 @@
         "outputItemId": 75,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 19,
+        "levelRequired": 15,
         "xpReward": 21,
         "requiresTool": "hammer"
       },
@@ -1005,7 +1017,7 @@
         "outputItemId": 76,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 21,
+        "levelRequired": 16,
         "xpReward": 21,
         "requiresTool": "hammer"
       },
@@ -1015,7 +1027,7 @@
         "outputItemId": 77,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 25,
+        "levelRequired": 18,
         "xpReward": 31,
         "requiresTool": "hammer"
       },
@@ -1025,7 +1037,7 @@
         "outputItemId": 78,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 29,
+        "levelRequired": 20,
         "xpReward": 31,
         "requiresTool": "hammer"
       },
@@ -1035,7 +1047,7 @@
         "outputItemId": 79,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 18,
+        "levelRequired": 14,
         "xpReward": 10,
         "requiresTool": "hammer"
       },
@@ -1045,7 +1057,7 @@
         "outputItemId": 80,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 22,
+        "levelRequired": 17,
         "xpReward": 21,
         "requiresTool": "hammer"
       },
@@ -1055,7 +1067,7 @@
         "outputItemId": 81,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 23,
+        "levelRequired": 17,
         "xpReward": 21,
         "requiresTool": "hammer"
       },
@@ -1065,7 +1077,7 @@
         "outputItemId": 82,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 26,
+        "levelRequired": 18,
         "xpReward": 31,
         "requiresTool": "hammer"
       },
@@ -1075,7 +1087,7 @@
         "outputItemId": 83,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 27,
+        "levelRequired": 19,
         "xpReward": 31,
         "requiresTool": "hammer"
       },
@@ -1085,7 +1097,7 @@
         "outputItemId": 84,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 31,
+        "levelRequired": 19,
         "xpReward": 31,
         "requiresTool": "hammer"
       },
@@ -1095,7 +1107,7 @@
         "outputItemId": 85,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 33,
+        "levelRequired": 20,
         "xpReward": 52,
         "requiresTool": "hammer"
       },
@@ -1105,7 +1117,7 @@
         "outputItemId": 86,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 30,
+        "levelRequired": 21,
         "xpReward": 14,
         "requiresTool": "hammer"
       },
@@ -1115,7 +1127,7 @@
         "outputItemId": 87,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 31,
+        "levelRequired": 22,
         "xpReward": 14,
         "requiresTool": "hammer"
       },
@@ -1125,7 +1137,7 @@
         "outputItemId": 88,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 32,
+        "levelRequired": 23,
         "xpReward": 14,
         "requiresTool": "hammer"
       },
@@ -1135,7 +1147,7 @@
         "outputItemId": 89,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 34,
+        "levelRequired": 25,
         "xpReward": 29,
         "requiresTool": "hammer"
       },
@@ -1145,7 +1157,7 @@
         "outputItemId": 90,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 36,
+        "levelRequired": 26,
         "xpReward": 29,
         "requiresTool": "hammer"
       },
@@ -1155,7 +1167,7 @@
         "outputItemId": 91,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 40,
+        "levelRequired": 28,
         "xpReward": 43,
         "requiresTool": "hammer"
       },
@@ -1165,7 +1177,7 @@
         "outputItemId": 92,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 44,
+        "levelRequired": 30,
         "xpReward": 43,
         "requiresTool": "hammer"
       },
@@ -1175,7 +1187,7 @@
         "outputItemId": 93,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 33,
+        "levelRequired": 24,
         "xpReward": 14,
         "requiresTool": "hammer"
       },
@@ -1185,7 +1197,7 @@
         "outputItemId": 94,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 37,
+        "levelRequired": 27,
         "xpReward": 29,
         "requiresTool": "hammer"
       },
@@ -1195,7 +1207,7 @@
         "outputItemId": 95,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 38,
+        "levelRequired": 27,
         "xpReward": 29,
         "requiresTool": "hammer"
       },
@@ -1205,7 +1217,7 @@
         "outputItemId": 96,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 41,
+        "levelRequired": 28,
         "xpReward": 43,
         "requiresTool": "hammer"
       },
@@ -1215,7 +1227,7 @@
         "outputItemId": 97,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 42,
+        "levelRequired": 29,
         "xpReward": 43,
         "requiresTool": "hammer"
       },
@@ -1225,7 +1237,7 @@
         "outputItemId": 98,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 46,
+        "levelRequired": 29,
         "xpReward": 43,
         "requiresTool": "hammer"
       },
@@ -1235,7 +1247,7 @@
         "outputItemId": 99,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 48,
+        "levelRequired": 30,
         "xpReward": 72,
         "requiresTool": "hammer"
       },
@@ -1245,7 +1257,7 @@
         "outputItemId": 100,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 50,
+        "levelRequired": 31,
         "xpReward": 24,
         "requiresTool": "hammer"
       },
@@ -1255,7 +1267,7 @@
         "outputItemId": 101,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 51,
+        "levelRequired": 31,
         "xpReward": 24,
         "requiresTool": "hammer"
       },
@@ -1265,7 +1277,7 @@
         "outputItemId": 102,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 52,
+        "levelRequired": 32,
         "xpReward": 24,
         "requiresTool": "hammer"
       },
@@ -1275,7 +1287,7 @@
         "outputItemId": 103,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 54,
+        "levelRequired": 33,
         "xpReward": 48,
         "requiresTool": "hammer"
       },
@@ -1285,7 +1297,7 @@
         "outputItemId": 104,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 56,
+        "levelRequired": 34,
         "xpReward": 48,
         "requiresTool": "hammer"
       },
@@ -1295,7 +1307,7 @@
         "outputItemId": 105,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 60,
+        "levelRequired": 36,
         "xpReward": 72,
         "requiresTool": "hammer"
       },
@@ -1305,7 +1317,7 @@
         "outputItemId": 106,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 64,
+        "levelRequired": 38,
         "xpReward": 72,
         "requiresTool": "hammer"
       },
@@ -1315,7 +1327,7 @@
         "outputItemId": 107,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 53,
+        "levelRequired": 32,
         "xpReward": 24,
         "requiresTool": "hammer"
       },
@@ -1325,7 +1337,7 @@
         "outputItemId": 108,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 57,
+        "levelRequired": 35,
         "xpReward": 48,
         "requiresTool": "hammer"
       },
@@ -1335,7 +1347,7 @@
         "outputItemId": 109,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 58,
+        "levelRequired": 35,
         "xpReward": 48,
         "requiresTool": "hammer"
       },
@@ -1345,7 +1357,7 @@
         "outputItemId": 110,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 61,
+        "levelRequired": 36,
         "xpReward": 72,
         "requiresTool": "hammer"
       },
@@ -1355,7 +1367,7 @@
         "outputItemId": 111,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 62,
+        "levelRequired": 37,
         "xpReward": 72,
         "requiresTool": "hammer"
       },
@@ -1365,7 +1377,7 @@
         "outputItemId": 112,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 66,
+        "levelRequired": 37,
         "xpReward": 72,
         "requiresTool": "hammer"
       },
@@ -1375,7 +1387,7 @@
         "outputItemId": 113,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 68,
+        "levelRequired": 38,
         "xpReward": 120,
         "requiresTool": "hammer"
       },
@@ -1385,7 +1397,7 @@
         "outputItemId": 114,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 70,
+        "levelRequired": 39,
         "xpReward": 30,
         "requiresTool": "hammer"
       },
@@ -1395,7 +1407,7 @@
         "outputItemId": 115,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 71,
+        "levelRequired": 39,
         "xpReward": 30,
         "requiresTool": "hammer"
       },
@@ -1405,7 +1417,7 @@
         "outputItemId": 116,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 72,
+        "levelRequired": 40,
         "xpReward": 30,
         "requiresTool": "hammer"
       },
@@ -1415,7 +1427,7 @@
         "outputItemId": 117,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 74,
+        "levelRequired": 41,
         "xpReward": 61,
         "requiresTool": "hammer"
       },
@@ -1425,7 +1437,7 @@
         "outputItemId": 118,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 76,
+        "levelRequired": 42,
         "xpReward": 61,
         "requiresTool": "hammer"
       },
@@ -1435,7 +1447,7 @@
         "outputItemId": 119,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 80,
+        "levelRequired": 44,
         "xpReward": 91,
         "requiresTool": "hammer"
       },
@@ -1445,7 +1457,7 @@
         "outputItemId": 120,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 84,
+        "levelRequired": 46,
         "xpReward": 91,
         "requiresTool": "hammer"
       },
@@ -1455,7 +1467,7 @@
         "outputItemId": 121,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 73,
+        "levelRequired": 40,
         "xpReward": 30,
         "requiresTool": "hammer"
       },
@@ -1465,7 +1477,7 @@
         "outputItemId": 122,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 77,
+        "levelRequired": 43,
         "xpReward": 61,
         "requiresTool": "hammer"
       },
@@ -1475,7 +1487,7 @@
         "outputItemId": 123,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 78,
+        "levelRequired": 43,
         "xpReward": 61,
         "requiresTool": "hammer"
       },
@@ -1485,7 +1497,7 @@
         "outputItemId": 124,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 81,
+        "levelRequired": 44,
         "xpReward": 91,
         "requiresTool": "hammer"
       },
@@ -1495,7 +1507,7 @@
         "outputItemId": 125,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 82,
+        "levelRequired": 45,
         "xpReward": 91,
         "requiresTool": "hammer"
       },
@@ -1505,7 +1517,7 @@
         "outputItemId": 126,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 86,
+        "levelRequired": 45,
         "xpReward": 91,
         "requiresTool": "hammer"
       },
@@ -1515,148 +1527,8 @@
         "outputItemId": 127,
         "outputQuantity": 1,
         "skill": "smithing",
-        "levelRequired": 88,
+        "levelRequired": 46,
         "xpReward": 152,
-        "requiresTool": "hammer"
-      },
-      {
-        "inputItemId": 51,
-        "inputQuantity": 1,
-        "outputItemId": 128,
-        "outputQuantity": 1,
-        "skill": "smithing",
-        "levelRequired": 85,
-        "xpReward": 40,
-        "requiresTool": "hammer"
-      },
-      {
-        "inputItemId": 51,
-        "inputQuantity": 1,
-        "outputItemId": 129,
-        "outputQuantity": 1,
-        "skill": "smithing",
-        "levelRequired": 86,
-        "xpReward": 40,
-        "requiresTool": "hammer"
-      },
-      {
-        "inputItemId": 51,
-        "inputQuantity": 1,
-        "outputItemId": 130,
-        "outputQuantity": 1,
-        "skill": "smithing",
-        "levelRequired": 87,
-        "xpReward": 40,
-        "requiresTool": "hammer"
-      },
-      {
-        "inputItemId": 51,
-        "inputQuantity": 2,
-        "outputItemId": 131,
-        "outputQuantity": 1,
-        "skill": "smithing",
-        "levelRequired": 89,
-        "xpReward": 80,
-        "requiresTool": "hammer"
-      },
-      {
-        "inputItemId": 51,
-        "inputQuantity": 2,
-        "outputItemId": 132,
-        "outputQuantity": 1,
-        "skill": "smithing",
-        "levelRequired": 91,
-        "xpReward": 80,
-        "requiresTool": "hammer"
-      },
-      {
-        "inputItemId": 51,
-        "inputQuantity": 3,
-        "outputItemId": 133,
-        "outputQuantity": 1,
-        "skill": "smithing",
-        "levelRequired": 95,
-        "xpReward": 120,
-        "requiresTool": "hammer"
-      },
-      {
-        "inputItemId": 51,
-        "inputQuantity": 3,
-        "outputItemId": 134,
-        "outputQuantity": 1,
-        "skill": "smithing",
-        "levelRequired": 99,
-        "xpReward": 120,
-        "requiresTool": "hammer"
-      },
-      {
-        "inputItemId": 51,
-        "inputQuantity": 1,
-        "outputItemId": 135,
-        "outputQuantity": 1,
-        "skill": "smithing",
-        "levelRequired": 88,
-        "xpReward": 40,
-        "requiresTool": "hammer"
-      },
-      {
-        "inputItemId": 51,
-        "inputQuantity": 2,
-        "outputItemId": 136,
-        "outputQuantity": 1,
-        "skill": "smithing",
-        "levelRequired": 92,
-        "xpReward": 80,
-        "requiresTool": "hammer"
-      },
-      {
-        "inputItemId": 51,
-        "inputQuantity": 2,
-        "outputItemId": 137,
-        "outputQuantity": 1,
-        "skill": "smithing",
-        "levelRequired": 93,
-        "xpReward": 80,
-        "requiresTool": "hammer"
-      },
-      {
-        "inputItemId": 51,
-        "inputQuantity": 3,
-        "outputItemId": 138,
-        "outputQuantity": 1,
-        "skill": "smithing",
-        "levelRequired": 96,
-        "xpReward": 120,
-        "requiresTool": "hammer"
-      },
-      {
-        "inputItemId": 51,
-        "inputQuantity": 3,
-        "outputItemId": 139,
-        "outputQuantity": 1,
-        "skill": "smithing",
-        "levelRequired": 97,
-        "xpReward": 120,
-        "requiresTool": "hammer"
-      },
-      {
-        "inputItemId": 51,
-        "inputQuantity": 3,
-        "outputItemId": 140,
-        "outputQuantity": 1,
-        "skill": "smithing",
-        "levelRequired": 101,
-        "xpReward": 120,
-        "requiresTool": "hammer"
-      },
-      {
-        "inputItemId": 51,
-        "inputQuantity": 5,
-        "outputItemId": 141,
-        "outputQuantity": 1,
-        "skill": "smithing",
-        "levelRequired": 103,
-        "xpReward": 200,
         "requiresTool": "hammer"
       }
     ]

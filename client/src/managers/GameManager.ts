@@ -2021,12 +2021,38 @@ export class GameManager {
 
     // Find a reachable adjacent tile and walk there
     const def = this.objectDefsCache.get(data.defId);
+
+    // Doors: pathfind ignoring the door's wall edges so we can reach the door tile
+    if (def?.category === 'door') {
+      const dotx = Math.floor(data.x);
+      const dotz = Math.floor(data.z);
+      // Pathfind with a custom wall check that ignores walls on the door tile
+      const doorWallCheck = (fx: number, fz: number, tx: number, tz: number): boolean => {
+        const ftx = Math.floor(fx), ftz = Math.floor(fz);
+        const ttx = Math.floor(tx), ttz = Math.floor(tz);
+        // Skip wall check if moving to/from the door tile
+        if ((ttx === dotx && ttz === dotz) || (ftx === dotx && ftz === dotz)) return false;
+        return this.isWallBlockedForPath(fx, fz, tx, tz);
+      };
+      const path = findPath(this.playerX, this.playerZ, dotx + 0.5, dotz + 0.5,
+        this.isTileBlocked,
+        this.chunkManager.getMapWidth(), this.chunkManager.getMapHeight(), 500,
+        doorWallCheck);
+      if (path.length > 0) {
+        this.path = path; this.pathIndex = 0; this.tileProgress = 0; this.tileFrom = { x: this.playerX, z: this.playerZ };
+        this.network.sendMove(path);
+      }
+      this.network.sendRaw(encodePacket(ClientOpcode.PLAYER_INTERACT_OBJECT, objectEntityId, actionIndex));
+      return;
+    }
+
     const isHarvestable = def?.category === 'rock' || def?.category === 'tree';
     const otx = Math.floor(data.x);
     const otz = Math.floor(data.z);
     const objTiles = def?.category === 'tree'
       ? [[-1,-1],[0,-1],[-1,0],[0,0]].map(([ddx,ddz]) => [otx+ddx, otz+ddz])
       : [[otx, otz]];
+    // Doors: only cardinal + same tile. Harvestable: cardinal only. Others: all 8.
     const dirs = isHarvestable ? [[0,-1],[0,1],[-1,0],[1,0]] : [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
 
     // Check if already on a valid adjacent tile

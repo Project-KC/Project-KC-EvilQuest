@@ -486,7 +486,7 @@ export class World {
         }
       }
       obj.depleted = true;
-      obj.respawnTimer = obj.def.respawnTime ?? 15;
+      obj.respawnTimer = obj.def.category === 'door' ? 200 : (obj.def.respawnTime ?? 15);
       this.depletedObjectIds.add(obj.id);
       // Update action to "Close"
       obj.def = { ...obj.def, actions: ['Close', 'Examine'] };
@@ -580,6 +580,10 @@ export class World {
     const tiles = obj.def.category === 'tree'
       ? [[-1,-1],[0,-1],[-1,0],[0,0]].map(([dx,dz]) => [otx+dx, otz+dz])
       : [[otx, otz]];
+    // Doors: player must be on the door tile or the tile the door faces into
+    if (obj.def.category === 'door') {
+      return (ptx === otx && ptz === otz) || (Math.abs(ptx - otx) + Math.abs(ptz - otz) === 1);
+    }
     const isHarvestable = obj.def.category === 'rock' || obj.def.category === 'tree';
     return tiles.some(([tx, tz]) => {
       const ddx = Math.abs(ptx - tx);
@@ -856,7 +860,35 @@ export class World {
 
     // Check adjacency — player must be on a tile next to the object
     if (!this.isAdjacentToObject(player, obj)) {
-      player.pendingInteraction = { objectEntityId, actionIndex };
+      // For doors, temporarily clear wall edges so pathfinding can reach the door tile
+      if (obj.def.category === 'door') {
+        const map = this.getPlayerMap(player);
+        const dtx = Math.floor(obj.x);
+        const dtz = Math.floor(obj.z);
+        // Save and clear the door's wall edges
+        const savedWall = map.getWall(dtx, dtz);
+        map.setWall(dtx, dtz, 0);
+        // Also clear neighbor edges pointing at the door
+        const edgeMask = this.doorEdgeMask(obj.rotationY);
+        const savedNeighbors: { x: number; z: number; wall: number }[] = [];
+        if (edgeMask & WallEdge.N) { const w = map.getWall(dtx, dtz - 1); savedNeighbors.push({ x: dtx, z: dtz - 1, wall: w }); map.setWall(dtx, dtz - 1, w & ~WallEdge.S); }
+        if (edgeMask & WallEdge.S) { const w = map.getWall(dtx, dtz + 1); savedNeighbors.push({ x: dtx, z: dtz + 1, wall: w }); map.setWall(dtx, dtz + 1, w & ~WallEdge.N); }
+        if (edgeMask & WallEdge.E) { const w = map.getWall(dtx + 1, dtz); savedNeighbors.push({ x: dtx + 1, z: dtz, wall: w }); map.setWall(dtx + 1, dtz, w & ~WallEdge.W); }
+        if (edgeMask & WallEdge.W) { const w = map.getWall(dtx - 1, dtz); savedNeighbors.push({ x: dtx - 1, z: dtz, wall: w }); map.setWall(dtx - 1, dtz, w & ~WallEdge.E); }
+
+        const path = map.findPathOnFloor(player.position.x, player.position.y, dtx + 0.5, dtz + 0.5, player.currentFloor);
+
+        // Restore wall edges
+        map.setWall(dtx, dtz, savedWall);
+        for (const n of savedNeighbors) map.setWall(n.x, n.z, n.wall);
+
+        if (path.length > 0) {
+          player.moveQueue = path;
+          player.pendingInteraction = { objectEntityId, actionIndex };
+        }
+      } else {
+        player.pendingInteraction = { objectEntityId, actionIndex };
+      }
       return;
     }
 
@@ -990,6 +1022,13 @@ export class World {
         player.removeItem(inputSlot, recipe.inputQuantity);
         if (secondInputSlot >= 0 && recipe.secondInputQuantity) {
           player.removeItem(secondInputSlot, recipe.secondInputQuantity);
+        }
+
+        // Check success chance (e.g. smelting iron without coal = 50%)
+        if (recipe.successChance !== undefined && Math.random() > recipe.successChance) {
+          // Failed — inputs consumed but no output
+          this.sendInventory(player);
+          return;
         }
 
         // Give output
