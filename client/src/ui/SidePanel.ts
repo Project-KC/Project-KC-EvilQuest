@@ -192,11 +192,15 @@ export class SidePanel {
     const tabStyle = `
       flex: 1; text-align: center; padding: 5px 0;
       cursor: pointer; font-size: 11px; font-weight: bold;
-      color: #8a7a60;
-      background: rgba(0,0,0,0.35);
-      border: 1px solid rgba(0,0,0,0.4);
+      color: #c8a870;
+      background: url('/ui/stone-dark.png') repeat;
+      border: 2px solid #1a1410;
+      border-top-color: #2a2420;
+      border-left-color: #2a2420;
+      border-right-color: #0a0808;
+      border-bottom-color: #0a0808;
       transition: all 0.1s;
-      text-shadow: 1px 1px 0 rgba(0,0,0,0.5);
+      text-shadow: 1px 1px 0 #000;
     `;
 
     const tabs: { key: string; label: string; pos: 'top' | 'bottom' }[] = [
@@ -228,9 +232,13 @@ export class SidePanel {
     const contentArea = document.createElement('div');
     contentArea.style.cssText = `
       padding: 8px 6px; overflow-y: auto; height: 340px;
-      background: rgba(0,0,0,0.4);
-      box-shadow: inset 0 3px 8px rgba(0,0,0,0.5);
-      border-top: 1px solid rgba(0,0,0,0.4);
+      background: url('/ui/stone-dark.png') repeat;
+      box-shadow: inset 0 3px 8px rgba(0,0,0,0.4);
+      border: 2px solid #1a1410;
+      border-top-color: #0a0808;
+      border-left-color: #0a0808;
+      border-right-color: #2a2420;
+      border-bottom-color: #2a2420;
     `;
 
     // Inventory tab
@@ -366,18 +374,30 @@ export class SidePanel {
       const slot = document.createElement('div');
       slot.style.cssText = `
         width: 48px; height: 44px;
-        background: rgba(0, 0, 0, 0.45);
-        border: 1px solid rgba(0, 0, 0, 0.5);
-        border-radius: 3px;
-        box-shadow: inset 0 1px 3px rgba(0,0,0,0.4), 0 1px 0 rgba(255,200,100,0.05);
+        background: url('/ui/stone-dark.png') repeat;
+        border: 2px solid #1a1410;
+        border-top-color: #0a0808;
+        border-left-color: #0a0808;
+        border-right-color: #2a2420;
+        border-bottom-color: #2a2420;
+        border-radius: 2px;
+        box-shadow: inset 0 1px 4px rgba(0,0,0,0.6);
         display: flex; flex-direction: column;
         align-items: center; justify-content: center;
         cursor: pointer; font-size: 10px;
         position: relative;
         transition: background 0.1s;
       `;
-      slot.addEventListener('mouseenter', () => { slot.style.background = 'rgba(80, 65, 50, 0.5)'; slot.style.borderColor = 'rgba(200,170,100,0.35)'; });
-      slot.addEventListener('mouseleave', () => { slot.style.background = 'rgba(0, 0, 0, 0.45)'; slot.style.borderColor = 'rgba(0, 0, 0, 0.5)'; });
+      slot.addEventListener('mouseenter', () => {
+        slot.style.borderTopColor = '#3a3020'; slot.style.borderLeftColor = '#3a3020';
+        slot.style.borderRightColor = '#4a4030'; slot.style.borderBottomColor = '#4a4030';
+        slot.style.boxShadow = 'inset 0 1px 4px rgba(0,0,0,0.4), 0 0 4px rgba(255,200,100,0.15)';
+      });
+      slot.addEventListener('mouseleave', () => {
+        slot.style.borderTopColor = '#0a0808'; slot.style.borderLeftColor = '#0a0808';
+        slot.style.borderRightColor = '#2a2420'; slot.style.borderBottomColor = '#2a2420';
+        slot.style.boxShadow = 'inset 0 1px 4px rgba(0,0,0,0.6)';
+      });
 
       slot.addEventListener('contextmenu', (e) => {
         e.preventDefault();
@@ -403,11 +423,25 @@ export class SidePanel {
       row.dataset.skill = id;
       row.style.cssText = `
         display: flex; align-items: center; padding: 3px 4px;
-        border-bottom: 1px solid rgba(60,50,40,0.4);
-        transition: background 0.1s;
+        margin-bottom: 2px;
+        background: url('/ui/stone-dark.png') repeat;
+        border: 1px solid #1a1410;
+        border-top-color: #0a0808;
+        border-left-color: #0a0808;
+        border-right-color: #2a2420;
+        border-bottom-color: #2a2420;
+        border-radius: 2px;
+        box-shadow: inset 0 1px 3px rgba(0,0,0,0.5);
+        transition: all 0.1s;
       `;
-      row.addEventListener('mouseenter', () => { row.style.background = 'rgba(60,50,40,0.3)'; });
-      row.addEventListener('mouseleave', () => { row.style.background = 'transparent'; });
+      row.addEventListener('mouseenter', () => {
+        row.style.borderTopColor = '#2a2420'; row.style.borderLeftColor = '#2a2420';
+        row.style.boxShadow = 'inset 0 1px 3px rgba(0,0,0,0.3), 0 0 3px rgba(255,200,100,0.1)';
+      });
+      row.addEventListener('mouseleave', () => {
+        row.style.borderTopColor = '#0a0808'; row.style.borderLeftColor = '#0a0808';
+        row.style.boxShadow = 'inset 0 1px 3px rgba(0,0,0,0.5)';
+      });
 
       const nameEl = document.createElement('div');
       nameEl.style.cssText = `width: 72px; font-size: 11px; color: ${SKILL_COLORS[id]}; text-shadow: 1px 1px 0 #000;`;
@@ -422,7 +456,10 @@ export class SidePanel {
 
       const barBg = document.createElement('div');
       barBg.style.cssText = `
-        flex: 1; height: 10px; background: #181410; border: 1px solid #3a3025;
+        flex: 1; height: 10px; background: #0a0808;
+        border: 1px solid #1a1410;
+        border-top-color: #0a0808; border-left-color: #0a0808;
+        border-right-color: #2a2018; border-bottom-color: #2a2018;
         margin-left: 4px; position: relative; border-radius: 1px;
       `;
 
@@ -534,9 +571,16 @@ export class SidePanel {
 
     for (const btn of this.tabButtons) {
       const isActive = btn.dataset.tab === tab;
-      btn.style.color = isActive ? '#fc0' : '#8a7a60';
-      btn.style.background = isActive ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.35)';
-      btn.style.borderColor = isActive ? 'rgba(255,200,100,0.25)' : 'rgba(0,0,0,0.4)';
+      btn.style.color = isActive ? '#fc0' : '#c8a870';
+      if (isActive) {
+        btn.style.borderTopColor = '#0a0808'; btn.style.borderLeftColor = '#0a0808';
+        btn.style.borderRightColor = '#3a3020'; btn.style.borderBottomColor = '#3a3020';
+        btn.style.boxShadow = 'inset 0 1px 4px rgba(0,0,0,0.5)';
+      } else {
+        btn.style.borderTopColor = '#2a2420'; btn.style.borderLeftColor = '#2a2420';
+        btn.style.borderRightColor = '#0a0808'; btn.style.borderBottomColor = '#0a0808';
+        btn.style.boxShadow = '';
+      }
     }
   }
 

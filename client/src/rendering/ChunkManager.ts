@@ -2086,8 +2086,8 @@ export class ChunkManager {
   updateAnimations(): void {
     if (this.waterTexture) {
       const t = (performance.now() / 1000) - this.waterStartTime;
-      this.waterTexture.uOffset = t * 0.18;
-      this.waterTexture.vOffset = t * 0.09;
+      this.waterTexture.uOffset = t * 0.04;
+      this.waterTexture.vOffset = t * 0.02;
     }
   }
 
