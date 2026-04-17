@@ -850,7 +850,7 @@ export class World {
     this.sendInventory(player);
   }
 
-  handlePlayerInteractObject(playerId: number, objectEntityId: number, actionIndex: number): void {
+  handlePlayerInteractObject(playerId: number, objectEntityId: number, actionIndex: number, recipeIndex: number = -1): void {
     const player = this.players.get(playerId);
     const obj = this.worldObjects.get(objectEntityId);
     if (!player || !obj) return;
@@ -978,8 +978,11 @@ export class World {
 
     // Crafting station actions (Smelt, Cook, Smith)
     if (obj.def.recipes && obj.def.recipes.length > 0) {
-      // Find first valid recipe in player's inventory
-      for (const recipe of obj.def.recipes) {
+      // If recipeIndex specified, try only that recipe; otherwise find first valid
+      const recipesToTry = (recipeIndex >= 0 && recipeIndex < obj.def.recipes.length)
+        ? [obj.def.recipes[recipeIndex]]
+        : obj.def.recipes;
+      for (const recipe of recipesToTry) {
         const skillId = recipe.skill as SkillId;
         const playerLevel = player.skills[skillId]?.level ?? 1;
         if (playerLevel < recipe.levelRequired) continue;

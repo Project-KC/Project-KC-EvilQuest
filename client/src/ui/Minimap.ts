@@ -47,14 +47,15 @@ export class Minimap {
     this.canvas.width = size;
     this.canvas.height = size;
     this.canvas.style.cssText = `
-      position: fixed; top: 10px; right: 10px;
-      width: ${size}px; height: ${size}px;
-      border: 2px solid #5a4a35; border-radius: 50%;
-      z-index: 100; image-rendering: pixelated; cursor: pointer;
+      width: 100%; height: ${size}px;
+      border-bottom: 3px solid #2a2018;
+      image-rendering: pixelated; cursor: pointer;
+      background: #0a0a08;
     `;
 
     this.ctx = this.canvas.getContext('2d')!;
-    document.body.appendChild(this.canvas);
+    const mount = document.getElementById('ui-right-column');
+    (mount ?? document.body).appendChild(this.canvas);
 
     // Offscreen canvas for tile imageData
     this.offCanvas = document.createElement('canvas');
@@ -93,8 +94,8 @@ export class Minimap {
 
     // Inverse transform: undo scale(-1,1) then undo rotation
     const relX = -(px - center); // undo X flip
-    const relZ = -(pz - center); // undo Z flip
-    const angle = -(this.lastAlpha + Math.PI / 2);
+    const relZ = -(pz - center); // undo Y flip
+    const angle = this.lastAlpha + Math.PI / 2; // undo negated rotation
     const cosA = Math.cos(angle);
     const sinA = Math.sin(angle);
     const urX = relX * cosA - relZ * sinA;
@@ -161,11 +162,12 @@ export class Minimap {
     this.ctx.clearRect(0, 0, this.size, this.size);
 
     // Draw rotated content: tiles, entities, markers
-    // scale(-1,1) flips X to correct left-handed (BabylonJS) vs right-handed (canvas) mismatch
+    // Rotate so "up" on the minimap = the direction the camera faces
+    // scale(1, -1) flips Y to correct BabylonJS left-handed coords vs canvas
     this.ctx.save();
     this.ctx.translate(center, center);
     this.ctx.scale(-1, -1);
-    this.ctx.rotate(cameraAlpha + Math.PI / 2);
+    this.ctx.rotate(-(cameraAlpha + Math.PI / 2));
     this.ctx.translate(-center, -center);
 
     // Draw tile image (rotated)

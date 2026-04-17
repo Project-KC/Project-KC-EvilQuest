@@ -128,7 +128,8 @@ export function handleGameSocketMessage(
     case ClientOpcode.PLAYER_INTERACT_OBJECT: {
       const objectEntityId = values[0];
       const actionIndex = values[1] ?? 0;
-      world.handlePlayerInteractObject(playerId, objectEntityId, actionIndex);
+      const recipeIndex = values[2] ?? -1;
+      world.handlePlayerInteractObject(playerId, objectEntityId, actionIndex, recipeIndex);
       break;
     }
 

@@ -2,12 +2,13 @@ import { GameManager } from './managers/GameManager';
 import { LoginScreen } from './ui/LoginScreen';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
+const gameFrame = document.getElementById('game-frame') as HTMLDivElement;
 
 let game: GameManager | null = null;
 let loginScreen: LoginScreen | null = null;
 
 function startGame(token: string, username: string) {
-  canvas.style.display = 'block';
+  gameFrame.style.display = 'grid';
 
   if (loginScreen) {
     loginScreen.destroy();
@@ -31,7 +32,7 @@ function handleDisconnect() {
 }
 
 function showLoginScreen() {
-  canvas.style.display = 'none';
+  gameFrame.style.display = 'none';
   loginScreen = new LoginScreen((token, username) => {
     startGame(token, username);
   });

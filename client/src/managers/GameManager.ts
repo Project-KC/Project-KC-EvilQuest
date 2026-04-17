@@ -22,9 +22,10 @@ import { SidePanel } from '../ui/SidePanel';
 import { ChatPanel } from '../ui/ChatPanel';
 import { GearDebugPanel } from '../ui/GearDebugPanel';
 import { Minimap } from '../ui/Minimap';
-import { StatsPanel } from '../ui/StatsPanel';
+// StatsPanel removed — HP now shown in side panel
 import { ShopPanel, type ShopItem } from '../ui/ShopPanel';
 import { CharacterCreator } from '../ui/CharacterCreator';
+import { SmithingPanel } from '../ui/SmithingPanel';
 import { ServerOpcode, ClientOpcode, encodePacket, ALL_SKILLS, SKILL_NAMES, ASSET_TO_OBJECT_DEF, WallEdge, decodeStringPacket, type WorldObjectDef, type ItemDef, type PlayerAppearance, SHIRT_STYLES } from '@projectrs/shared';
 
 // NPC color palette by definition ID
@@ -206,8 +207,9 @@ export class GameManager {
   private chatPanel: ChatPanel | null = null;
   private minimap: Minimap | null = null;
   private gearDebugPanel: GearDebugPanel | null = null;
-  private statsPanel: StatsPanel | null = null;
+  private statsPanel: any = null; // removed — HP shown in side panel
   private shopPanel: ShopPanel | null = null;
+  private smithingPanel: SmithingPanel | null = null;
 
   // Combat hit splats (HTML overlay)
   private hitSplats: { worldPos: Vector3; el: HTMLDivElement; timer: number; startY: number }[] = [];
@@ -297,6 +299,7 @@ export class GameManager {
     this.shopPanel.setOnClose(() => {
       this.sidePanel?.setSellCallback(null);
     });
+    this.smithingPanel = new SmithingPanel();
     this.chatPanel.addSystemMessage(`Welcome, ${username}! Click to move, right-click NPCs to attack.`, '#0f0');
 
     // Chat message handler
@@ -2063,8 +2066,8 @@ export class GameManager {
     if (!def) return;
     // Doors can always be clicked (open/close toggle). Other objects can't when depleted.
     if (data.depleted && def.category !== 'door') return;
-    // Auto-interact with harvestable objects (trees, rocks) and doors
-    if ((def.skill && def.harvestItemId) || def.category === 'door') {
+    // Auto-interact with harvestable objects (trees, rocks), doors, and crafting stations (furnace, anvil, range)
+    if ((def.skill && def.harvestItemId) || def.category === 'door' || (def.recipes && def.recipes.length > 0)) {
       // Show red interaction marker at the object
       if (this.interactMarker) {
         this.interactMarker.position.x = data.x;
@@ -2074,12 +2077,37 @@ export class GameManager {
         this.interactMarker.isVisible = true;
         this.destMarker.isVisible = false;
       }
+
       this.interactObject(objectEntityId, 0);
     }
   }
 
+  private showSmithingUI(objectEntityId: number, def: any): void {
+    if (!this.smithingPanel || !this.sidePanel) return;
+    const inventory = this.sidePanel.getInventory();
+    const smithingLevel = this.sidePanel.getSkillLevel('smithing' as any);
+    const itemDefs = this.sidePanel.getItemDefs();
+    const toolType = def.recipes[0].requiresTool;
+    const hasTool = inventory.some((slot: any) => slot && itemDefs.get(slot.itemId)?.toolType === toolType);
+
+    this.smithingPanel.show(def.recipes, inventory, smithingLevel, hasTool, itemDefs, (recipeIndex) => {
+      // Walk to the anvil and send the crafting request with the specific recipe index
+      this.network.sendRaw(encodePacket(ClientOpcode.PLAYER_INTERACT_OBJECT, objectEntityId, 0, recipeIndex));
+    });
+  }
+
   private interactObject(objectEntityId: number, actionIndex: number): void {
     this.combatTargetId = -1;
+
+    // Intercept anvil/tool-based crafting: show recipe UI instead of auto-crafting
+    const objData = this.worldObjectDefs.get(objectEntityId);
+    if (objData) {
+      const objDef = this.objectDefsCache.get(objData.defId);
+      if (objDef?.recipes && objDef.recipes.length > 0 && objDef.recipes[0].requiresTool) {
+        this.showSmithingUI(objectEntityId, objDef);
+        return;
+      }
+    }
 
     // Cancel current skilling if clicking a different object
     if (this.isSkilling && this.skillingObjectId !== objectEntityId) {
@@ -2408,7 +2436,6 @@ export class GameManager {
   }
 
   private createHUD(): void {
-    this.statsPanel = new StatsPanel();
     this.minimap = new Minimap(200);
     this.minimap.setClickMoveHandler((worldX, worldZ) => {
       this.handleGroundClick(worldX, worldZ);
@@ -2477,9 +2504,7 @@ export class GameManager {
   }
 
   private updateHUD(): void {
-    if (this.statsPanel) {
-      this.statsPanel.updateHealth(this.playerHealth, this.playerMaxHealth);
-    }
+    this.sidePanel?.updateHP(this.playerHealth, this.playerMaxHealth);
   }
 
   private showThinkingBubble(iconUrl: string): void {
