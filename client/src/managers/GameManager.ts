@@ -24,7 +24,8 @@ import { GearDebugPanel } from '../ui/GearDebugPanel';
 import { Minimap } from '../ui/Minimap';
 import { StatsPanel } from '../ui/StatsPanel';
 import { ShopPanel, type ShopItem } from '../ui/ShopPanel';
-import { ServerOpcode, ClientOpcode, encodePacket, ALL_SKILLS, SKILL_NAMES, ASSET_TO_OBJECT_DEF, WallEdge, decodeStringPacket, type WorldObjectDef, type ItemDef } from '@projectrs/shared';
+import { CharacterCreator } from '../ui/CharacterCreator';
+import { ServerOpcode, ClientOpcode, encodePacket, ALL_SKILLS, SKILL_NAMES, ASSET_TO_OBJECT_DEF, WallEdge, decodeStringPacket, type WorldObjectDef, type ItemDef, type PlayerAppearance, SHIRT_STYLES } from '@projectrs/shared';
 
 // NPC color palette by definition ID
 const NPC_COLORS: Record<number, Color3> = {
@@ -147,6 +148,11 @@ export class GameManager {
   // Combat facing: track who each entity is targeting (from COMBAT_HIT events)
   private npcCombatTargets: Map<number, number> = new Map();  // npcId -> playerId they're attacking
   private remoteCombatTargets: Map<number, number> = new Map();  // remotePlayerId -> npcId they're attacking
+
+  // Character creator
+  private characterCreator: CharacterCreator | null = null;
+  private localAppearance: PlayerAppearance | null = null;
+  private remoteAppearances: Map<number, PlayerAppearance> = new Map();
 
   // Remote players
   private remotePlayers: Map<number, SpriteEntity> = new Map();
@@ -1081,6 +1087,47 @@ export class GameManager {
     }
   }
 
+  /** Get the character model GLB path for a given shirt style index */
+  private getCharacterModelPath(shirtStyle: number = 0): string {
+    const style = SHIRT_STYLES[shirtStyle] ?? SHIRT_STYLES[0];
+    return `/Character models/main character${style.glbSuffix}.glb`;
+  }
+
+  /** Rebuild the local player's CharacterEntity with a different model (e.g. after shirt style change) */
+  private rebuildLocalPlayer(shirtStyle: number): void {
+    if (!this.localPlayer) return;
+    const pos = this.localPlayer.position.clone();
+    this.localPlayer.dispose();
+    this.localPlayer = this.createLocalCharacterEntity(shirtStyle);
+    this.localPlayer.setPositionXYZ(pos.x, pos.y, pos.z);
+    this.localPlayer.whenReady().then(() => {
+      if (this.localAppearance && this.localPlayer) {
+        this.localPlayer.applyAppearance(this.localAppearance);
+      }
+    });
+  }
+
+  private createLocalCharacterEntity(shirtStyle: number = 0): CharacterEntity {
+    return new CharacterEntity(this.scene, {
+      name: 'localPlayer',
+      modelPath: this.getCharacterModelPath(shirtStyle),
+      targetHeight: 1.53,
+      label: this.username,
+      labelColor: '#00ff00',
+      additionalAnimations: [
+        { name: 'idle', path: '/Character models/animations/idle.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Idle_Loop' } },
+        { name: 'walk', path: '/Character models/animations/walk.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Walk_Loop' } },
+        { name: 'attack', path: '/Character models/animations/attack.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Sword_Attack' } },
+        { name: 'attack_slash', path: '/Character models/animations/attack_slash.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Sword_Attack' } },
+        { name: 'attack_punch', path: '/Character models/animations/attack_punch.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Punch_Cross' } },
+        { name: 'chop', path: '/Character models/animations/chop.glb', fallback: { path: '/Character models/Universal Animation Library 2[Source]/Unreal-Godot/UAL2.glb', animName: 'TreeChopping_Loop' } },
+        { name: 'mine', path: '/Character models/animations/mine.glb', fallback: { path: '/Character models/Universal Animation Library 2[Source]/Unreal-Godot/UAL2.glb', animName: 'Mining_Loop' } },
+        { name: 'bow_attack', path: '/Character models/animations/bow_attack.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Spell_Simple_Shoot' } },
+        { name: 'death', path: '/Character models/animations/death.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Death01' } },
+      ],
+    });
+  }
+
   private setupNetworkHandlers(): void {
     this.network.on(ServerOpcode.LOGIN_OK, (_op, v) => {
       this.localPlayerId = v[0];
@@ -1088,38 +1135,57 @@ export class GameManager {
       this.playerZ = v[2] / 10;
       this.network.setLocalPlayerId(this.localPlayerId);
 
-      this.localPlayer = new CharacterEntity(this.scene, {
-        name: 'localPlayer',
-        modelPath: '/Character models/main character.glb',
-        targetHeight: 1.53,
-        label: this.username,
-        labelColor: '#00ff00',
-        // Each animation can be replaced individually by dropping a GLB into
-        // /Character models/animations/ (e.g. walk.glb, idle.glb, attack.glb).
-        // The GLB just needs the armature + one animation — the mesh is ignored.
-        // Fallback: UAL library animations until replaced.
-        additionalAnimations: [
-          { name: 'idle', path: '/Character models/animations/idle.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Idle_Loop' } },
-          { name: 'walk', path: '/Character models/animations/walk.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Walk_Loop' } },
-          { name: 'attack', path: '/Character models/animations/attack.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Sword_Attack' } },
-          { name: 'attack_slash', path: '/Character models/animations/attack_slash.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Sword_Attack' } },
-          { name: 'attack_punch', path: '/Character models/animations/attack_punch.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Punch_Cross' } },
-          { name: 'chop', path: '/Character models/animations/chop.glb', fallback: { path: '/Character models/Universal Animation Library 2[Source]/Unreal-Godot/UAL2.glb', animName: 'TreeChopping_Loop' } },
-          { name: 'mine', path: '/Character models/animations/mine.glb', fallback: { path: '/Character models/Universal Animation Library 2[Source]/Unreal-Godot/UAL2.glb', animName: 'Mining_Loop' } },
-          { name: 'bow_attack', path: '/Character models/animations/bow_attack.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Spell_Simple_Shoot' } },
-          { name: 'death', path: '/Character models/animations/death.glb', fallback: { path: '/Character models/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb', animName: 'Death01' } },
-        ],
-      });
+      this.localPlayer = this.createLocalCharacterEntity(this.localAppearance?.shirtStyle ?? 0);
       const spawnH = this.getHeight(this.playerX, this.playerZ);
       this.localPlayer.setPositionXYZ(this.playerX, spawnH, this.playerZ);
       this.inputManager.setPlayerY(spawnH);
       console.log(`Logged in as player ${this.localPlayerId}`);
+
+      // Apply appearance once model is loaded
+      this.localPlayer.whenReady().then(() => {
+        if (this.localAppearance && this.localPlayer) {
+          this.localPlayer.applyAppearance(this.localAppearance);
+        }
+      });
+    });
+
+    // Character creator — shown for new accounts that haven't set appearance
+    this.network.on(ServerOpcode.SHOW_CHARACTER_CREATOR, () => {
+      if (this.characterCreator) return;
+      this.characterCreator = new CharacterCreator(this.scene, (appearance) => {
+        // Send appearance to server
+        this.network.sendRaw(encodePacket(
+          ClientOpcode.SET_APPEARANCE,
+          appearance.shirtColor,
+          appearance.pantsColor,
+          appearance.shoesColor,
+          appearance.hairColor,
+          appearance.beltColor,
+          appearance.shirtStyle,
+        ));
+        this.localAppearance = appearance;
+        // Rebuild character if shirt style requires a different model
+        if (appearance.shirtStyle > 0) {
+          this.rebuildLocalPlayer(appearance.shirtStyle);
+        } else if (this.localPlayer) {
+          this.localPlayer.applyAppearance(appearance);
+        }
+        // Destroy the creator UI
+        this.characterCreator!.destroy();
+        this.characterCreator = null;
+      });
     });
 
     this.network.on(ServerOpcode.PLAYER_SYNC, (_op, v) => {
       const [entityId, x10, z10, health, maxHealth] = v;
       const x = x10 / 10;
       const z = z10 / 10;
+
+      // Parse appearance from extended PLAYER_SYNC (values 5-10)
+      const hasAppearance = v.length >= 11 && v[5] >= 0;
+      const syncAppearance: PlayerAppearance | null = hasAppearance ? {
+        shirtColor: v[5], pantsColor: v[6], shoesColor: v[7], hairColor: v[8], beltColor: v[9], shirtStyle: v[10],
+      } : null;
 
       if (entityId === this.localPlayerId) {
         this.playerHealth = health;
@@ -1131,6 +1197,11 @@ export class GameManager {
           } else {
             this.localPlayer.hideHealthBar();
           }
+        }
+        // Apply appearance to local player if we received it and haven't set it yet
+        if (syncAppearance && !this.localAppearance) {
+          this.localAppearance = syncAppearance;
+          if (this.localPlayer) this.localPlayer.applyAppearance(syncAppearance);
         }
         return;
       }
@@ -1148,6 +1219,10 @@ export class GameManager {
         });
         sprite.position = new Vector3(x, this.getHeight(x, z), z);
         this.remotePlayers.set(entityId, sprite);
+      }
+      // Store appearance for remote players (used when upgrading to 3D models later)
+      if (syncAppearance) {
+        this.remoteAppearances.set(entityId, syncAppearance);
       }
       this.remoteTargets.set(entityId, { x, z });
       const sprite = this.remotePlayers.get(entityId)!;
@@ -1267,6 +1342,7 @@ export class GameManager {
         playerSprite.dispose();
         this.remotePlayers.delete(entityId);
         this.remoteTargets.delete(entityId);
+        this.remoteAppearances.delete(entityId);
         const name = this.playerNames.get(entityId);
         if (name) this.nameToEntityId.delete(name.toLowerCase());
         this.playerNames.delete(entityId);
@@ -1701,6 +1777,7 @@ export class GameManager {
     for (const [, sprite] of this.remotePlayers) sprite.dispose();
     this.remotePlayers.clear();
     this.remoteTargets.clear();
+    this.remoteAppearances.clear();
 
     for (const [, sprite] of this.npcSprites) sprite.dispose();
     this.npcSprites.clear();
@@ -2339,6 +2416,7 @@ export class GameManager {
   }
 
   destroy(): void {
+    if (this.characterCreator) { this.characterCreator.destroy(); this.characterCreator = null; }
     this.engine.stopRenderLoop();
     this.engine.dispose();
     this.chunkManager.disposeAll();

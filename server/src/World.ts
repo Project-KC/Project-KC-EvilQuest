@@ -1,4 +1,4 @@
-import { TICK_RATE, CHUNK_SIZE, CHUNK_LOAD_RADIUS, ServerOpcode, ALL_SKILLS, ASSET_TO_OBJECT_DEF, WallEdge, type SkillId, type ItemDef } from '@projectrs/shared';
+import { TICK_RATE, CHUNK_SIZE, CHUNK_LOAD_RADIUS, ServerOpcode, ALL_SKILLS, ASSET_TO_OBJECT_DEF, WallEdge, type SkillId, type ItemDef, type PlayerAppearance, isValidAppearance } from '@projectrs/shared';
 import { encodePacket, encodeStringPacket } from '@projectrs/shared';
 import { addXp, levelFromXp, statRandom } from '@projectrs/shared';
 import { GameMap } from './GameMap';
@@ -1148,6 +1148,19 @@ export class World {
     }
   }
 
+  handleSetAppearance(playerId: number, appearance: PlayerAppearance): void {
+    const player = this.players.get(playerId);
+    if (!player) return;
+    if (!isValidAppearance(appearance)) return;
+
+    player.appearance = appearance;
+    this.db.saveAppearance(player.accountId, appearance);
+    console.log(`[World] Player "${player.name}" set appearance: shirt=${appearance.shirtColor} pants=${appearance.pantsColor} shoes=${appearance.shoesColor} hair=${appearance.hairColor}`);
+
+    // Mark dirty so the updated appearance broadcasts to nearby players
+    player.syncDirty = true;
+  }
+
   // Tick performance monitoring
   private tickOverrunCount: number = 0;
   private lastTickWarnTime: number = 0;
@@ -1755,12 +1768,19 @@ export class World {
       if (!subject.syncDirty) continue;
       const cm = this.chunkManagers.get(subject.currentMapLevel);
       if (!cm) continue;
+      const a = subject.appearance;
       const packet = encodePacket(ServerOpcode.PLAYER_SYNC,
         subject.id,
         Math.round(subject.position.x * 10),
         Math.round(subject.position.y * 10),
         subject.health,
-        subject.maxHealth
+        subject.maxHealth,
+        a ? a.shirtColor : -1,
+        a ? a.pantsColor : -1,
+        a ? a.shoesColor : -1,
+        a ? a.hairColor  : -1,
+        a ? a.beltColor  : -1,
+        a ? a.shirtStyle : -1,
       );
       cm.forEachPlayerNearChunk(subject.currentChunkX, subject.currentChunkZ, (viewerId) => {
         const viewer = this.players.get(viewerId);
@@ -1852,12 +1872,19 @@ export class World {
   }
 
   private sendPlayerUpdate(viewer: Player, subject: Player): void {
+    const a = subject.appearance;
     this.sendToPlayer(viewer, ServerOpcode.PLAYER_SYNC,
       subject.id,
       Math.round(subject.position.x * 10),
       Math.round(subject.position.y * 10),
       subject.health,
-      subject.maxHealth
+      subject.maxHealth,
+      a ? a.shirtColor : -1,
+      a ? a.pantsColor : -1,
+      a ? a.shoesColor : -1,
+      a ? a.hairColor  : -1,
+      a ? a.beltColor  : -1,
+      a ? a.shirtStyle : -1,
     );
   }
 

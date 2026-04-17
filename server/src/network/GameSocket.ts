@@ -1,4 +1,4 @@
-import { ClientOpcode, decodePacket } from '@projectrs/shared';
+import { ClientOpcode, ServerOpcode, decodePacket, encodePacket, isValidAppearance, type PlayerAppearance } from '@projectrs/shared';
 import { World } from '../World';
 import { Player } from '../entity/Player';
 import type { ServerWebSocket } from 'bun';
@@ -38,12 +38,20 @@ export function handleGameSocketOpen(
     player.inventory = inv;
     player.equipment = saved.equipment;
     player.stance = saved.stance;
+    player.appearance = saved.appearance;
     player.currentMapLevel = mapLevel; // use validated mapLevel, not raw saved value
     player.syncHealthFromSkills();
   }
 
   ws.data.playerId = player.id;
   world.addPlayer(player);
+
+  // If no appearance set, tell client to show character creator
+  if (!player.appearance) {
+    try {
+      player.ws.sendBinary(encodePacket(ServerOpcode.SHOW_CHARACTER_CREATOR, 0));
+    } catch { /* closed */ }
+  }
 }
 
 export function handleGameSocketMessage(
@@ -146,6 +154,19 @@ export function handleGameSocketMessage(
 
     case ClientOpcode.MAP_READY: {
       world.handleMapReady(playerId);
+      break;
+    }
+
+    case ClientOpcode.SET_APPEARANCE: {
+      const appearance: PlayerAppearance = {
+        shirtColor: values[0] ?? 0,
+        pantsColor: values[1] ?? 0,
+        shoesColor: values[2] ?? 0,
+        hairColor:  values[3] ?? 0,
+        beltColor:  values[4] ?? 0,
+        shirtStyle: values[5] ?? 0,
+      };
+      world.handleSetAppearance(playerId, appearance);
       break;
     }
 

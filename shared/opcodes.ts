@@ -15,6 +15,7 @@ export enum ClientOpcode {
   PLAYER_SELL_ITEM = 37,
   PLAYER_INTERACT_OBJECT = 40,
   MAP_READY = 50,
+  SET_APPEARANCE = 60,
 }
 
 // Server → Client opcodes
@@ -47,4 +48,5 @@ export enum ServerOpcode {
   SKILLING_STOP = 58,
   MAP_CHANGE = 60,
   FLOOR_CHANGE = 61,
+  SHOW_CHARACTER_CREATOR = 70,
 }

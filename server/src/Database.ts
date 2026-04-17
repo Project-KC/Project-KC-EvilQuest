@@ -1,8 +1,8 @@
 import { Database as SQLiteDB } from 'bun:sqlite';
 import { randomBytes } from 'crypto';
 import type { Player } from './entity/Player';
-import type { SkillBlock, SkillId, MeleeStance } from '@projectrs/shared';
-import { ALL_SKILLS, initSkills, xpForLevel } from '@projectrs/shared';
+import type { SkillBlock, SkillId, MeleeStance, PlayerAppearance } from '@projectrs/shared';
+import { ALL_SKILLS, initSkills, xpForLevel, normalizeAppearance } from '@projectrs/shared';
 import type { EquipSlot } from './entity/Player';
 
 const SESSION_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -20,6 +20,7 @@ export interface SavedPlayerState {
   inventory: ({ itemId: number; quantity: number } | null)[];
   equipment: Map<EquipSlot, number>;
   stance: MeleeStance;
+  appearance: PlayerAppearance | null;
 }
 
 export class GameDatabase {
@@ -57,9 +58,15 @@ export class GameDatabase {
         inventory TEXT DEFAULT '[]',
         equipment TEXT DEFAULT '{}',
         stance TEXT DEFAULT 'accurate',
+        appearance TEXT DEFAULT NULL,
         updated_at INTEGER DEFAULT (unixepoch())
       );
     `);
+
+    // Migration: add appearance column if missing (existing databases)
+    try {
+      this.db.exec(`ALTER TABLE player_state ADD COLUMN appearance TEXT DEFAULT NULL`);
+    } catch { /* column already exists */ }
   }
 
   async createAccount(username: string, password: string): Promise<{ ok: true; token: string } | { ok: false; error: string }> {
@@ -157,7 +164,7 @@ export class GameDatabase {
         x = ?, z = ?,
         map_level = ?,
         skills = ?, inventory = ?, equipment = ?,
-        stance = ?, updated_at = unixepoch()
+        stance = ?, appearance = ?, updated_at = unixepoch()
       WHERE account_id = ?
     `).run(
       player.position.x, player.position.y,
@@ -166,13 +173,14 @@ export class GameDatabase {
       JSON.stringify(player.inventory),
       JSON.stringify(equipment),
       player.stance,
+      player.appearance ? JSON.stringify(player.appearance) : null,
       accountId,
     );
   }
 
   loadPlayerState(accountId: number): SavedPlayerState | null {
-    const row = this.db.query('SELECT x, z, map_level, skills, inventory, equipment, stance FROM player_state WHERE account_id = ?')
-      .get(accountId) as { x: number; z: number; map_level: string; skills: string; inventory: string; equipment: string; stance: string } | null;
+    const row = this.db.query('SELECT x, z, map_level, skills, inventory, equipment, stance, appearance FROM player_state WHERE account_id = ?')
+      .get(accountId) as { x: number; z: number; map_level: string; skills: string; inventory: string; equipment: string; stance: string; appearance: string | null } | null;
 
     if (!row) return null;
 
@@ -216,6 +224,12 @@ export class GameDatabase {
     const validStances = ['accurate', 'aggressive', 'defensive', 'controlled'];
     const stance = validStances.includes(row.stance) ? row.stance as MeleeStance : 'accurate';
 
+    // Parse appearance (normalizeAppearance fills in missing fields from older saves)
+    let appearance: PlayerAppearance | null = null;
+    if (row.appearance) {
+      try { appearance = normalizeAppearance(JSON.parse(row.appearance)); } catch { /* null */ }
+    }
+
     return {
       x: row.x,
       z: row.z,
@@ -224,7 +238,13 @@ export class GameDatabase {
       inventory,
       equipment,
       stance,
+      appearance,
     };
+  }
+
+  saveAppearance(accountId: number, appearance: PlayerAppearance): void {
+    this.db.query('UPDATE player_state SET appearance = ? WHERE account_id = ?')
+      .run(JSON.stringify(appearance), accountId);
   }
 
   cleanExpiredSessions(): void {

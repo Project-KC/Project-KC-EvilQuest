@@ -56,6 +56,21 @@
       "path": "/assets/models/well.glb"
     },
     {
+      "id": "desert well",
+      "name": "Desert Well",
+      "path": "/assets/models/desert well.glb"
+    },
+    {
+      "id": "MinecartTrackStraight",
+      "name": "Minecart Track Straight",
+      "path": "/assets/models/MinecartTrackStraight.glb"
+    },
+    {
+      "id": "MinecartTrackTurn",
+      "name": "Minecart Track Turn",
+      "path": "/assets/models/MinecartTrackTurn.glb"
+    },
+    {
       "id": "dark stone arrowslit",
       "name": "Dark Stone Arrowslit",
       "path": "/assets/modular-assets/dark-stone-modular/dark stone arrowslit.glb"

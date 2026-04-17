@@ -12,6 +12,7 @@ import { Matrix } from '@babylonjs/core/Maths/math.vector';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
 import { Color3 } from '@babylonjs/core/Maths/math.color';
 import { Texture } from '@babylonjs/core/Materials/Textures/texture';
+import { type PlayerAppearance, type AppearanceColorSlot, APPEARANCE_MATERIAL_MAP, getPalette } from '@projectrs/shared';
 import '@babylonjs/loaders/glTF';
 
 /** Number of keyframes to quantize animations down to (RS-style choppy look) */
@@ -950,6 +951,43 @@ export class CharacterEntity {
   getBoneNames(): string[] {
     if (!this.skeleton) return [];
     return this.skeleton.bones.map(b => b.name);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Appearance — recolor clothing/hair materials
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Apply a PlayerAppearance by recoloring the GLB's materials.
+   * Material names are matched case-insensitively, with .001/.002 suffixes stripped.
+   */
+  applyAppearance(appearance: PlayerAppearance): void {
+    for (const mesh of this.meshes) {
+      const mat = mesh.material;
+      if (!mat) continue;
+      // Strip numeric suffixes (.001, .002) and _flat suffix for matching
+      const baseName = mat.name.replace(/_flat$/, '').replace(/\.\d+$/, '');
+
+      for (const [slot, matNames] of Object.entries(APPEARANCE_MATERIAL_MAP)) {
+        const colorIdx = appearance[slot as AppearanceColorSlot];
+        const palette = getPalette(slot as AppearanceColorSlot);
+        if (colorIdx < 0 || colorIdx >= palette.length) continue;
+
+        for (const target of matNames) {
+          if (baseName.toLowerCase() === target.toLowerCase()) {
+            const rgb = palette[colorIdx];
+            const boost = 1.3; // match the PBR→flat boost in load()
+            const c = new Color3(
+              Math.min(1, rgb[0] * boost),
+              Math.min(1, rgb[1] * boost),
+              Math.min(1, rgb[2] * boost),
+            );
+            (mat as StandardMaterial).diffuseColor = c;
+            (mat as StandardMaterial).emissiveColor = new Color3(c.r * 0.55, c.g * 0.55, c.b * 0.55);
+          }
+        }
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------

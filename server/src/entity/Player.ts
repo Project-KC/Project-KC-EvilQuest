@@ -4,6 +4,7 @@ import {
   SkillBlock, SkillId, MeleeStance, CombatBonuses,
   initSkills, addXp, combatLevel, zeroBonuses, STANCE_XP,
   ACC_BASE, osrsMeleeMaxHit, calculateHitChance, STANCE_BONUSES,
+  type PlayerAppearance,
 } from '@projectrs/shared';
 import type { ServerWebSocket } from 'bun';
 
@@ -22,6 +23,7 @@ export class Player extends Entity {
   equipment: Map<EquipSlot, number> = new Map(); // slot -> itemId
   skills: SkillBlock;
   stance: MeleeStance = 'accurate';
+  appearance: PlayerAppearance | null = null;
   moveQueue: { x: number; z: number }[] = [];
   moveSpeed: number = 1;
   pendingPickup: number = -1;
