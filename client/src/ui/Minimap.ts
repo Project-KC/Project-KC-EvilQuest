@@ -48,9 +48,10 @@ export class Minimap {
     this.canvas.height = size;
     this.canvas.style.cssText = `
       width: 100%; height: ${size}px;
-      border-bottom: 3px solid #2a2018;
+      border-bottom: 3px solid #1a1208;
       image-rendering: pixelated; cursor: pointer;
       background: #0a0a08;
+      box-shadow: inset 0 0 0 1px rgba(255,200,100,0.1);
     `;
 
     this.ctx = this.canvas.getContext('2d')!;

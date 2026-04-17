@@ -69,8 +69,8 @@ export class SidePanel {
     panel.id = 'side-panel';
     panel.style.cssText = `
       width: 100%; flex: 1; min-height: 0;
-      background: #1e1912;
-      border-top: 2px solid #5a4a35;
+      background: transparent;
+      border-top: 2px solid rgba(0,0,0,0.3);
       font-family: monospace; color: #ddd;
       display: flex; flex-direction: column;
       overflow: hidden;
@@ -80,8 +80,8 @@ export class SidePanel {
     const hpRow = document.createElement('div');
     hpRow.style.cssText = `
       display: flex; align-items: center; gap: 6px;
-      padding: 6px 8px; background: #1a1510;
-      border-bottom: 2px solid #2a2018;
+      padding: 6px 8px;
+      border-bottom: 1px solid rgba(0,0,0,0.3);
     `;
     const hpIcon = document.createElement('div');
     hpIcon.textContent = 'Health';
@@ -118,8 +118,8 @@ export class SidePanel {
     const magicRow = document.createElement('div');
     magicRow.style.cssText = `
       display: flex; align-items: center; gap: 6px;
-      padding: 4px 8px 6px; background: #1a1510;
-      border-bottom: 2px solid #2a2018;
+      padding: 4px 8px 6px;
+      border-bottom: 1px solid rgba(0,0,0,0.3);
     `;
     const magicIcon = document.createElement('div');
     magicIcon.textContent = 'Magic';
@@ -156,8 +156,8 @@ export class SidePanel {
     const tabBar = document.createElement('div');
     tabBar.style.cssText = `
       display: flex; gap: 1px; padding: 0 2px;
-      background: #2a2018;
-      border-bottom: 2px solid #1a1510;
+      background: rgba(0,0,0,0.15);
+      border-bottom: 1px solid rgba(0,0,0,0.3);
     `;
 
     const tabs: { key: string; label: string }[] = [
@@ -191,7 +191,8 @@ export class SidePanel {
     const contentArea = document.createElement('div');
     contentArea.style.cssText = `
       padding: 6px; flex: 1; overflow-y: auto; min-height: 0;
-      background: linear-gradient(180deg, #201a14 0%, #1a1510 100%);
+      background: rgba(0,0,0,0.2);
+      box-shadow: inset 0 2px 6px rgba(0,0,0,0.4), inset 0 -1px 0 rgba(255,200,100,0.08);
     `;
 
     // Inventory tab
@@ -224,16 +225,16 @@ export class SidePanel {
     logoutBtn.textContent = 'Logout';
     logoutBtn.style.cssText = `
       text-align: center; padding: 5px 0; margin: 4px 6px 6px;
-      background: linear-gradient(180deg, #5a3a2a 0%, #3a2518 100%);
+      background: url('/ui/stone-light.png') repeat;
       border: 1px solid #6a4a35;
       border-radius: 3px; color: #d4a44a; font-size: 11px;
       cursor: pointer; font-weight: bold; letter-spacing: 1px;
     `;
     logoutBtn.addEventListener('mouseenter', () => {
-      logoutBtn.style.background = 'linear-gradient(180deg, #7a5040 0%, #5a3528 100%)';
+      logoutBtn.style.filter = 'brightness(1.3)';
     });
     logoutBtn.addEventListener('mouseleave', () => {
-      logoutBtn.style.background = 'linear-gradient(180deg, #5a3a2a 0%, #3a2518 100%)';
+      logoutBtn.style.filter = '';
     });
     logoutBtn.addEventListener('click', async () => {
       try {

@@ -52,17 +52,16 @@ export class ChatPanel {
     panel.id = 'chat-panel';
     panel.style.cssText = `
       width: 100%; height: 100%;
-      background: #0d0b08;
+      background: transparent;
       display: flex; flex-direction: column;
       font-family: monospace; font-size: 13px;
     `;
 
-    // Tab bar — RS-style chat tabs
+    // Tab bar — sits on the stone, no separate background
     const tabBar = document.createElement('div');
     tabBar.style.cssText = `
-      display: flex; gap: 1px; padding: 0 4px;
-      background: #151210;
-      border-bottom: 1px solid #2a2018;
+      display: flex; gap: 8px; padding: 2px 8px;
+      border-bottom: 1px solid rgba(0,0,0,0.3);
       flex-shrink: 0;
     `;
 
@@ -97,18 +96,23 @@ export class ChatPanel {
     const log = document.createElement('div');
     log.id = 'chat-log';
     log.style.cssText = `
-      flex: 1; overflow-y: auto; padding: 4px 8px;
-      color: #ddd; line-height: 1.4;
-      background: #0d0b08;
+      flex: 1; overflow-y: auto; padding: 6px 10px;
+      color: #2a1a08; line-height: 1.4;
+      background: url('/ui/parchment.png') repeat;
+      box-shadow: inset 0 3px 8px rgba(0,0,0,0.35), inset 0 -3px 8px rgba(0,0,0,0.2),
+                  2px 2px 4px rgba(0,0,0,0.3);
+      border: 2px solid #8a7a5a;
+      border-radius: 6px;
+      margin: 3px 8px;
     `;
     panel.appendChild(log);
 
     // Input
     const inputBar = document.createElement('div');
     inputBar.style.cssText = `
-      border-top: 1px solid #2a2018; padding: 3px 6px;
+      border-top: 1px solid rgba(0,0,0,0.3); padding: 3px 6px;
       display: flex; align-items: center;
-      background: #121010; flex-shrink: 0;
+      flex-shrink: 0;
     `;
 
     const input = document.createElement('input');
@@ -117,11 +121,12 @@ export class ChatPanel {
     input.placeholder = 'Press Enter to chat...';
     input.maxLength = 200;
     input.style.cssText = `
-      flex: 1; background: #0a0908;
-      border: 1px solid #3a3025; color: #fff;
+      flex: 1; background: rgba(0,0,0,0.25);
+      border: 1px solid rgba(0,0,0,0.3); color: #fff;
       font-family: monospace; font-size: 12px;
       padding: 4px 8px; outline: none;
       border-radius: 2px;
+      text-shadow: 1px 1px 1px rgba(0,0,0,0.7);
     `;
 
     inputBar.appendChild(input);
@@ -154,7 +159,7 @@ export class ChatPanel {
     }
   }
 
-  addMessage(from: string, message: string, color: string = '#ddd'): void {
+  addMessage(from: string, message: string, color: string = '#00c'): void {
     const el = document.createElement('div');
     el.innerHTML = `<span style="color: ${color}; font-weight: bold;">${this.escapeHtml(from)}:</span> ${this.escapeHtml(message)}`;
     if (this.activeTab !== 'all' && this.activeTab !== 'public') el.style.display = 'none';
@@ -163,7 +168,7 @@ export class ChatPanel {
     this.log.scrollTop = this.log.scrollHeight;
   }
 
-  addSystemMessage(message: string, color: string = '#ff0'): void {
+  addSystemMessage(message: string, color: string = '#800'): void {
     const el = document.createElement('div');
     el.innerHTML = `<span style="color: ${color};">${this.escapeHtml(message)}</span>`;
     if (this.activeTab !== 'all' && this.activeTab !== 'game') el.style.display = 'none';

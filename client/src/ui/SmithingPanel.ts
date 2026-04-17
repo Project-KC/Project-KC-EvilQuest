@@ -19,7 +19,7 @@ export class SmithingPanel {
     this.container.style.cssText = `
       position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
       width: 480px; max-height: 520px;
-      background: linear-gradient(180deg, #201a14 0%, #1a1510 100%);
+      background: url('/ui/stone-dark.png') repeat;
       border: 2px solid #5a4a35;
       border-radius: 4px; z-index: 1001; display: none;
       font-family: monospace; color: #ddd; user-select: none;
@@ -31,7 +31,7 @@ export class SmithingPanel {
     header.style.cssText = `
       display: flex; justify-content: space-between; align-items: center;
       padding: 8px 12px;
-      background: linear-gradient(180deg, #3d3328 0%, #2a2018 100%);
+      background: url('/ui/stone-light.png') repeat;
       border-bottom: 2px solid #1a1510;
       border-radius: 2px 2px 0 0;
     `;
