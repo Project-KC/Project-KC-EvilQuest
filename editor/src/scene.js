@@ -27,6 +27,7 @@ import { MapData } from './map/MapData.js'
 import { ToolMode, toolLabel } from './editor/Tools.js'
 import { loadAssetRegistry } from './assets-system/AssetRegistry.js'
 import { loadAssetModel, cloneAssetModelSync, warmAssetCache, makeGhostMaterial, initAssetLoader } from './assets-system/AssetLoader.js'
+import { getThumbnail } from './assets-system/ThumbnailRenderer.js'
 import { loadTextureRegistry } from './assets-system/TextureRegistry.js'
 import {
   buildTerrainMeshes,
@@ -861,6 +862,7 @@ let paintBrushRadius = 1
         <button class="asset-tab" id="tabModular">Modular</button>
         <button class="asset-tab" id="tabWalls">Walls</button>
         <button class="asset-tab" id="tabRoofs">Roofs</button>
+        <button class="asset-tab" id="tabBought">Bought</button>
       </div>
       <select id="assetGroupSelect" style="display:none"></select>
       <input id="assetSearch" type="text" placeholder="Search assets..." />
@@ -1423,6 +1425,7 @@ let paintBrushRadius = 1
   const tabModular = sidebar.querySelector('#tabModular')
   const tabWalls = sidebar.querySelector('#tabWalls')
   const tabRoofs = sidebar.querySelector('#tabRoofs')
+  const tabBought = sidebar.querySelector('#tabBought')
   const assetGroupSelect = sidebar.querySelector('#assetGroupSelect')
   const assetSearch = sidebar.querySelector('#assetSearch')
   const assetGrid = sidebar.querySelector('#assetGrid')
@@ -1498,12 +1501,15 @@ let paintBrushRadius = 1
       return !q || (a.name || a.id).toLowerCase().includes(q)
     })
     replaceGridEl.innerHTML = ''
+    if (replaceGridThumbObserver) replaceGridThumbObserver.disconnect()
+    replaceGridThumbObserver = createThumbObserver(replaceGridEl)
     for (const asset of assets) {
       const card = document.createElement('div')
       card.className = 'asset-card'
       const img = document.createElement('img')
       img.className = 'asset-thumb'
       img.alt = asset.name
+      img.dataset.assetPath = asset.path
       const label = document.createElement('div')
       label.className = 'asset-label'
       label.textContent = asset.name
@@ -1516,6 +1522,7 @@ let paintBrushRadius = 1
         replaceBtnEl.textContent = 'Replace Selected'
       })
       generateThumbnail(asset).then((url) => { if (url) img.src = url })
+      replaceGridThumbObserver.observe(img)
     }
   }
 
@@ -3998,6 +4005,22 @@ function applyToolAtTile(tile, eventLike = null) {
 
   // --- Thumbnail system ---
   const thumbnailCache = new Map()
+  let assetGridThumbObserver = null
+  let replaceGridThumbObserver = null
+
+  function createThumbObserver(rootEl) {
+    return new IntersectionObserver((entries, obs) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue
+        obs.unobserve(entry.target)
+        const path = entry.target.dataset.assetPath
+        if (!path) continue
+        getThumbnail(path)
+          .then((url) => { if (url) entry.target.src = url })
+          .catch(() => {})
+      }
+    }, { root: rootEl, rootMargin: '150px', threshold: 0.01 })
+  }
 
   function generateThumbnail(asset) {
     if (thumbnailCache.has(asset.id)) return Promise.resolve(thumbnailCache.get(asset.id))
@@ -4067,6 +4090,8 @@ function applyToolAtTile(tile, eventLike = null) {
     }
 
     assetGrid.innerHTML = ''
+    if (assetGridThumbObserver) assetGridThumbObserver.disconnect()
+    assetGridThumbObserver = createThumbObserver(assetGrid)
 
     if (!filteredAssets.length) {
       assetGrid.innerHTML = '<div class="asset-grid-empty">No assets found</div>'
@@ -4082,6 +4107,7 @@ function applyToolAtTile(tile, eventLike = null) {
       const img = document.createElement('img')
       img.className = 'asset-thumb'
       img.alt = asset.name
+      img.dataset.assetPath = asset.path
 
       const label = document.createElement('div')
       label.className = 'asset-label'
@@ -4102,6 +4128,7 @@ function applyToolAtTile(tile, eventLike = null) {
       generateThumbnail(asset).then((url) => {
         if (url) img.src = url
       })
+      assetGridThumbObserver.observe(img)
     }
 
     updateToolUI()
@@ -4278,7 +4305,7 @@ function applyToolAtTile(tile, eventLike = null) {
     updateToolUI()
   })
 
-  const allTabs = [tabProps, tabModular, tabWalls, tabRoofs]
+  const allTabs = [tabProps, tabModular, tabWalls, tabRoofs, tabBought]
   const clearTabs = () => allTabs.forEach(t => t.classList.remove('active'))
 
   tabProps.addEventListener('click', async () => {
@@ -4314,6 +4341,16 @@ function applyToolAtTile(tile, eventLike = null) {
     assetGroupFilter = 'all'
     clearTabs(); tabRoofs.classList.add('active')
     assetGroupSelect.style.display = 'none'
+    refreshAssetList()
+    await updatePreviewObject()
+  })
+
+  tabBought.addEventListener('click', async () => {
+    assetSectionFilter = 'Bought Assets'
+    assetGroupFilter = 'all'
+    clearTabs(); tabBought.classList.add('active')
+    assetGroupSelect.style.display = ''
+    refreshAssetGroupOptions()
     refreshAssetList()
     await updatePreviewObject()
   })

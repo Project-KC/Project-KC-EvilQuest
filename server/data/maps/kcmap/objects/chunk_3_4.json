@@ -209,25 +209,6 @@
     }
   },
   {
-    "assetId": "onepersonbed1",
-    "layerId": "layer_0",
-    "position": {
-      "x": 110.00539014469256,
-      "y": 0,
-      "z": 150.79808376978195
-    },
-    "rotation": {
-      "x": 0,
-      "y": -2.6179938779914944,
-      "z": 0
-    },
-    "scale": {
-      "x": 1,
-      "y": 1,
-      "z": 1
-    }
-  },
-  {
     "assetId": "Fence2",
     "layerId": "layer_0",
     "position": {

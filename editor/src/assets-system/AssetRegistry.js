@@ -2,7 +2,7 @@ function humanizeName(value) {
   return String(value || '')
     .replace(/%20/g, ' ')
     .replace(/[-_]+/g, ' ')
-    .replace(/\.glb$/i, '')
+    .replace(/\.(glb|gltf)$/i, '')
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/\b\w/g, (m) => m.toUpperCase())
@@ -53,7 +53,11 @@ export async function loadAssetRegistry() {
   }
 
   return assets
-    .filter((asset) => asset.path && asset.path.toLowerCase().endsWith('.glb'))
+    .filter((asset) => {
+      if (!asset.path) return false
+      const lower = asset.path.toLowerCase()
+      return lower.endsWith('.glb') || lower.endsWith('.gltf')
+    })
     .map((asset) => {
       const meta = deriveAssetMeta(asset.path)
       const fileName = asset.path.split('/').pop() || 'asset.glb'

@@ -2584,25 +2584,6 @@
     }
   },
   {
-    "assetId": "onepersonbed1",
-    "layerId": "layer_0",
-    "position": {
-      "x": 110.41177283235713,
-      "y": -0.02370008436688309,
-      "z": 86.42205154116854
-    },
-    "rotation": {
-      "x": 0,
-      "y": 0,
-      "z": 0
-    },
-    "scale": {
-      "x": 1.15,
-      "y": 1.15,
-      "z": 1.15
-    }
-  },
-  {
     "assetId": "IronFence1",
     "layerId": "layer_0",
     "position": {

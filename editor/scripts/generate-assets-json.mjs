@@ -24,7 +24,7 @@ function toWebPath(fullPath) {
 
 function toName(fileName) {
   return fileName
-    .replace(/\.glb$/i, '')
+    .replace(/\.(glb|gltf)$/i, '')
     .replace(/[_-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
@@ -32,12 +32,16 @@ function toName(fileName) {
 }
 
 const files = walk(assetsRoot)
-  .filter((file) => file.toLowerCase().endsWith('.glb'))
+  .filter((file) => {
+    const lower = file.toLowerCase()
+    return lower.endsWith('.glb') || lower.endsWith('.gltf')
+  })
   .sort((a, b) => a.localeCompare(b))
 
 const assets = files.map((file) => {
   const webPath = toWebPath(file)
-  const base = path.basename(file, '.glb')
+  const ext = path.extname(file)
+  const base = path.basename(file, ext)
   return {
     id: base,
     name: toName(path.basename(file)),
