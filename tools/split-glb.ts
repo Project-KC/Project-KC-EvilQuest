@@ -133,7 +133,7 @@ async function main() {
     // placeholders (the textures have setImage(empty) to force URI
     // serialization, but the writer would also emit those empty bytes).
     const jsonDoc = await io.writeJSON(doc)
-    await writeFile(outPath, JSON.stringify(jsonDoc.json, null, 2))
+    await writeFile(outPath, JSON.stringify(jsonDoc.json))
     for (const [uri, data] of Object.entries(jsonDoc.resources || {})) {
       const lower = uri.toLowerCase()
       if (lower.endsWith('.png') || lower.endsWith('.jpg') ||

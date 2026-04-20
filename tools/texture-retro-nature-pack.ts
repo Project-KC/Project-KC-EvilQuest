@@ -155,7 +155,7 @@ async function main() {
       // the writer would write empty files at our shared textures paths,
       // clobbering them.
       const jsonDoc = await io.writeJSON(doc)
-      await writeFile(outPath, JSON.stringify(jsonDoc.json, null, 2))
+      await writeFile(outPath, JSON.stringify(jsonDoc.json))
       for (const [uri, data] of Object.entries(jsonDoc.resources || {})) {
         const lower = uri.toLowerCase()
         if (lower.endsWith('.png') || lower.endsWith('.jpg') ||

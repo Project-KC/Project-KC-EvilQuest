@@ -53,7 +53,7 @@ const output = { assets }
 
 fs.writeFileSync(
   path.join(assetsRoot, 'assets.json'),
-  JSON.stringify(output, null, 2),
+  JSON.stringify(output),
   'utf8'
 )
 
