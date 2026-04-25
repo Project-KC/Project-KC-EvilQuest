@@ -40,11 +40,20 @@ export function handleGameSocketOpen(
     player.stance = saved.stance;
     player.appearance = saved.appearance;
     player.currentMapLevel = mapLevel; // use validated mapLevel, not raw saved value
+    player.currentFloor = saved.floor;
     player.syncHealthFromSkills();
   }
 
   ws.data.playerId = player.id;
   world.addPlayer(player);
+
+  // If the saved floor isn't ground level, tell the client so it positions
+  // the local player on the right floor instead of dangling above ground 0.
+  if (player.currentFloor !== 0) {
+    try {
+      player.ws.sendBinary(encodePacket(ServerOpcode.FLOOR_CHANGE, player.currentFloor));
+    } catch { /* closed */ }
+  }
 
   // If no appearance set, tell client to show character creator
   if (!player.appearance) {

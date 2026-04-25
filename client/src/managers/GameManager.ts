@@ -62,9 +62,11 @@ const NPC_SIZES: Record<number, { w: number; h: number }> = {
   10: { w: 1.6, h: 1.4 },  // Cow (wide, slightly shorter than player)
 };
 
-/** 3D model config for NPCs. npcDefId → GLB path + scale + animation name mappings */
+/** 3D model config for NPCs. npcDefId → GLB path + scale + animation name mappings.
+ *  NPCs without an entry here fall back to a 2D sprite. */
 const NPC_3D_MODELS: Record<number, { file: string; scale: number; anims: { idle: string; walk?: string; attack?: string; death?: string } }> = {
-  1:  { file: '/models/npcs/cow.glb', scale: 0.15, anims: { idle: 'Armature|Armature|Idle', walk: 'Armature|Armature|WalkSlow', death: 'Armature|Armature|Death' } }, // Chicken placeholder
+  // 1 (Chicken) intentionally has no entry — there's no chicken.glb yet, so it
+  // falls back to a sprite. Don't reuse cow.glb as a placeholder.
   2:  { file: '/models/npcs/rat.glb', scale: 0.2, anims: { idle: 'RatArmature|RatArmature|Rat_Idle', walk: 'RatArmature|RatArmature|Rat_Walk', attack: 'RatArmature|RatArmature|Rat_Attack', death: 'RatArmature|RatArmature|Rat_Death' } },
   6:  { file: '/models/npcs/spider.glb', scale: 0.2, anims: { idle: 'SpiderArmature|SpiderArmature|Spider_Idle', walk: 'SpiderArmature|SpiderArmature|Spider_Walk', attack: 'SpiderArmature|SpiderArmature|Spider_Attack', death: 'SpiderArmature|SpiderArmature|Spider_Death' } },
   10: { file: '/models/npcs/cow.glb', scale: 0.2, anims: { idle: 'Armature|Armature|Idle', walk: 'Armature|Armature|WalkSlow', death: 'Armature|Armature|Death' } },
@@ -237,6 +239,11 @@ export class GameManager {
   // UI
   private destMarker: any = null;
   private interactMarker: any = null;
+  private lastClickX: number = 0;
+  private lastClickY: number = 0;
+  // Single active cursor-click burst element; new clicks cancel the previous one
+  // so there's never more than one on screen at a time.
+  private activeClickEffect: { el: HTMLElement; anim: Animation } | null = null;
   private contextMenu: HTMLDivElement | null = null;
   private sidePanel: SidePanel | null = null;
   private chatPanel: ChatPanel | null = null;
@@ -301,6 +308,16 @@ export class GameManager {
       indoors: this.isIndoors,
       playerY: this.localPlayer?.position.y ?? this.getHeight(this.playerX, this.playerZ),
     }));
+
+    // Track left-click position so per-handler bursts fire at the right pixel.
+    // Capture phase ensures this runs before InputManager's pointerdown handler,
+    // which would otherwise pick + dispatch using stale lastClickX/Y from the
+    // previous click.
+    canvas.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      this.lastClickX = e.clientX;
+      this.lastClickY = e.clientY;
+    }, true);
 
     // Right-click context menu for NPCs/items
     this.setupContextMenu(canvas);
@@ -506,8 +523,10 @@ export class GameManager {
     this.fogTargetStart = targetStart;
     this.fogTargetEnd = targetEnd;
 
-    // Exponential approach — reaches ~99% of target in ~1 sec (k=4.6).
-    const k = 4.6;
+    // Exponential approach. With per-tile biome cells the player crosses biome
+    // boundaries frequently, so transitions are slowed to feel ambient instead
+    // of snappy. k=1.5 reaches ~99% of target in ~3s.
+    const k = 1.5;
     const t = 1 - Math.exp(-k * dt);
     this.fogCurrentColor.r += (this.fogTargetColor.r - this.fogCurrentColor.r) * t;
     this.fogCurrentColor.g += (this.fogTargetColor.g - this.fogCurrentColor.g) * t;
@@ -1081,7 +1100,7 @@ export class GameManager {
   }
 
   /** Create a depleted model (stump/depleted rock) at the placed node's position */
-  private createDepletedModel(objectEntityId: number, defId: number, placedNode: TransformNode): TransformNode | null {
+  private createDepletedModel(objectEntityId: number, defId: number, placedNode: TransformNode): TransformNode | undefined {
     if (this.worldObjectStumps.has(objectEntityId)) return this.worldObjectStumps.get(objectEntityId)!;
     const def = this.objectDefsCache.get(defId);
     let depletedModel: { template: TransformNode; scale: number } | null = null;
@@ -1090,7 +1109,7 @@ export class GameManager {
     } else if (def?.category === 'rock') {
       depletedModel = this.depletedRockModel;
     }
-    if (!depletedModel) return null;
+    if (!depletedModel) return undefined;
     const depleted = depletedModel.template.instantiateHierarchy(null, undefined, (source, cloned) => {
       cloned.name = source.name + `_depleted_${objectEntityId}`;
     })!;
@@ -1103,8 +1122,16 @@ export class GameManager {
     // Match the placed node's scale so depleted model fits the same footprint
     depleted.scaling.copyFrom(placedNode.scaling);
     depleted.position.set(placedNode.position.x, placedNode.position.y, placedNode.position.z);
+    // Copy rotation in whichever form the placed node uses. Editor-placed
+    // objects use Euler rotation (no quaternion), so falling back only to
+    // rotationQuaternion left depleted rocks at identity rotation — they
+    // appeared offset/oriented differently from the rock they replaced.
     if (placedNode.rotationQuaternion) {
       depleted.rotationQuaternion = placedNode.rotationQuaternion.clone();
+      depleted.rotation.set(0, 0, 0);
+    } else {
+      depleted.rotationQuaternion = null;
+      depleted.rotation.copyFrom(placedNode.rotation);
     }
     this.worldObjectStumps.set(objectEntityId, depleted);
     return depleted;
@@ -1892,6 +1919,12 @@ export class GameManager {
       console.log(`Floor changed to ${newFloor}`);
       // Update chunk visibility for multi-floor
       this.chunkManager.setCurrentFloor(newFloor);
+      // Snap the local player's Y to the floor we just switched to. Without
+      // this, on login the player can hover above the ground until their next
+      // step because Y was computed at floor 0.
+      if (this.localPlayer) {
+        this.localPlayer.setPositionXYZ(this.playerX, this.getHeight(this.playerX, this.playerZ), this.playerZ);
+      }
     });
 
     // Handle MAP_CHANGE as a raw binary handler
@@ -2142,6 +2175,7 @@ export class GameManager {
   }
 
   private attackNpc(npcEntityId: number): void {
+    this.spawnCursorClickEffect(this.lastClickX, this.lastClickY, '#ff3030');
     this.combatTargetId = npcEntityId;
     this.network.sendRaw(encodePacket(ClientOpcode.PLAYER_ATTACK_NPC, npcEntityId));
 
@@ -2166,6 +2200,7 @@ export class GameManager {
   }
 
   private talkToNpc(npcEntityId: number): void {
+    this.spawnCursorClickEffect(this.lastClickX, this.lastClickY, '#ff3030');
     const target = this.npcTargets.get(npcEntityId);
     if (!target) return;
 
@@ -2190,10 +2225,12 @@ export class GameManager {
   }
 
   private pickupItem(groundItemId: number): void {
+    this.spawnCursorClickEffect(this.lastClickX, this.lastClickY, '#ff3030');
     this.network.sendRaw(encodePacket(ClientOpcode.PLAYER_PICKUP_ITEM, groundItemId));
   }
 
   private handleObjectClick(objectEntityId: number): void {
+    this.spawnCursorClickEffect(this.lastClickX, this.lastClickY, '#ff3030');
     // Cooldown after cancelling a skill — prevent spam-restarting
     if (performance.now() - this.skillCancelTime < 600) return;
     const data = this.worldObjectDefs.get(objectEntityId);
@@ -2233,6 +2270,7 @@ export class GameManager {
   }
 
   private interactObject(objectEntityId: number, actionIndex: number): void {
+    this.spawnCursorClickEffect(this.lastClickX, this.lastClickY, '#ff3030');
     this.combatTargetId = -1;
 
     // Intercept anvil/tool-based crafting: show recipe UI instead of auto-crafting
@@ -2515,6 +2553,60 @@ export class GameManager {
     this.interactMarker = iMarker;
   }
 
+  /** Spawn a burst-lines click effect at the mouse pointer: 8 tick marks
+   *  radiating outward from the click point, growing + fading. ~600ms total.
+   *  Cancels any in-flight burst so only one is visible at a time. */
+  private spawnCursorClickEffect(clientX: number, clientY: number, color: string = '#ffe040'): void {
+    if (this.activeClickEffect) {
+      this.activeClickEffect.anim.cancel();
+      this.activeClickEffect.el.remove();
+      this.activeClickEffect = null;
+    }
+    const size = 34;
+    const el = document.createElement('div');
+    el.style.cssText = `
+      position: fixed;
+      left: ${clientX - size / 2}px;
+      top: ${clientY - size / 2}px;
+      width: ${size}px;
+      height: ${size}px;
+      pointer-events: none;
+      z-index: 9999;
+      will-change: transform, opacity;
+    `;
+    // 8 tick marks at 45° intervals; each line runs from inner radius to outer radius.
+    const cx = 14, cy = 14;
+    const inner = 4, outer = 8;
+    const lines: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      const ang = (i * Math.PI) / 4;
+      const x1 = cx + inner * Math.cos(ang);
+      const y1 = cy + inner * Math.sin(ang);
+      const x2 = cx + outer * Math.cos(ang);
+      const y2 = cy + outer * Math.sin(ang);
+      lines.push(`M${x1.toFixed(2)},${y1.toFixed(2)} L${x2.toFixed(2)},${y2.toFixed(2)}`);
+    }
+    el.innerHTML = `<svg viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;height:100%;">
+      <path d="${lines.join(' ')}"
+        stroke="${color}" stroke-width="2" stroke-linecap="round"
+        fill="none"
+        style="filter: drop-shadow(0 0 1.5px rgba(0,0,0,0.85));" />
+    </svg>`;
+    document.body.appendChild(el);
+    // Scale outward 0.45 → 1.5 with cubic ease-out, fade 1 → 0.
+    const anim = el.animate([
+      { transform: 'scale(0.45)', opacity: 1 },
+      { transform: 'scale(1.0)', opacity: 1, offset: 0.35 },
+      { transform: 'scale(1.5)', opacity: 0 },
+    ], { duration: 600, easing: 'cubic-bezier(0.2, 0.7, 0.3, 1)' });
+    const slot = { el, anim };
+    this.activeClickEffect = slot;
+    anim.onfinish = () => {
+      el.remove();
+      if (this.activeClickEffect === slot) this.activeClickEffect = null;
+    };
+  }
+
   /** Align a marker disc to the terrain normal at (x, z) */
   private alignMarkerToTerrain(x: number, z: number, marker?: any): void {
     const target = marker ?? this.destMarker;
@@ -2588,6 +2680,7 @@ export class GameManager {
   }
 
   private handleGroundClick(worldX: number, worldZ: number): void {
+    this.spawnCursorClickEffect(this.lastClickX, this.lastClickY, '#ffe040');
     this.combatTargetId = -1;
     this.pendingSkill = null;
     if (this.isSkilling) {
@@ -2619,11 +2712,8 @@ export class GameManager {
       this.tileFrom = { x: this.playerX, z: this.playerZ };
       this.pendingPath = null;
       const dest = path[path.length - 1];
-      this.destMarker.position.x = dest.x;
-      this.destMarker.position.y = this.getHeight(dest.x, dest.z) + 0.02;
-      this.destMarker.position.z = dest.z;
-      this.alignMarkerToTerrain(dest.x, dest.z);
-      this.destMarker.isVisible = true;
+      // Yellow ground destination disc removed in favor of the cursor burst.
+      // Minimap arrow still indicates where you're heading.
       this.minimap?.setDestination(dest.x, dest.z);
       // Always send the full new path to the server
       this.network.sendMove(path);
@@ -2674,7 +2764,7 @@ export class GameManager {
     const identity = GameManager.IDENTITY;
 
     // Project overlays for sprites that actually have visible overlays — no intermediate array
-    const projectSprite = (sprite: SpriteEntity | CharacterEntity) => {
+    const projectSprite = (sprite: SpriteEntity | CharacterEntity | Npc3DEntity) => {
       const hasBubble = sprite.hasChatBubble();
       const hasBar = sprite.hasHealthBar();
       if (!hasBubble && !hasBar) return;
@@ -2993,14 +3083,12 @@ export class GameManager {
       this.isIndoors = true;
       this._lastIndoorTileX = -9999;
       this._lastIndoorTileZ = -9999;
-      this.camera.setTargetRadius(10);
     } else if (!underRoof && this.isIndoors) {
       this.isIndoors = false;
       for (const node of this.hiddenRoofNodes) node.setEnabled(true);
       this.hiddenRoofNodes = [];
       this._lastIndoorTileX = -9999;
       this._lastIndoorTileZ = -9999;
-      this.camera.setTargetRadius(12);
     }
     // While indoors, update which objects are hidden — only when player tile changes
     if (this.isIndoors) {

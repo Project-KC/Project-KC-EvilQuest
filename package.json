@@ -7,7 +7,8 @@
     "dev:server": "bun --watch server/src/main.ts",
     "dev:editor": "cd editor && bunx vite --port 5174",
     "build:client": "cd client && bunx vite build",
-    "start": "bun server/src/main.ts"
+    "start": "bun server/src/main.ts",
+    "typecheck": "bunx tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
     "@gltf-transform/core": "^4.3.0",

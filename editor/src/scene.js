@@ -158,6 +158,19 @@ function tuneModelLighting(model) {
   let map = new MapData(64, 64)
   const placedGroup = new TransformNode('placedGroup', scene)
 
+  // Placements whose assetId didn't resolve in the registry. Preserved verbatim
+  // so save/load round-trips and a later re-added asset brings them back.
+  let _orphanPlacements = []
+
+  function reportMissingAssets(missing, context) {
+    if (missing.size === 0) return
+    const ids = [...missing.keys()]
+    const total = [...missing.values()].reduce((a, b) => a + b, 0)
+    const sample = ids.slice(0, 5).join(', ') + (ids.length > 5 ? `, +${ids.length - 5} more` : '')
+    console.warn(`[${context}] ${total} placed object(s) preserved as orphans — unknown assetIds: ${sample}`)
+    try { statusText.textContent = `⚠ ${total} placement(s) preserved as orphans (unknown assets: ${sample})` } catch {}
+  }
+
   let assetRegistry = []
   let filteredAssets = []
   let selectedAssetId = ''
@@ -513,7 +526,7 @@ function tuneModelLighting(model) {
 
   // --- Biome painting (8x8 tile cells with fog overrides) ---
 
-  const BIOME_CELL_SIZE = 8
+  const BIOME_CELL_SIZE = 1
   const biomeData = {
     defs: [],         // { id, name, fogColor:[r,g,b] 0-1, fogStart, fogEnd }
     cells: {}         // "cellX,cellZ" -> biome id
@@ -522,9 +535,14 @@ function tuneModelLighting(model) {
   let selectedBiomeId = null
   let editingBiomeId = null
   const biomeGroup = new TransformNode('biomeGroup', scene)
+  // Hidden by default; updateToolUI() shows it only while the Biome tool is active.
   biomeGroup.setEnabled(false)
   let biomeOverlayMesh = null
   let biomeOverlayDirty = false
+  // Drag-rectangle state: snapshot of cells at stroke start + start cell coords
+  let biomeStrokeStart = null
+  let biomeStrokeSnapshot = null
+  let biomeStrokeId = null
 
   function serializeBiomesData() {
     return { defs: JSON.parse(JSON.stringify(biomeData.defs)), cells: { ...biomeData.cells } }
@@ -560,13 +578,15 @@ function tuneModelLighting(model) {
       biomeOverlayMesh = null
     }
     const entries = Object.entries(biomeData.cells)
+    console.log('[biome] rebuildBiomeOverlay: cells =', entries.length, 'defs =', biomeData.defs.length)
     if (entries.length === 0) return
 
-    // Build one translucent quad per painted cell, at a high Y so it's visible.
+    // Build one translucent quad per painted cell, just above terrain so it's
+    // visible from typical camera angles (not floating 50m in the sky).
     const positions = []
     const indices = []
     const colors = []
-    const Y = 50
+    const Y = 2
     let vi = 0
     for (const [key, id] of entries) {
       const def = biomeData.defs.find(d => d.id === id)
@@ -578,8 +598,16 @@ function tuneModelLighting(model) {
       const z1 = z0 + BIOME_CELL_SIZE
       positions.push(x0, Y, z0, x1, Y, z0, x1, Y, z1, x0, Y, z1)
       indices.push(vi, vi + 1, vi + 2, vi, vi + 2, vi + 3)
-      const [r, g, b] = def.fogColor
-      for (let i = 0; i < 4; i++) colors.push(r, g, b, 0.35)
+      // Brighten the fog color for the overlay so dark biomes (e.g. Graveyard's
+      // near-black purple) are still visible. Preserve hue, normalize so the
+      // brightest channel is ~0.75.
+      const [fr, fg, fb] = def.fogColor
+      const maxChan = Math.max(fr, fg, fb, 0.01)
+      const boost = 0.75 / maxChan
+      const r = Math.min(1, fr * boost)
+      const g = Math.min(1, fg * boost)
+      const b = Math.min(1, fb * boost)
+      for (let i = 0; i < 4; i++) colors.push(r, g, b, 0.85)
       vi += 4
     }
     if (positions.length === 0) return
@@ -592,12 +620,15 @@ function tuneModelLighting(model) {
     const mat = new StandardMaterial('biomeOverlayMat', scene)
     mat.emissiveColor = new Color3(1, 1, 1)
     mat.disableLighting = true
-    mat.alpha = 0.6
+    mat.alpha = 0.85
     mat.backFaceCulling = false
+    // Render on top so terrain doesn't occlude it
+    mat.depthFunction = 519 // GL_ALWAYS — always pass depth test
     mesh.material = mat
     mesh.parent = biomeGroup
     mesh.isPickable = false
     biomeOverlayMesh = mesh
+    console.log('[biome] overlay mesh created, vertices =', positions.length / 3, 'biomeGroup.isEnabled =', biomeGroup.isEnabled())
   }
 
   /** Get the best display height for collision visualization at a tile.
@@ -1105,7 +1136,7 @@ let paintBrushRadius = 1
     </div>
 
     <div class="ctx-panel" id="ctx-biome" style="display:none">
-      <div style="font-size:11px;color:rgba(255,255,255,0.45);margin-bottom:4px;">Paints 8x8 tile cells · Shift+Click to erase</div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.45);margin-bottom:4px;">8x8 tile cells · Click + drag = rectangle fill · Shift+drag to erase · Ctrl+Z undo</div>
       <div id="biomeDefList" style="margin-bottom:8px;"></div>
       <button id="biomeAddBtn" style="width:100%;margin-bottom:8px;">+ New Biome</button>
       <div id="biomeEditor" style="display:none;border-top:1px solid #444;padding-top:8px;">
@@ -1115,13 +1146,17 @@ let paintBrushRadius = 1
         <input id="biomeEditColor" type="color" style="width:100%;height:32px;margin-top:3px;margin-bottom:6px;" />
         <div style="display:flex;gap:5px;">
           <div style="flex:1;">
-            <label style="font-size:11px;color:rgba(255,255,255,0.45);">Fog Start <span id="biomeEditStartVal">10</span></label>
+            <label style="font-size:11px;color:rgba(255,255,255,0.45);">Clear up to <span id="biomeEditStartVal">10</span> tiles</label>
             <input id="biomeEditStart" type="range" min="0" max="120" step="1" value="10" style="width:100%;" />
           </div>
           <div style="flex:1;">
-            <label style="font-size:11px;color:rgba(255,255,255,0.45);">Fog End <span id="biomeEditEndVal">40</span></label>
+            <label style="font-size:11px;color:rgba(255,255,255,0.45);">Full fog at <span id="biomeEditEndVal">40</span> tiles</label>
             <input id="biomeEditEnd" type="range" min="5" max="200" step="1" value="40" style="width:100%;" />
           </div>
+        </div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.35);margin-top:4px;line-height:1.3;">
+          Fog starts appearing at <b>Clear</b> distance, reaches full opacity at <b>Full fog</b>.
+          Lower values = denser, closer fog.
         </div>
         <div style="display:flex;gap:5px;margin-top:8px;">
           <button id="biomeSaveBtn" style="flex:1;">Save</button>
@@ -2086,7 +2121,7 @@ let paintBrushRadius = 1
   }
 
   function serializePlacedObjects() {
-    return placedGroup.getChildren().map((obj) => {
+    const live = placedGroup.getChildren().map((obj) => {
       // When rotationQuaternion is set (after X/Z rotation), obj.rotation is stale.
       // Convert quaternion back to euler for serialization.
       let rx = obj.rotation.x, ry = obj.rotation.y, rz = obj.rotation.z
@@ -2104,10 +2139,15 @@ let paintBrushRadius = 1
       if (obj.userData.trigger) out.trigger = { ...obj.userData.trigger }
       return out
     })
+    // Append orphaned placements (assetId not in registry) so they survive save/load.
+    for (const o of _orphanPlacements) live.push(JSON.parse(JSON.stringify(o)))
+    return live
   }
 
   async function rebuildPlacedObjectsFromData(placedObjectsData) {
     clearPlacedModels()
+    _orphanPlacements = []  // full rebuild — reset and repopulate from data
+    const _missing = new Map()
 
     // Pre-load all unique models in parallel so cache is warm before sequential cloning.
     const uniquePaths = [...new Set(
@@ -2120,7 +2160,12 @@ let paintBrushRadius = 1
     // All models are now cached — clone synchronously (no per-object await)
     for (const placed of placedObjectsData || []) {
       const asset = assetRegistry.find((a) => a.id === placed.assetId)
-      if (!asset) continue
+      if (!asset) {
+        _orphanPlacements.push(JSON.parse(JSON.stringify(placed)))
+        const k = placed.assetId || '(no assetId)'
+        _missing.set(k, (_missing.get(k) || 0) + 1)
+        continue
+      }
 
       const model = cloneAssetModelSync(asset.path)
       tuneModelLighting(model, asset.path)
@@ -2137,6 +2182,7 @@ let paintBrushRadius = 1
       model.setEnabled(layer ? layer.visible : true)
       addPlacedModel(model)
     }
+    reportMissingAssets(_missing, 'load')
   }
 
   function buildSaveData() {
@@ -2273,9 +2319,18 @@ let paintBrushRadius = 1
     const _importPreloaded = await Promise.all(_importPaths.map((path) => loadAssetModel(path).catch(() => null)))
     for (const inst of _importPreloaded) { if (inst) inst.dispose() }
 
+    const _importMissing = new Map()
     for (const placed of data.placedObjects || []) {
       const asset = assetRegistry.find((a) => a.id === placed.assetId)
-      if (!asset) continue
+      if (!asset) {
+        const orphan = JSON.parse(JSON.stringify(placed))
+        orphan.position.x += offsetX
+        orphan.position.z += offsetZ
+        _orphanPlacements.push(orphan)
+        const k = placed.assetId || '(no assetId)'
+        _importMissing.set(k, (_importMissing.get(k) || 0) + 1)
+        continue
+      }
       const model = await loadAssetModel(asset.path)
       tuneModelLighting(model, asset.path)
       model.position.set(placed.position.x + offsetX, placed.position.y, placed.position.z + offsetZ)
@@ -2293,6 +2348,7 @@ let paintBrushRadius = 1
       model.setEnabled(_layer ? _layer.visible : true)
       addPlacedModel(model)
     }
+    reportMissingAssets(_importMissing, 'import chunk')
 
     // Import NPC spawns shifted by offset
     for (const s of data.npcSpawns || []) {
@@ -2336,6 +2392,9 @@ let paintBrushRadius = 1
       snap.npcSpawns = JSON.parse(JSON.stringify(serializeNpcSpawns()))
       snap.itemSpawns = JSON.parse(JSON.stringify(serializeItemSpawns()))
     }
+    if (!scope || scope === 'full' || scope === 'biome') {
+      snap.biomes = serializeBiomesData()
+    }
     return snap
   }
 
@@ -2375,6 +2434,9 @@ let paintBrushRadius = 1
     }
     if (snapshot.itemSpawns) {
       loadItemSpawns(snapshot.itemSpawns)
+    }
+    if (snapshot.biomes) {
+      loadBiomesData(snapshot.biomes)
     }
 
     if (scope === 'full' || scope === 'terrain') {
@@ -2916,9 +2978,18 @@ let paintBrushRadius = 1
   const _mergePreloaded = await Promise.all(_mergeUniquePaths.map((path) => loadAssetModel(path).catch(() => null)))
   for (const inst of _mergePreloaded) { if (inst) inst.dispose() }
 
+  const _mergeMissing = new Map()
   for (const placed of data.placedObjects || []) {
     const asset = assetRegistry.find((a) => a.id === placed.assetId)
-    if (!asset) continue
+    if (!asset) {
+      const orphan = JSON.parse(JSON.stringify(placed))
+      orphan.position.x += offsetX
+      orphan.position.z += offsetZ
+      _orphanPlacements.push(orphan)
+      const k = placed.assetId || '(no assetId)'
+      _mergeMissing.set(k, (_mergeMissing.get(k) || 0) + 1)
+      continue
+    }
 
     const model = await loadAssetModel(asset.path)
     tuneModelLighting(model, asset.path)
@@ -2938,6 +3009,7 @@ let paintBrushRadius = 1
     model.setEnabled(_importLayer ? _importLayer.visible : true)
     addPlacedModel(model)
   }
+  reportMissingAssets(_mergeMissing, 'import map')
 
   markTerrainDirty({ rebuildTexturePlanes: true, rebuildTextureOverlays: true })
   updateSelectionHelper()
@@ -4242,6 +4314,15 @@ function applyToolAtTile(tile, eventLike = null) {
         selectedAssetId = asset.id
         assetGrid.querySelectorAll('.asset-card').forEach((c) => c.classList.remove('selected'))
         card.classList.add('selected')
+        // Always reset the slider on asset switch — to the asset's defaultScale
+        // if present, otherwise to 1.0. Without this, picking grass (0.5) and
+        // then any other asset would leave the slider stuck at 0.5.
+        const targetScale = (typeof asset.defaultScale === 'number' && asset.defaultScale > 0)
+          ? asset.defaultScale
+          : 1.0
+        previewScale = targetScale
+        placeScaleSlider.value = String(targetScale)
+        placeScaleLabel.textContent = targetScale.toFixed(1)
         updateToolUI()
         await updatePreviewObject()
       })
@@ -5407,15 +5488,25 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
   const key = `${tile.x},${tile.z}`
 
   if (state.tool === ToolMode.BIOME) {
+    if (!biomeStrokeStart || !biomeStrokeSnapshot) return
     const cx = Math.floor(tile.x / BIOME_CELL_SIZE)
     const cz = Math.floor(tile.z / BIOME_CELL_SIZE)
-    const cellKey = `${cx},${cz}`
-    if (!state.draggedTiles.has(cellKey)) {
-      state.draggedTiles.add(cellKey)
-      if (event.shiftKey) paintBiomeCell(cx, cz, null)
-      else if (selectedBiomeId != null) paintBiomeCell(cx, cz, selectedBiomeId)
-      if (biomeOverlayDirty) rebuildBiomeOverlay()
+    // Reset to stroke-start state and re-fill the rectangle from start to current cell.
+    // Lets the user drag out a rectangle in any direction; re-shrinks if they overshoot.
+    biomeData.cells = { ...biomeStrokeSnapshot }
+    const x0 = Math.min(biomeStrokeStart.cx, cx)
+    const x1 = Math.max(biomeStrokeStart.cx, cx)
+    const z0 = Math.min(biomeStrokeStart.cz, cz)
+    const z1 = Math.max(biomeStrokeStart.cz, cz)
+    for (let zz = z0; zz <= z1; zz++) {
+      for (let xx = x0; xx <= x1; xx++) {
+        const key = `${xx},${zz}`
+        if (biomeStrokeId == null) delete biomeData.cells[key]
+        else biomeData.cells[key] = biomeStrokeId
+      }
     }
+    biomeOverlayDirty = true
+    rebuildBiomeOverlay()
     return
   }
 
@@ -5667,15 +5758,19 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
     if (state.tool === ToolMode.BIOME) {
       const cx = Math.floor(tile.x / BIOME_CELL_SIZE)
       const cz = Math.floor(tile.z / BIOME_CELL_SIZE)
-      if (event.shiftKey) {
-        paintBiomeCell(cx, cz, null)
-      } else if (selectedBiomeId != null) {
-        paintBiomeCell(cx, cz, selectedBiomeId)
+      const id = event.shiftKey ? null : selectedBiomeId
+      if (id == null && !event.shiftKey) {
+        console.warn('[biome] no biome selected — click a biome in the right panel first')
+        return
       }
+      // Begin a stroke: snapshot for undo + drag-rectangle base state
+      pushUndoState('biome')
+      biomeStrokeStart = { cx, cz }
+      biomeStrokeSnapshot = { ...biomeData.cells }
+      biomeStrokeId = id
+      paintBiomeCell(cx, cz, id)
       if (biomeOverlayDirty) rebuildBiomeOverlay()
       state.isPainting = true
-      state.draggedTiles.clear()
-      state.draggedTiles.add(`${cx},${cz}`)
       return
     }
 
@@ -5804,6 +5899,10 @@ if (state.isPainting && state.tool !== ToolMode.PLACE && state.tool !== ToolMode
       state.draggedTiles.clear()
       state.historyCapturedThisStroke = false
       lockedWallEdge = 0
+      // Clear biome drag-rectangle state at end of stroke
+      biomeStrokeStart = null
+      biomeStrokeSnapshot = null
+      biomeStrokeId = null
 
       if (wasPainting && paintingTool) {
         // Shadow cache is stale after terrain edits, but a full rebuild is expensive.

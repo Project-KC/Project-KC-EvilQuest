@@ -115,12 +115,12 @@ export class NetworkManager {
       values.push(Math.round(path[i].x * 10));
       values.push(Math.round(path[i].z * 10));
     }
-    this.gameSocket.send(encodePacket(ClientOpcode.PLAYER_MOVE, ...values));
+    this.gameSocket.send(encodePacket(ClientOpcode.PLAYER_MOVE, ...values) as BufferSource);
   }
 
   sendRaw(data: Uint8Array): void {
     if (!this.gameSocket || !this.connected) return;
-    this.gameSocket.send(data);
+    this.gameSocket.send(data as BufferSource);
   }
 
   sendChat(message: string): void {

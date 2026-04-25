@@ -14633,7 +14633,7 @@
     ],
     "tiles": [],
     "heights": [],
-    "terrainGeneration": 445294,
+    "terrainGeneration": 496341,
     "activeChunks": [
       "1,1",
       "2,1",
@@ -14641,7 +14641,8 @@
       "1,2",
       "2,2",
       "0,1",
-      "3,0"
+      "3,0",
+      "2,0"
     ]
   },
   "layers": [

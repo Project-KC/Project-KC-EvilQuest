@@ -69,7 +69,9 @@ export async function loadAssetRegistry() {
         section: asset.section || meta.section,
         group: asset.group || meta.group,
         folderPath: meta.folderPath,
-        tags: Array.isArray(asset.tags) ? asset.tags : []
+        tags: Array.isArray(asset.tags) ? asset.tags : [],
+        // Per-asset placement scale override; the editor reads this when the asset is selected
+        defaultScale: typeof asset.defaultScale === 'number' ? asset.defaultScale : null
       }
     })
     .sort((a, b) => {

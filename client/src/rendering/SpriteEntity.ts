@@ -388,7 +388,7 @@ export class SpriteEntity {
         const iconSize = 80;
         const offsetX = (texSize - iconSize) / 2;
         ctx.clearRect(0, 0, texSize, texSize);
-        ctx.imageSmoothingEnabled = false;
+        (ctx as CanvasRenderingContext2D).imageSmoothingEnabled = false;
         ctx.drawImage(img, offsetX, 8, iconSize, iconSize);
         // Draw label below
         ctx.fillStyle = options.labelColor || '#ffaa00';

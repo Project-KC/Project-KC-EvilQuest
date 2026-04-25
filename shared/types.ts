@@ -198,6 +198,8 @@ export interface ObjectRecipe {
   levelRequired: number;
   xpReward: number;
   requiresTool?: string; // e.g. "hammer" — must be in inventory but not consumed
+  /** 0..1 chance the recipe yields output. Inputs are consumed regardless. Default 1. */
+  successChance?: number;
 }
 
 // --- Map metadata types ---
@@ -244,7 +246,7 @@ export interface SpawnsFile {
 // --- Biomes ---
 
 /** Biome cells are painted in 8x8 tile blocks. */
-export const BIOME_CELL_SIZE = 8;
+export const BIOME_CELL_SIZE = 1;
 
 export interface BiomeDef {
   id: number;
@@ -303,6 +305,8 @@ export interface PlacedObject {
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number };
   scale: { x: number; y: number; z: number };
+  /** Per-instance trigger override (e.g. teleport doors authored in the editor) */
+  trigger?: { type: string; destChunk: string; entryX: number; entryY: number; entryZ: number };
 }
 
 export interface EditorLayer {

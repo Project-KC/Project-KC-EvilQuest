@@ -8,3 +8,14 @@ dist/
 server/data/maps/overworld.bak/
 server/data/maps/overworld/standby.json
 server/data/maps/*/backup.json
+server/data/maps/*/backups/
+
+# Local-only animation source files — too large for the repo
+assets-sources/
+pickaxeminingset_sourcefiles/
+
+# Local MCP server config (points at user's home dir)
+.mcp.json
+
+# Backup glbs kept locally
+client/public/Character models/*backup*.glb

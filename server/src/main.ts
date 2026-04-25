@@ -1,6 +1,6 @@
 import { SERVER_PORT, GAME_WS_PATH, CHAT_WS_PATH, CHUNK_SIZE } from '@projectrs/shared';
 import { resolve } from 'path';
-import { statSync, readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'fs';
+import { statSync, readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync, rmSync, cpSync } from 'fs';
 import type { KCMapFile, KCMapData, KCTile, MapMeta, WallsFile, SpawnsFile, PlacedObject, BiomesFile } from '@projectrs/shared';
 import { defaultKCTile } from '@projectrs/shared';
 import { World } from './World';
@@ -59,6 +59,39 @@ function loadChunkedObjects(mapDir: string): PlacedObject[] | null {
     }
   } catch { return null; }
   return objects.length > 0 ? objects : null;
+}
+
+// --- Backup helper ---
+
+/** Copy the current map dir into backups/{timestamp}/ and prune to maxKeep snapshots.
+ *  Excludes the backups/ subdir itself. Any error is logged and swallowed. */
+function createMapBackup(mapDir: string, maxKeep: number = 20): void {
+  try {
+    if (!existsSync(mapDir)) return;
+    const backupsRoot = resolve(mapDir, 'backups');
+    mkdirSync(backupsRoot, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const dest = resolve(backupsRoot, ts);
+
+    // Copy each non-'backups' entry from the map dir into the snapshot
+    for (const entry of readdirSync(mapDir)) {
+      if (entry === 'backups') continue;
+      cpSync(resolve(mapDir, entry), resolve(dest, entry), { recursive: true });
+    }
+
+    // Rotate: keep the N newest snapshots, delete the rest
+    const snapshots = readdirSync(backupsRoot)
+      .filter((n) => n !== '.' && n !== '..')
+      .map((n) => ({ n, path: resolve(backupsRoot, n) }))
+      .filter((e) => { try { return statSync(e.path).isDirectory(); } catch { return false; } })
+      .sort((a, b) => a.n.localeCompare(b.n)); // ISO timestamps sort lexicographically
+    const toDelete = snapshots.slice(0, Math.max(0, snapshots.length - maxKeep));
+    for (const s of toDelete) {
+      try { rmSync(s.path, { recursive: true, force: true }); } catch {}
+    }
+  } catch (err) {
+    console.warn('[save-map] backup failed:', (err as Error)?.message);
+  }
 }
 
 // --- Chunked tile/height storage helpers ---
@@ -139,6 +172,11 @@ function saveChunkedTiles(mapDir: string, tiles: KCTile[][], width: number, heig
     }
   }
 
+  // Partial-payload guard: if the editor sent a tiles array with zero
+  // non-default tiles across the entire map, treat it as an empty payload
+  // and preserve existing chunk files instead of deleting them.
+  if (written.size === 0) return;
+
   // Remove stale chunk files
   try {
     for (const file of readdirSync(tilesDir)) {
@@ -185,6 +223,11 @@ function saveChunkedHeights(mapDir: string, heights: number[][], width: number, 
       }
     }
   }
+
+  // Partial-payload guard: zero non-zero vertices across the whole map almost
+  // always means a bad payload, not a deliberate flatten. Preserve existing
+  // chunk files; for a real flatten, delete heights/ manually.
+  if (written.size === 0) return;
 
   // Remove stale chunk files
   try {
@@ -412,7 +455,14 @@ const server = Bun.serve<SocketData>({
     if (url.pathname === '/api/logout' && req.method === 'POST') {
       try {
         const body = await req.json() as { token?: string };
-        if (body.token) db.logout(body.token);
+        if (body.token) {
+          // Resolve account before deleting the session so we can kick any
+          // active WebSockets — otherwise the player keeps playing on a
+          // logged-out token until they refresh.
+          const session = db.getSession(body.token);
+          db.logout(body.token);
+          if (session) world.kickAccountIfOnline(session.accountId);
+        }
         return jsonResponse({ ok: true });
       } catch {
         return jsonResponse({ ok: false, error: 'Invalid request' }, 400);
@@ -511,6 +561,9 @@ const server = Bun.serve<SocketData>({
           return new Response('Forbidden', { status: 403 });
         }
 
+        // Snapshot current state before any writes. Cheap insurance against partial-payload wipes.
+        createMapBackup(mapDir);
+
         // Use editor's dimensions (may have changed via chunk add/remove), preserve spawn point
         const metaPath = resolve(mapDir, 'meta.json');
         try {
@@ -599,6 +652,10 @@ const server = Bun.serve<SocketData>({
           }
         }
         writeFileSync(biomesPath, JSON.stringify(biomesToSave, null, 2));
+
+        // Post-save snapshot so the fresh state is immediately backed up,
+        // not just the state that was about to be overwritten.
+        createMapBackup(mapDir);
 
         return jsonResponse({ ok: true });
       } catch (e: any) {

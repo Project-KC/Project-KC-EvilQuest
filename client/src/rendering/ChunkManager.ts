@@ -184,6 +184,10 @@ export class ChunkManager {
   private chunkAnimGroups: Map<string, AnimationGroup[]> = new Map();
   /** Chunks currently loading placed objects (prevents double-load) */
   private loadingObjectChunks: Set<string> = new Set();
+  /** Chunks the server has confirmed have no placed objects (404 from per-chunk
+   *  fetch). Persists across chunk eviction so we never re-fetch a known-empty
+   *  chunk in the same session. */
+  private chunksKnownEmpty: Set<string> = new Set();
   private _lastStairLog: number = -1;
   /** Elevated texture plane floor heights (only applied when player is already at that height via stairs) */
   private elevatedFloorHeights: Map<number, number> = new Map();
@@ -544,21 +548,66 @@ export class ChunkManager {
     this.lastChunkX = cx;
     this.lastChunkZ = cz;
 
+    // `desired` = chunks that should be loaded (within active radius).
+    // `keep`    = chunks worth keeping in memory even when the player walks
+    //             out of range, so a quick step back doesn't trigger a
+    //             rebuild from scratch (which causes the visible lag spikes).
+    const KEEP_RADIUS = CHUNK_LOAD_RADIUS + 2;
     const desired = new Set<string>();
-    for (let dx = -CHUNK_LOAD_RADIUS; dx <= CHUNK_LOAD_RADIUS; dx++) {
-      for (let dz = -CHUNK_LOAD_RADIUS; dz <= CHUNK_LOAD_RADIUS; dz++) {
+    const keep = new Set<string>();
+    const maxCX = Math.ceil(this.mapWidth / CHUNK_SIZE);
+    const maxCZ = Math.ceil(this.mapHeight / CHUNK_SIZE);
+    for (let dx = -KEEP_RADIUS; dx <= KEEP_RADIUS; dx++) {
+      for (let dz = -KEEP_RADIUS; dz <= KEEP_RADIUS; dz++) {
         const chunkX = cx + dx;
         const chunkZ = cz + dz;
-        const maxCX = Math.ceil(this.mapWidth / CHUNK_SIZE);
-        const maxCZ = Math.ceil(this.mapHeight / CHUNK_SIZE);
-        if (chunkX >= 0 && chunkX < maxCX && chunkZ >= 0 && chunkZ < maxCZ) {
-          desired.add(`${chunkX},${chunkZ}`);
+        if (chunkX < 0 || chunkX >= maxCX || chunkZ < 0 || chunkZ >= maxCZ) continue;
+        const key = `${chunkX},${chunkZ}`;
+        keep.add(key);
+        if (Math.abs(dx) <= CHUNK_LOAD_RADIUS && Math.abs(dz) <= CHUNK_LOAD_RADIUS) {
+          desired.add(key);
         }
       }
     }
 
+    // Hide chunks that left the active radius but are still in keep-radius —
+    // their meshes stay allocated for instant re-show next time the player
+    // wanders back. Only fully dispose chunks beyond keep-radius.
     for (const [key, meshes] of this.chunks) {
-      if (!desired.has(key)) {
+      if (desired.has(key)) {
+        meshes.ground.setEnabled(true);
+        meshes.water?.setEnabled(true);
+        meshes.paddyWater?.setEnabled(true);
+        meshes.cliff?.setEnabled(true);
+        meshes.ceiling?.setEnabled(true);
+        meshes.wall?.setEnabled(true);
+        meshes.roof?.setEnabled(true);
+        meshes.floor?.setEnabled(true);
+        meshes.stairs?.setEnabled(true);
+        for (const [, floorSet] of meshes.upperFloors) {
+          floorSet.wall?.setEnabled(true);
+          floorSet.roof?.setEnabled(true);
+          floorSet.floor?.setEnabled(true);
+          floorSet.stairs?.setEnabled(true);
+        }
+      } else if (keep.has(key)) {
+        // Just hide — meshes stay allocated for fast re-show.
+        meshes.ground.setEnabled(false);
+        meshes.water?.setEnabled(false);
+        meshes.paddyWater?.setEnabled(false);
+        meshes.cliff?.setEnabled(false);
+        meshes.ceiling?.setEnabled(false);
+        meshes.wall?.setEnabled(false);
+        meshes.roof?.setEnabled(false);
+        meshes.floor?.setEnabled(false);
+        meshes.stairs?.setEnabled(false);
+        for (const [, floorSet] of meshes.upperFloors) {
+          floorSet.wall?.setEnabled(false);
+          floorSet.roof?.setEnabled(false);
+          floorSet.floor?.setEnabled(false);
+          floorSet.stairs?.setEnabled(false);
+        }
+      } else {
         meshes.ground.dispose();
         meshes.water?.dispose();
         meshes.paddyWater?.dispose();
@@ -638,9 +687,10 @@ export class ChunkManager {
       if (!desired.has(key)) this.pendingGameChunks.delete(key);
     }
 
-    // Unload placed objects for chunks leaving radius
+    // Unload placed objects for chunks beyond the keep-radius. Chunks inside
+    // keep-radius keep their objects loaded — walking back doesn't re-fetch.
     for (const key of this.chunkPlacedNodes.keys()) {
-      if (!desired.has(key)) {
+      if (!keep.has(key)) {
         this.disposeChunkPlacedObjects(key);
       }
     }
@@ -2356,6 +2406,11 @@ export class ChunkManager {
   /** Load and instantiate placed objects for a single chunk */
   private async loadChunkPlacedObjects(chunkKey: string): Promise<void> {
     if (this.chunkPlacedNodes.has(chunkKey) || this.loadingObjectChunks.has(chunkKey)) return;
+    // Skip the network round-trip if we already know this chunk has no objects.
+    if (this.chunksKnownEmpty.has(chunkKey)) {
+      this.chunkPlacedNodes.set(chunkKey, []);
+      return;
+    }
     this.loadingObjectChunks.add(chunkKey);
     let objects = this.placedObjectsByChunk.get(chunkKey);
     // If no pre-indexed objects, try fetching per-chunk file from server
@@ -2371,7 +2426,13 @@ export class ChunkManager {
             // Add shadows for newly loaded objects and rebuild affected ground chunks
             this.addShadowsForObjects(fetched);
             this.rebuildGroundChunksForObjects(fetched);
+          } else {
+            // Server returned an empty array — remember so we don't re-fetch.
+            this.chunksKnownEmpty.add(chunkKey);
           }
+        } else if (res.status === 404) {
+          // No objects file exists for this chunk. Cache that fact.
+          this.chunksKnownEmpty.add(chunkKey);
         }
       } catch { /* no per-chunk objects file */ }
     }
@@ -2701,10 +2762,15 @@ export class ChunkManager {
       const cx = obj.position.x;
       const cz = obj.position.z;
       const name = obj.assetId.toLowerCase();
-      const isLarge = name.includes('tree') || name.includes('modular') || name.includes('wall') || name.includes('house') || name.includes('bush');
+      // Order matters — check 'bush' before 'large' so it gets its own profile.
+      const isBush = name.includes('bush');
+      const isLarge = !isBush && (name.includes('tree') || name.includes('modular') || name.includes('wall') || name.includes('house'));
       const isRock = name.includes('rock');
-      const shadowR = isLarge ? 3.8 : isRock ? 1.8 : 2.0;
-      const maxDark = isLarge ? 0.82 : isRock ? 0.5 : 0.42;
+      // Rocks: sharp + dark (small radius, high contrast).
+      // Bushes: wide + soft (gentle ambient occlusion under foliage).
+      // Trees/structures: original strong cast.
+      const shadowR = isRock ? 2.5 : isBush ? 3.5 : isLarge ? 3.8 : 2.0;
+      const maxDark = isRock ? 0.85 : isBush ? 0.45 : isLarge ? 0.82 : 0.42;
       const vx0 = Math.max(0, Math.floor(cx - shadowR));
       const vx1 = Math.min(w - 1, Math.ceil(cx + shadowR));
       const vz0 = Math.max(0, Math.floor(cz - shadowR));

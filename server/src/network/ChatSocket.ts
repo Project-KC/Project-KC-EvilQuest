@@ -150,7 +150,6 @@ function handleCommand(
           return;
         }
         world.handleMapTransition(player, {
-          tileX: 0, tileZ: 0,
           targetMap: mapId,
           targetX: targetMap.meta.spawnPoint.x,
           targetZ: targetMap.meta.spawnPoint.z,

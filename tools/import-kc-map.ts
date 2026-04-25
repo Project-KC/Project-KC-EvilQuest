@@ -4,14 +4,18 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 
 const args = process.argv.slice(2);
+const force = args.includes('--force');
+const positional = args.filter(a => !a.startsWith('--'));
 
-if (args.length < 2) {
-  console.error("Usage: bun tools/import-kc-map.ts <save-file> <map-id>");
+if (positional.length < 2) {
+  console.error("Usage: bun tools/import-kc-map.ts <save-file> <map-id> [--force]");
   console.error("Example: bun tools/import-kc-map.ts /path/to/main.json overworld");
+  console.error("");
+  console.error("--force: overwrite existing map directory (wipes spawns.json + walls.json)");
   process.exit(1);
 }
 
-const [saveFilePath, mapId] = args;
+const [saveFilePath, mapId] = positional;
 
 // Read KC save file
 if (!existsSync(saveFilePath)) {
@@ -39,8 +43,11 @@ console.log(`Map dimensions: ${width}x${height}, water level: ${waterLevel}`);
 // Create map directory
 const mapDir = join(import.meta.dir, "..", "server", "data", "maps", mapId);
 
-if (existsSync(mapDir)) {
-  console.warn(`Warning: Map directory already exists: ${mapDir}`);
+if (existsSync(mapDir) && !force) {
+  console.error(`Error: Map directory already exists: ${mapDir}`);
+  console.error(`This would overwrite spawns.json and walls.json with empty defaults.`);
+  console.error(`Re-run with --force if you really want to wipe the existing map.`);
+  process.exit(1);
 }
 
 mkdirSync(mapDir, { recursive: true });

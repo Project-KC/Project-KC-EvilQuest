@@ -230,7 +230,7 @@ export class CharacterEntity {
         if (pbrMat.albedoTexture) {
           flat.diffuseTexture = pbrMat.albedoTexture;
           // Disable texture filtering for a crisper pixelated look
-          flat.diffuseTexture.updateSamplingMode(Texture.NEAREST_NEAREST);
+          pbrMat.albedoTexture.updateSamplingMode(Texture.NEAREST_NEAREST);
         }
         if (pbrMat.albedoColor) {
           // Brighten albedo — PBR textures are authored dark since PBR lighting adds a lot

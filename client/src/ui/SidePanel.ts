@@ -17,7 +17,9 @@ export class SidePanel {
   private container: HTMLDivElement;
   private network: NetworkManager;
   private token: string;
-  private activeTab: 'inventory' | 'skills' | 'equipment' = 'inventory';
+  // Tabs are registered dynamically (inventory, skills, equipment, quests, good_magic, evil_magic),
+  // so this is keyed by string rather than a fixed union.
+  private activeTab: string = 'inventory';
 
   // Inventory state
   private invSlots: ({ itemId: number; quantity: number } | null)[] = new Array(INVENTORY_SIZE).fill(null);
@@ -62,6 +64,40 @@ export class SidePanel {
     this.container = this.buildUI();
     const mount = document.getElementById('ui-right-column');
     (mount ?? document.body).appendChild(this.container);
+
+    // Class-based stance styling. Inline styles get clobbered by browser
+    // extensions (Dark Reader caches CSS-variable shadows of inline styles
+    // and stops tracking later mutations), so the selected/unselected state
+    // is driven by toggling a class instead.
+    if (!document.getElementById('stance-btn-styles')) {
+      const style = document.createElement('style');
+      style.id = 'stance-btn-styles';
+      style.textContent = `
+        .stance-btn {
+          flex: 1; text-align: center; padding: 7px 0;
+          font-size: 11px; cursor: pointer;
+          user-select: none; -webkit-user-select: none;
+          touch-action: manipulation;
+          background: rgba(0,0,0,0.25);
+          color: #888;
+          /* Border thickness stays constant across both states so the button
+             size doesn't shift when selection changes — only the color does. */
+          border: 2px solid #3a3025;
+          box-sizing: border-box;
+          font-weight: normal;
+          box-shadow: none;
+          transition: background 0.05s, color 0.05s, border-color 0.05s;
+        }
+        .stance-btn.selected {
+          background: #7a5a25;
+          color: #ffe066;
+          border-color: #fc0;
+          font-weight: bold;
+          box-shadow: inset 0 0 4px rgba(255,200,0,0.5);
+        }
+      `;
+      document.head.appendChild(style);
+    }
   }
 
   private buildUI(): HTMLDivElement {
@@ -480,18 +516,18 @@ export class SidePanel {
     ];
 
     this.stanceButtons = [];
+    const setStance = (i: number) => {
+      this.currentStance = stances[i].key;
+      this.network.sendRaw(encodePacket(ClientOpcode.PLAYER_SET_STANCE, i));
+      this.updateStanceUI();
+    };
     for (let i = 0; i < stances.length; i++) {
       const btn = document.createElement('div');
       btn.textContent = stances[i].label;
-      btn.style.cssText = `
-        flex: 1; text-align: center; padding: 3px 0;
-        font-size: 10px; cursor: pointer;
-        border: 1px solid #5a4a35; color: #aaa;
-      `;
-      btn.addEventListener('click', () => {
-        this.currentStance = stances[i].key;
-        this.network.sendRaw(encodePacket(ClientOpcode.PLAYER_SET_STANCE, i));
-        this.updateStanceUI();
+      btn.className = 'stance-btn';
+      btn.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        setStance(i);
       });
       stanceRow.appendChild(btn);
       this.stanceButtons.push(btn);
@@ -721,20 +757,16 @@ export class SidePanel {
     const mage = 0.325 * (Math.floor(magicLevel / 2) + magicLevel);
     const cl = Math.floor(base + Math.max(melee, range, mage));
 
-    const el = document.getElementById('combat-level-row');
-    if (el) el.textContent = `Combat Lv: ${cl}`;
+    const rowEl = document.getElementById('combat-level-row');
+    if (rowEl) rowEl.textContent = `Combat Lv: ${cl}`;
+    const headerEl = document.getElementById('side-combat-level');
+    if (headerEl) headerEl.textContent = `Combat Lv: ${cl}`;
   }
 
   private updateStanceUI(): void {
     const stanceNames: MeleeStance[] = ['accurate', 'aggressive', 'defensive', 'controlled'];
     for (let i = 0; i < this.stanceButtons.length; i++) {
-      if (stanceNames[i] === this.currentStance) {
-        this.stanceButtons[i].style.background = 'rgba(90,74,53,0.5)';
-        this.stanceButtons[i].style.color = '#fc0';
-      } else {
-        this.stanceButtons[i].style.background = 'transparent';
-        this.stanceButtons[i].style.color = '#aaa';
-      }
+      this.stanceButtons[i].classList.toggle('selected', stanceNames[i] === this.currentStance);
     }
   }
 
@@ -783,33 +815,6 @@ export class SidePanel {
       fill.style.background = 'linear-gradient(180deg, #8a1a1a 0%, #6a0a0a 100%)';
     }
     text.textContent = `${current}/${max}`;
-  }
-
-  /** Update the combat level display (calculated from skills) */
-  updateCombatLevel(): void {
-    const acc = this.skills.get('accuracy' as SkillId)?.level ?? 1;
-    const str = this.skills.get('strength' as SkillId)?.level ?? 1;
-    const def = this.skills.get('defence' as SkillId)?.level ?? 1;
-    const hp = this.skills.get('hitpoints' as SkillId)?.level ?? 10;
-    const arch = this.skills.get('archery' as SkillId)?.level ?? 1;
-    const mag = this.skills.get('good_magic' as SkillId)?.level ?? 1;
-    const base = 0.25 * (def + hp);
-    const melee = 0.325 * (acc + str);
-    const ranged = 0.325 * (1.5 * arch);
-    const magic = 0.325 * (1.5 * mag);
-    const level = Math.floor(base + Math.max(melee, ranged, magic));
-    const el = document.getElementById('side-combat-level');
-    if (el) el.textContent = `Combat Lv: ${level}`;
-  }
-
-  /** Update the Good Magic bar below HP */
-  updateMagicBar(): void {
-    const data = this.skills.get('good_magic' as SkillId);
-    if (!data) return;
-    const fill = document.getElementById('side-magic-fill');
-    const text = document.getElementById('side-magic-text');
-    if (!fill || !text) return;
-    text.textContent = `${data.level}`;
   }
 
   // === Equipment methods ===

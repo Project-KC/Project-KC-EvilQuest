@@ -42,12 +42,26 @@ async function main() {
   const input = resolve(inputArg)
   const outDir = resolve(outDirArg)
   const sharedTexDir = resolve(outDir, 'textures')
-  await mkdir(sharedTexDir, { recursive: true })
 
   const io = new NodeIO().registerExtensions(ALL_EXTENSIONS)
 
   // --- Pre-pass: write every unique texture to shared folder ---
   const srcDocPre = await io.read(input)
+
+  // Refuse skinned meshes — prune() strips skin bindings and turns characters
+  // into scattered vertex planes. Characters need a different pipeline.
+  const skins = srcDocPre.getRoot().listSkins()
+  if (skins.length > 0) {
+    console.error(
+      `Refusing to split: ${input} has ${skins.length} skin(s). ` +
+      `prune() would break the skeleton binding. ` +
+      `Skinned/animated GLBs need a different pipeline.`
+    )
+    process.exit(1)
+  }
+
+  await mkdir(sharedTexDir, { recursive: true })
+
   const srcTextures = srcDocPre.getRoot().listTextures()
   const writtenFiles = new Set<string>()
   let sharedTotalBytes = 0

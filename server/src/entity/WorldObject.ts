@@ -5,7 +5,8 @@ let nextObjectEntityId = 10000; // Start high to avoid collision with NPC/player
 export class WorldObject {
   readonly id: number;
   readonly defId: number;
-  readonly def: WorldObjectDef;
+  /** Mutable: doors swap action labels by replacing this with a copy. */
+  def: WorldObjectDef;
   readonly x: number;
   readonly z: number;
   readonly mapLevel: string;

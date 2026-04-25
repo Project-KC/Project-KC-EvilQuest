@@ -15,6 +15,7 @@ export interface SessionInfo {
 export interface SavedPlayerState {
   x: number;
   z: number;
+  floor: number;
   mapLevel: string;
   skills: SkillBlock;
   inventory: ({ itemId: number; quantity: number } | null)[];
@@ -67,6 +68,10 @@ export class GameDatabase {
     try {
       this.db.exec(`ALTER TABLE player_state ADD COLUMN appearance TEXT DEFAULT NULL`);
     } catch { /* column already exists */ }
+    // Migration: add floor column so multi-floor positions persist across logout
+    try {
+      this.db.exec(`ALTER TABLE player_state ADD COLUMN floor INTEGER DEFAULT 0`);
+    } catch { /* column already exists */ }
   }
 
   async createAccount(username: string, password: string): Promise<{ ok: true; token: string } | { ok: false; error: string }> {
@@ -77,8 +82,8 @@ export class GameDatabase {
     if (!/^[a-zA-Z0-9_]+$/.test(username)) {
       return { ok: false, error: 'Username must be alphanumeric (underscores allowed)' };
     }
-    if (!password || password.length < 4 || password.length > 64) {
-      return { ok: false, error: 'Password must be 4-64 characters' };
+    if (!password || password.length < 8 || password.length > 64) {
+      return { ok: false, error: 'Password must be 8-64 characters' };
     }
 
     // Check if username exists
@@ -161,13 +166,13 @@ export class GameDatabase {
 
     this.db.query(`
       UPDATE player_state SET
-        x = ?, z = ?,
+        x = ?, z = ?, floor = ?,
         map_level = ?,
         skills = ?, inventory = ?, equipment = ?,
         stance = ?, appearance = ?, updated_at = unixepoch()
       WHERE account_id = ?
     `).run(
-      player.position.x, player.position.y,
+      player.position.x, player.position.y, player.currentFloor,
       player.currentMapLevel,
       JSON.stringify(skills),
       JSON.stringify(player.inventory),
@@ -179,8 +184,8 @@ export class GameDatabase {
   }
 
   loadPlayerState(accountId: number): SavedPlayerState | null {
-    const row = this.db.query('SELECT x, z, map_level, skills, inventory, equipment, stance, appearance FROM player_state WHERE account_id = ?')
-      .get(accountId) as { x: number; z: number; map_level: string; skills: string; inventory: string; equipment: string; stance: string; appearance: string | null } | null;
+    const row = this.db.query('SELECT x, z, floor, map_level, skills, inventory, equipment, stance, appearance FROM player_state WHERE account_id = ?')
+      .get(accountId) as { x: number; z: number; floor: number | null; map_level: string; skills: string; inventory: string; equipment: string; stance: string; appearance: string | null } | null;
 
     if (!row) return null;
 
@@ -233,6 +238,7 @@ export class GameDatabase {
     return {
       x: row.x,
       z: row.z,
+      floor: row.floor ?? 0,
       mapLevel: row.map_level || 'kcmap',
       skills,
       inventory,

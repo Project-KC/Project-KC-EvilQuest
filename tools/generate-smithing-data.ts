@@ -424,7 +424,11 @@ for (const item of existingItems) {
     item.icon = iconUpdates[item.id];
   }
 }
-const allItems = [...existingItems, ...newItems];
+// Dedupe by ID: re-runs replace previous output instead of appending duplicates.
+// New entries win on collision so updated tier configs propagate.
+const newItemIds = new Set(newItems.map((i: any) => i.id));
+const dedupedExistingItems = existingItems.filter((i: any) => !newItemIds.has(i.id));
+const allItems = [...dedupedExistingItems, ...newItems];
 writeFileSync(resolve(dataDir, 'items.json'), JSON.stringify(allItems, null, 2) + '\n');
 console.log(`\n✅ Wrote ${allItems.length} items to items.json`);
 
@@ -435,6 +439,8 @@ const furnace = existingObjects.find((o: any) => o.id === 6);
 if (furnace) {
   furnace.recipes = furnaceRecipes;
 }
-const allObjects = [...existingObjects, ...newRocks, anvilObj];
+const newObjectIds = new Set([...newRocks.map((o: any) => o.id), anvilObj.id]);
+const dedupedExistingObjects = existingObjects.filter((o: any) => !newObjectIds.has(o.id));
+const allObjects = [...dedupedExistingObjects, ...newRocks, anvilObj];
 writeFileSync(resolve(dataDir, 'objects.json'), JSON.stringify(allObjects, null, 2) + '\n');
 console.log(`✅ Wrote ${allObjects.length} objects to objects.json`);

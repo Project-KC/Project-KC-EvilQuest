@@ -918,7 +918,6 @@ export class World {
       // Per-instance trigger from editor takes priority
       if (obj.trigger?.type === 'teleport' && obj.trigger.destChunk) {
         this.handleMapTransition(player, {
-          tileX: 0, tileZ: 0,
           targetMap: obj.trigger.destChunk,
           targetX: obj.trigger.entryX || 32.5,
           targetZ: obj.trigger.entryZ || 32.5,
@@ -928,7 +927,6 @@ export class World {
       // Fallback to def-level transition
       if (obj.def.transition) {
         this.handleMapTransition(player, {
-          tileX: 0, tileZ: 0,
           targetMap: obj.def.transition.targetMap,
           targetX: obj.def.transition.targetX,
           targetZ: obj.def.transition.targetZ,
