@@ -91,12 +91,6 @@ bun run dev:client
 bun run dev:editor
 ```
 
-### First Login
-
-1. Open the game in your browser
-2. Click **Sign Up** and create an account (password must be 8+ characters)
-3. Log in -- you will spawn in the default map
-
 ## Troubleshooting
 
 | Problem | Fix |
