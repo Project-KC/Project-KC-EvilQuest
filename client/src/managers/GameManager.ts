@@ -325,8 +325,10 @@ export class GameManager {
     this.entities.loadPlayerSprites();
     this.entities.loadNpcSprites();
 
-    // FPS counter
+    // FPS counter (remove stale element from HMR reload)
+    document.getElementById('fps-counter')?.remove();
     const fpsEl = document.createElement('div');
+    fpsEl.id = 'fps-counter';
     fpsEl.style.cssText = 'position:fixed;top:4px;left:50%;transform:translateX(-50%);color:#0f0;font:bold 14px monospace;z-index:9999;text-shadow:1px 1px 0 #000;pointer-events:none';
     document.body.appendChild(fpsEl);
     let fpsFrames = 0, fpsLast = performance.now();

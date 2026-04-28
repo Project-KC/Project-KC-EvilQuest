@@ -2987,6 +2987,8 @@ export class ChunkManager {
         mesh.isPickable = true;
         mesh.renderingGroupId = 0;
         mat.needDepthPrePass = true;
+        mat.backFaceCulling = false;
+        mat.transparencyMode = 2;
 
         // Elevated flat planes act as ceilings — index in roof grid for indoor detection
         const terrainH = this.getEffectiveHeight(plane.position.x, plane.position.z);
@@ -3011,7 +3013,9 @@ export class ChunkManager {
       }
       mesh.freezeWorldMatrix();
       mesh.doNotSyncBoundingInfo = true;
-      mat.freeze();
+      if (!isFlat) {
+        mat.freeze();
+      }
       this.texturePlaneMeshes.push(mesh);
 
       const pcx = Math.floor(plane.position.x / CHUNK_SIZE);

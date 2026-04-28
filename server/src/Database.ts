@@ -52,8 +52,8 @@ export class GameDatabase {
 
       CREATE TABLE IF NOT EXISTS player_state (
         account_id INTEGER PRIMARY KEY REFERENCES accounts(id),
-        x REAL DEFAULT 17.5,
-        z REAL DEFAULT 32.5,
+        x REAL DEFAULT 96.5,
+        z REAL DEFAULT 96.5,
         map_level TEXT DEFAULT 'kcmap',
         skills TEXT DEFAULT '{}',
         inventory TEXT DEFAULT '[]',
