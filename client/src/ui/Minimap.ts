@@ -1,128 +1,98 @@
 import { TileType, WallEdge } from '@projectrs/shared';
 import type { ChunkManager } from '../rendering/ChunkManager';
 
-/** Minimap dot color for a world-object category. Undefined = don't draw. */
-const OBJECT_COLORS: Record<string, string> = {
-  tree: '#3a6a2e',
-  rock: '#909088',
-  fishingspot: '#62aac8',
-  furnace: '#c67838',
-  cookingrange: '#c67838',
-  anvil: '#7a7a74',
-  altar: '#a07ac8',
-  door: '#7a5a38',
-  chest: '#d8b050',
-};
+const INTERACTIVE_CATEGORIES = new Set([
+  'tree', 'rock', 'fishingspot', 'furnace', 'cookingrange',
+  'anvil', 'altar', 'door', 'chest',
+]);
 
 export interface MinimapObject { x: number; z: number; category: string; }
 
-// RSC-inspired painted palette — warm, a touch more saturated than pure
-// muted earth tones so the map doesn't feel flat.
-const TILE_COLORS_RGB: Record<number, [number, number, number]> = {
-  [TileType.GRASS]: [0x5e, 0x88, 0x38],
-  [TileType.DIRT]:  [0x9a, 0x74, 0x48],
-  [TileType.STONE]: [0x96, 0x8e, 0x7e],
-  [TileType.WATER]: [0x36, 0x64, 0x9e],
-  [TileType.WALL]:  [0x3a, 0x2e, 0x24],
-  [TileType.SAND]:  [0xd4, 0xba, 0x7a],
-  [TileType.WOOD]:  [0x84, 0x5e, 0x38],
-  [TileType.MUD]:   [0x72, 0x54, 0x30],
+const TILE_COLORS: Record<number, [number, number, number]> = {
+  [TileType.GRASS]: [0x3e, 0x8c, 0x2e],
+  [TileType.DIRT]:  [0x8a, 0x68, 0x3c],
+  [TileType.STONE]: [0x82, 0x7c, 0x72],
+  [TileType.WATER]: [0x2c, 0x58, 0x8e],
+  [TileType.SAND]:  [0xc4, 0xaa, 0x6a],
+  [TileType.WOOD]:  [0x74, 0x52, 0x30],
+  [TileType.MUD]:   [0x3e, 0x8c, 0x2e],
 };
-const TILE_COLOR_DEFAULT: [number, number, number] = [0x1a, 0x16, 0x10];
-// Interior of a roofed tile: warm wood-floor tone so buildings read as
-// "inside" from above, the way RS Classic showed roofed buildings.
-const ROOF_TINT_RGB: [number, number, number] = [0x6a, 0x48, 0x26];
-// Stroke color for wall edges.
-const WALL_STROKE_RGB: [number, number, number] = [0x16, 0x0e, 0x08];
+const ROOF_COLOR: [number, number, number] = [0x60, 0x40, 0x22];
+const FLOOR_COLOR: [number, number, number] = [0x8a, 0x74, 0x52];
 
-// How many tiles the minimap shows in each direction from center.
-// Matches RuneScape's click-to-move reach (~17 tiles). A few extra tiles
-// fill the corners while the map rotates with the camera.
-const VIEW_RADIUS = 20;
+const VIEW_RADIUS = 22;
+const RENDER_SIZE = 340;
 
 export class Minimap {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
-  private size: number;
 
-  // Offscreen canvas for tile rendering (putImageData ignores transforms)
   private offCanvas: HTMLCanvasElement;
   private offCtx: CanvasRenderingContext2D;
   private imageData: ImageData;
 
-  // Destination marker (world coords, null = no destination)
   private destX: number | null = null;
   private destZ: number | null = null;
   private destBlinkTimer: number = 0;
 
-  // Click-to-move callback
   private onClickMove: ((worldX: number, worldZ: number) => void) | null = null;
 
-  // Cached view params for click mapping
   private lastPlayerX: number = 0;
   private lastPlayerZ: number = 0;
   private lastScale: number = 1;
   private lastAlpha: number = 0;
 
-  // Cached tile window: only rebuild the offscreen tile bitmap when the player
-  // crosses a tile boundary. Entities/destination marker still redraw per frame.
-  private cachedStartX: number = Number.NaN;
-  private cachedStartZ: number = Number.NaN;
-  private cachedTileSize: number = 0;
+  private cachedFloorX: number = Number.NaN;
+  private cachedFloorZ: number = Number.NaN;
+  private cachedStartX: number = 0;
+  private cachedStartZ: number = 0;
 
-  constructor(size: number = 150) {
-    this.size = size;
+  private tileColorBuf: Uint8Array;
+  private readonly tileSize: number;
+
+  constructor(displaySize: number = 180) {
+    this.tileSize = VIEW_RADIUS * 2;
 
     this.canvas = document.createElement('canvas');
-    this.canvas.width = size;
-    this.canvas.height = size;
-    // Square minimap framed with a dark border + thin brass line — keeps the
-    // RSC painted-tile feel but in a unique rectangular form-factor.
+    this.canvas.width = RENDER_SIZE;
+    this.canvas.height = RENDER_SIZE;
     this.canvas.style.cssText = `
-      width: 100%; height: ${Math.min(size, 200)}px;
-      display: block;
-      border-bottom: 3px solid #1a1208;
-      image-rendering: pixelated; cursor: pointer;
-      background: #0a0a08;
-      box-shadow:
-        inset 0 0 0 1px rgba(220,180,80,0.22),
-        inset 0 0 12px rgba(0,0,0,0.45);
+      width: ${displaySize}px; height: ${displaySize}px;
+      display: block; cursor: pointer;
+      border: 2px solid #1a1510;
+      box-shadow: inset 0 0 6px rgba(0,0,0,0.6);
+      background: #0c0a06;
     `;
 
-    this.ctx = this.canvas.getContext('2d')!;
+    this.ctx = this.canvas.getContext('2d', { alpha: false })!;
     const mount = document.getElementById('ui-right-column');
     (mount ?? document.body).appendChild(this.canvas);
 
-    // Offscreen canvas for tile imageData
     this.offCanvas = document.createElement('canvas');
-    this.offCanvas.width = size;
-    this.offCanvas.height = size;
+    this.offCanvas.width = RENDER_SIZE;
+    this.offCanvas.height = RENDER_SIZE;
     this.offCtx = this.offCanvas.getContext('2d')!;
-    this.imageData = this.offCtx.createImageData(size, size);
+    this.imageData = this.offCtx.createImageData(RENDER_SIZE, RENDER_SIZE);
+    this.tileColorBuf = new Uint8Array(this.tileSize * this.tileSize * 4);
 
     this.canvas.addEventListener('click', (e) => this.handleClick(e));
   }
 
-  /** Set callback for when the player clicks the minimap to move */
   setClickMoveHandler(handler: (worldX: number, worldZ: number) => void): void {
     this.onClickMove = handler;
   }
 
-  /** Invalidate the cached tile bitmap — call after a map change. */
   invalidateTileCache(): void {
-    this.cachedStartX = Number.NaN;
-    this.cachedStartZ = Number.NaN;
-    this.cachedTileSize = 0;
+    this.cachedFloorX = Number.NaN;
+    this.cachedFloorZ = Number.NaN;
   }
 
-  /** Show destination marker at world position */
   setDestination(worldX: number, worldZ: number): void {
     this.destX = worldX;
     this.destZ = worldZ;
     this.destBlinkTimer = 0;
   }
 
-  /** Hide destination marker */
   clearDestination(): void {
     this.destX = null;
     this.destZ = null;
@@ -131,26 +101,23 @@ export class Minimap {
   private handleClick(e: MouseEvent): void {
     if (!this.onClickMove) return;
     const rect = this.canvas.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const pz = e.clientY - rect.top;
-    const center = this.size / 2;
+    const scaleX = RENDER_SIZE / rect.width;
+    const scaleY = RENDER_SIZE / rect.height;
+    const px = (e.clientX - rect.left) * scaleX;
+    const pz = (e.clientY - rect.top) * scaleY;
+    const center = RENDER_SIZE / 2;
 
-    // Inverse transform: undo scale(-1,1) then undo rotation
-    const relX = -(px - center); // undo X flip
-    const relZ = -(pz - center); // undo Y flip
-    const angle = this.lastAlpha + Math.PI / 2; // undo negated rotation
+    const relX = -(px - center);
+    const relZ = -(pz - center);
+    const angle = this.lastAlpha + Math.PI / 2;
     const cosA = Math.cos(angle);
     const sinA = Math.sin(angle);
-    const urX = relX * cosA - relZ * sinA;
-    const urZ = relX * sinA + relZ * cosA;
 
-    // Map unrotated minimap coords to world coords
-    const worldX = this.lastPlayerX + urX / this.lastScale;
-    const worldZ = this.lastPlayerZ + urZ / this.lastScale;
+    const worldX = this.lastPlayerX + (relX * cosA - relZ * sinA) / this.lastScale;
+    const worldZ = this.lastPlayerZ + (relX * sinA + relZ * cosA) / this.lastScale;
     this.onClickMove(worldX, worldZ);
   }
 
-  /** Update minimap with entity positions (windowed view from ChunkManager) */
   update(
     playerX: number,
     playerZ: number,
@@ -159,196 +126,307 @@ export class Minimap {
     chunkManager: ChunkManager,
     cameraAlpha: number = 0,
     worldObjects: MinimapObject[] = [],
+    wallFenceObjects: { x: number; z: number }[] = [],
   ): void {
-    // Fast path: only rebuild the tile bitmap when the player crosses a tile boundary.
-    // getTilesForMinimap() allocates a fresh Uint8Array + scans ~11k tiles — skip it when nothing changed.
+    const tileSize = this.tileSize;
+    const pxPerTile = RENDER_SIZE / tileSize;
     const floorX = Math.floor(playerX) - VIEW_RADIUS;
     const floorZ = Math.floor(playerZ) - VIEW_RADIUS;
+
     let startX: number;
     let startZ: number;
-    let tileSize: number;
 
-    if (floorX === this.cachedStartX && floorZ === this.cachedStartZ && this.cachedTileSize > 0) {
-      startX = this.cachedStartX;
-      startZ = this.cachedStartZ;
-      tileSize = this.cachedTileSize;
-    } else {
-      const queried = chunkManager.getTilesForMinimap(playerX, playerZ, VIEW_RADIUS);
-      startX = queried.startX;
-      startZ = queried.startZ;
-      tileSize = queried.size;
+    if (floorX !== this.cachedFloorX || floorZ !== this.cachedFloorZ) {
+      this.cachedFloorX = floorX;
+      this.cachedFloorZ = floorZ;
+      startX = floorX;
+      startZ = floorZ;
       this.cachedStartX = startX;
       this.cachedStartZ = startZ;
-      this.cachedTileSize = tileSize;
 
-      // Rebuild the offscreen tile bitmap (reuse pre-allocated ImageData)
+      const queried = chunkManager.getTilesForMinimap(playerX, playerZ, VIEW_RADIUS);
       const tiles = queried.tiles;
       const walls = queried.walls;
       const roofs = queried.roofs;
-      const scaleInner = this.size / tileSize;
-      const imageData = this.imageData;
-      const data = imageData.data;
-      data.fill(0);
+      const textured = queried.textured;
+      const tcBuf = this.tileColorBuf;
 
-      const setPx = (fx: number, fz: number, r: number, g: number, b: number) => {
-        if (fx < 0 || fz < 0 || fx >= this.size || fz >= this.size) return;
-        const idx = (fz * this.size + fx) * 4;
-        data[idx] = r; data[idx + 1] = g; data[idx + 2] = b; data[idx + 3] = 255;
+      const clamp = (v: number) => v < 0 ? 0 : v > 255 ? 255 : v | 0;
+      const tileHash = (x: number, z: number): number => {
+        const h = (x * 73856093) ^ (z * 19349663);
+        return ((h & 0xff) / 255) * 6 - 3;
       };
 
-      // Deterministic per-tile noise so identical adjacent tiles aren't flat.
-      // Amplitude is small (-6..+6 per channel) to keep the painted feel.
-      const tileShade = (worldX: number, worldZ: number): number => {
-        const h = (worldX * 73856093) ^ (worldZ * 19349663);
-        return ((h & 0xff) / 255) * 12 - 6;
-      };
-      const clamp255 = (v: number) => v < 0 ? 0 : v > 255 ? 255 : v;
+      // Pre-fetch vertex heights into a grid for per-pixel hillshading
+      const hGridW = tileSize + 1;
+      const heights = new Float32Array(hGridW * hGridW);
+      for (let vz = 0; vz < hGridW; vz++) {
+        for (let vx = 0; vx < hGridW; vx++) {
+          heights[vz * hGridW + vx] = chunkManager.getVertexHeight(startX + vx, startZ + vz);
+        }
+      }
 
-      // Pass 1: fill each tile with its type color (+ roof tint + noise)
+      // Pass 1: base color per tile (tile type + subtle noise, NO height shading)
       for (let dz = 0; dz < tileSize; dz++) {
         for (let dx = 0; dx < tileSize; dx++) {
           const tIdx = dz * tileSize + dx;
+          const cIdx = tIdx * 4;
           const tileType = tiles[tIdx];
-          const isRoofed = roofs[tIdx] === 1;
-          const base = isRoofed
-            ? ROOF_TINT_RGB
-            : (TILE_COLORS_RGB[tileType] || TILE_COLOR_DEFAULT);
-          const shade = tileShade(startX + dx, startZ + dz);
-          const r = clamp255(base[0] + shade);
-          const g = clamp255(base[1] + shade);
-          const b = clamp255(base[2] + shade);
 
-          const px = Math.floor(dx * scaleInner);
-          const pz = Math.floor(dz * scaleInner);
-          const pw = Math.max(1, Math.ceil(scaleInner));
-          const ph = Math.max(1, Math.ceil(scaleInner));
+          const wallMask = walls[tIdx];
+          const isCollision = tileType === TileType.WALL
+            || (wallMask & 5) === 5    // N+S opposing walls (thick wall interior)
+            || (wallMask & 10) === 10; // E+W opposing walls
 
-          for (let ddx = 0; ddx < pw; ddx++) {
-            for (let ddz = 0; ddz < ph; ddz++) {
-              setPx(px + ddx, pz + ddz, r, g, b);
+          const isRoofed = !isCollision && roofs[tIdx] === 1;
+          const isTextured = !isCollision && textured[tIdx] === 1;
+          const base = isCollision ? TILE_COLORS[TileType.GRASS]
+            : isRoofed ? ROOF_COLOR
+            : isTextured ? FLOOR_COLOR
+            : (TILE_COLORS[tileType] ?? TILE_COLORS[TileType.GRASS]);
+          const wx = startX + dx;
+          const wz = startZ + dz;
+          const noise = tileHash(wx, wz);
+
+          if (tileType === TileType.WATER) {
+            const wn = tileHash(wx * 3, wz * 7);
+            tcBuf[cIdx]     = clamp(base[0] + wn * 0.5);
+            tcBuf[cIdx + 1] = clamp(base[1] + wn * 0.3);
+            tcBuf[cIdx + 2] = clamp(base[2] + wn * 0.2);
+          } else {
+            tcBuf[cIdx]     = clamp(base[0] + noise);
+            tcBuf[cIdx + 1] = clamp(base[1] + noise);
+            tcBuf[cIdx + 2] = clamp(base[2] + noise);
+          }
+          tcBuf[cIdx + 3] = 255;
+        }
+      }
+
+      // Flatten vertex heights around collision tiles so hillshade doesn't create visible blocks
+      for (let dz = 0; dz < tileSize; dz++) {
+        for (let dx = 0; dx < tileSize; dx++) {
+          const tIdx = dz * tileSize + dx;
+          if (tcBuf[tIdx * 4 + 3] === 0) continue; // skip unloaded
+          const tileType = tiles[tIdx];
+          const wallMask = walls[tIdx];
+          if (tileType === TileType.WALL
+            || (wallMask & 5) === 5
+            || (wallMask & 10) === 10
+          ) {
+            // Average the 4 corner heights of nearby non-collision tiles
+            let sum = 0, cnt = 0;
+            for (let nz = -1; nz <= 1; nz++) {
+              for (let nx = -1; nx <= 1; nx++) {
+                const ndx = dx + nx, ndz = dz + nz;
+                if (ndx < 0 || ndx >= tileSize || ndz < 0 || ndz >= tileSize) continue;
+                const nIdx = ndz * tileSize + ndx;
+                const nt = tiles[nIdx];
+                const nw = walls[nIdx];
+                if (nt !== TileType.WALL && (nw & 5) !== 5 && (nw & 10) !== 10) {
+                  sum += heights[ndz * hGridW + ndx];
+                  cnt++;
+                }
+              }
             }
+            const avg = cnt > 0 ? sum / cnt : 0;
+            heights[dz * hGridW + dx] = avg;
+            heights[dz * hGridW + dx + 1] = avg;
+            heights[(dz + 1) * hGridW + dx] = avg;
+            heights[(dz + 1) * hGridW + dx + 1] = avg;
           }
         }
       }
 
-      // Pass 2: overdraw wall edges as thick dark lines. At scale ≈ 3-4 px
-      // per tile a 2-pixel edge reads clearly, so walls look like buildings
-      // instead of hair-thin scratches.
-      const WR = WALL_STROKE_RGB[0], WG = WALL_STROKE_RGB[1], WB = WALL_STROKE_RGB[2];
-      const wallThickness = Math.max(1, Math.min(2, Math.floor(scaleInner / 2)));
+      // Pass 2: per-pixel render — bilinear color blend + continuous hillshade
+      const data = this.imageData.data;
+      data.fill(0);
+
+      const getTileColor = (tx: number, tz: number): number => {
+        if (tx < 0 || tx >= tileSize || tz < 0 || tz >= tileSize) return -1;
+        const idx = (tz * tileSize + tx) * 4;
+        if (tcBuf[idx + 3] === 0) return -1;
+        return idx;
+      };
+
+      for (let py = 0; py < RENDER_SIZE; py++) {
+        // Color interpolation coordinates (centered on tiles)
+        const colorFtZ = py / pxPerTile - 0.5;
+        const cTz0 = Math.floor(colorFtZ);
+        const cTz1 = cTz0 + 1;
+        const cFz = colorFtZ - cTz0;
+
+        // Height grid coordinates (pixel position in tile-space)
+        const htZ = py / pxPerTile;
+        const hTz = Math.floor(htZ);
+        const hFz = htZ - hTz;
+        const hTzClamped = hTz < 0 ? 0 : hTz >= tileSize ? tileSize - 1 : hTz;
+
+        for (let px = 0; px < RENDER_SIZE; px++) {
+          const colorFtX = px / pxPerTile - 0.5;
+          const cTx0 = Math.floor(colorFtX);
+          const cTx1 = cTx0 + 1;
+          const cFx = colorFtX - cTx0;
+
+          // Bilinear color blend from 4 nearest tile centers
+          const i00 = getTileColor(cTx0, cTz0);
+          const i10 = getTileColor(cTx1, cTz0);
+          const i01 = getTileColor(cTx0, cTz1);
+          const i11 = getTileColor(cTx1, cTz1);
+
+          let r = 0, g = 0, b = 0, tw = 0;
+          if (i00 >= 0) { const w = (1 - cFx) * (1 - cFz); r += tcBuf[i00] * w; g += tcBuf[i00 + 1] * w; b += tcBuf[i00 + 2] * w; tw += w; }
+          if (i10 >= 0) { const w = cFx * (1 - cFz);       r += tcBuf[i10] * w; g += tcBuf[i10 + 1] * w; b += tcBuf[i10 + 2] * w; tw += w; }
+          if (i01 >= 0) { const w = (1 - cFx) * cFz;       r += tcBuf[i01] * w; g += tcBuf[i01 + 1] * w; b += tcBuf[i01 + 2] * w; tw += w; }
+          if (i11 >= 0) { const w = cFx * cFz;             r += tcBuf[i11] * w; g += tcBuf[i11 + 1] * w; b += tcBuf[i11 + 2] * w; tw += w; }
+
+          if (tw <= 0) continue;
+
+          const inv = 1 / tw;
+          r *= inv; g *= inv; b *= inv;
+
+          // Per-pixel hillshade from vertex height grid
+          const htX = px / pxPerTile;
+          const hTx = Math.floor(htX);
+          const hFx = htX - hTx;
+          const hTxClamped = hTx < 0 ? 0 : hTx >= tileSize ? tileSize - 1 : hTx;
+
+          const h00 = heights[hTzClamped * hGridW + hTxClamped];
+          const h10 = heights[hTzClamped * hGridW + hTxClamped + 1];
+          const h01 = heights[(hTzClamped + 1) * hGridW + hTxClamped];
+          const h11 = heights[(hTzClamped + 1) * hGridW + hTxClamped + 1];
+
+          // Analytical gradient of bilinear surface
+          const dhdx = (h10 - h00) * (1 - hFz) + (h11 - h01) * hFz;
+          const dhdz = (h01 - h00) * (1 - hFx) + (h11 - h10) * hFx;
+
+          // NW directional hillshade (like cartographic relief shading)
+          const hillshade = (-dhdx * 0.7 - dhdz * 0.7) * 30;
+
+          const pidx = (py * RENDER_SIZE + px) * 4;
+          data[pidx]     = clamp(r + hillshade);
+          data[pidx + 1] = clamp(g + hillshade);
+          data[pidx + 2] = clamp(b + hillshade);
+          data[pidx + 3] = 255;
+        }
+      }
+
+      // Pass 3: wall lines (cream/white, RS2 style)
+      const wallThick = Math.max(1, (pxPerTile * 0.22) | 0);
       for (let dz = 0; dz < tileSize; dz++) {
         for (let dx = 0; dx < tileSize; dx++) {
           const mask = walls[dz * tileSize + dx];
           if (!mask) continue;
-          const px0 = Math.floor(dx * scaleInner);
-          const pz0 = Math.floor(dz * scaleInner);
-          const px1 = Math.floor((dx + 1) * scaleInner) - 1;
-          const pz1 = Math.floor((dz + 1) * scaleInner) - 1;
-          const drawH = (y: number) => { for (let x = px0; x <= px1; x++) setPx(x, y, WR, WG, WB); };
-          const drawV = (x: number) => { for (let z = pz0; z <= pz1; z++) setPx(x, z, WR, WG, WB); };
-          if (mask & WallEdge.N) for (let t = 0; t < wallThickness; t++) drawH(pz0 + t);
-          if (mask & WallEdge.S) for (let t = 0; t < wallThickness; t++) drawH(pz1 - t);
-          if (mask & WallEdge.W) for (let t = 0; t < wallThickness; t++) drawV(px0 + t);
-          if (mask & WallEdge.E) for (let t = 0; t < wallThickness; t++) drawV(px1 - t);
+          if (tiles[dz * tileSize + dx] === TileType.WALL) continue;
+          if ((mask & 5) === 5 || (mask & 10) === 10) continue;
+          const px0 = (dx * pxPerTile) | 0;
+          const pz0 = (dz * pxPerTile) | 0;
+          const px1 = ((dx + 1) * pxPerTile) | 0;
+          const pz1 = ((dz + 1) * pxPerTile) | 0;
+          const setW = (x: number, z: number) => {
+            if (x < 0 || x >= RENDER_SIZE || z < 0 || z >= RENDER_SIZE) return;
+            const idx = (z * RENDER_SIZE + x) * 4;
+            data[idx] = 0xdc; data[idx + 1] = 0xd8; data[idx + 2] = 0xc8; data[idx + 3] = 255;
+          };
+          if (mask & WallEdge.N) for (let t = 0; t < wallThick; t++) for (let x = px0; x < px1; x++) setW(x, pz0 + t);
+          if (mask & WallEdge.S) for (let t = 0; t < wallThick; t++) for (let x = px0; x < px1; x++) setW(x, pz1 - 1 - t);
+          if (mask & WallEdge.W) for (let t = 0; t < wallThick; t++) for (let z = pz0; z < pz1; z++) setW(px0 + t, z);
+          if (mask & WallEdge.E) for (let t = 0; t < wallThick; t++) for (let z = pz0; z < pz1; z++) setW(px1 - 1 - t, z);
         }
       }
 
-      this.offCtx.putImageData(imageData, 0, 0);
+      this.offCtx.putImageData(this.imageData, 0, 0);
+    } else {
+      startX = this.cachedStartX;
+      startZ = this.cachedStartZ;
     }
 
-    const scale = this.size / tileSize;
-    const center = this.size / 2;
+    const scale = pxPerTile;
+    const center = RENDER_SIZE / 2;
 
-    // Cache for click mapping
+    const playerPxX = (playerX - startX) * scale;
+    const playerPxZ = (playerZ - startZ) * scale;
+
     this.lastPlayerX = playerX;
     this.lastPlayerZ = playerZ;
     this.lastScale = scale;
     this.lastAlpha = cameraAlpha;
 
-    // Clear main canvas
-    this.ctx.clearRect(0, 0, this.size, this.size);
+    const ctx = this.ctx;
+    ctx.fillStyle = '#0c0a06';
+    ctx.fillRect(0, 0, RENDER_SIZE, RENDER_SIZE);
 
-    // Draw rotated content: tiles, entities, markers
-    // Rotate so "up" on the minimap = the direction the camera faces
-    // scale(1, -1) flips Y to correct BabylonJS left-handed coords vs canvas
-    this.ctx.save();
-    this.ctx.translate(center, center);
-    this.ctx.scale(-1, -1);
-    this.ctx.rotate(-(cameraAlpha + Math.PI / 2));
-    this.ctx.translate(-center, -center);
+    ctx.save();
+    ctx.translate(center, center);
+    ctx.scale(-1, -1);
+    ctx.rotate(-(cameraAlpha + Math.PI / 2));
+    ctx.translate(-playerPxX, -playerPxZ);
 
-    // Draw tile image (rotated)
-    this.ctx.drawImage(this.offCanvas, 0, 0);
+    ctx.drawImage(this.offCanvas, 0, 0);
 
-    // Draw world objects (trees, rocks, fishing spots, stations) as small colored dots
+    // Wall/fence objects — cream colored like wall lines
+    ctx.fillStyle = '#dcd8c8';
+    for (const wf of wallFenceObjects) {
+      const relX = (wf.x - startX) * scale;
+      const relZ = (wf.z - startZ) * scale;
+      ctx.fillRect(relX - 1.5, relZ - 1.5, 3, 3);
+    }
+
+    // World objects — cyan dots (RS Classic style)
+    ctx.fillStyle = '#00ffff';
     for (const obj of worldObjects) {
-      const color = OBJECT_COLORS[obj.category];
-      if (!color) continue;
+      if (!INTERACTIVE_CATEGORIES.has(obj.category)) continue;
       const relX = (obj.x - startX) * scale;
       const relZ = (obj.z - startZ) * scale;
-      if (relX < -2 || relX > this.size + 2 || relZ < -2 || relZ > this.size + 2) continue;
-      this.ctx.fillStyle = color;
-      this.ctx.fillRect(relX - 1, relZ - 1, 2, 2);
+      ctx.beginPath();
+      ctx.arc(relX, relZ, 2.5, 0, Math.PI * 2);
+      ctx.fill();
     }
 
-    // Draw NPCs as yellow dots
-    this.ctx.fillStyle = '#ff0';
+    // NPCs: yellow
+    ctx.fillStyle = '#e8e820';
     for (const npc of npcs) {
-      const relX = (npc.x - startX) * scale;
-      const relZ = (npc.z - startZ) * scale;
-      if (relX >= -4 && relX < this.size + 4 && relZ >= -4 && relZ < this.size + 4) {
-        this.ctx.fillRect(relX - 1, relZ - 1, 3, 3);
-      }
+      ctx.fillRect((npc.x - startX) * scale - 2, (npc.z - startZ) * scale - 2.5, 4, 5);
     }
 
-    // Draw remote players as white dots
-    this.ctx.fillStyle = '#fff';
+    // Remote players: white
+    ctx.fillStyle = '#ffffff';
     for (const rp of remotePlayers) {
-      const relX = (rp.x - startX) * scale;
-      const relZ = (rp.z - startZ) * scale;
-      if (relX >= -4 && relX < this.size + 4 && relZ >= -4 && relZ < this.size + 4) {
-        this.ctx.fillRect(relX - 1, relZ - 1, 3, 3);
-      }
+      ctx.fillRect((rp.x - startX) * scale - 2, (rp.z - startZ) * scale - 2.5, 4, 5);
     }
 
-    // Draw destination marker (yellow blinking X)
+    // Destination: red flag
     if (this.destX !== null && this.destZ !== null) {
-      this.destBlinkTimer += 0.016; // ~60fps
-      const blink = Math.sin(this.destBlinkTimer * 6) > -0.3; // mostly on, brief off
-      if (blink) {
+      this.destBlinkTimer += 0.016;
+      if (Math.sin(this.destBlinkTimer * 6) > -0.3) {
         const dx = (this.destX - startX) * scale;
         const dz = (this.destZ - startZ) * scale;
-        if (dx >= -4 && dx < this.size + 4 && dz >= -4 && dz < this.size + 4) {
-          this.ctx.strokeStyle = '#ff0';
-          this.ctx.lineWidth = 1.5;
-          this.ctx.beginPath();
-          this.ctx.moveTo(dx - 3, dz - 3);
-          this.ctx.lineTo(dx + 3, dz + 3);
-          this.ctx.moveTo(dx + 3, dz - 3);
-          this.ctx.lineTo(dx - 3, dz + 3);
-          this.ctx.stroke();
-        }
+        ctx.fillStyle = '#ff2020';
+        ctx.fillRect(dx, dz - 8, 1.5, 9);
+        ctx.beginPath();
+        ctx.moveTo(dx + 1.5, dz - 8);
+        ctx.lineTo(dx + 7, dz - 5);
+        ctx.lineTo(dx + 1.5, dz - 2);
+        ctx.closePath();
+        ctx.fill();
       }
     }
 
-    this.ctx.restore();
+    ctx.restore();
 
-    // Player marker: RSC-style arrow pointing in the camera's forward
-    // direction. Since the tile layer is rotated to match the camera, "up"
-    // on the canvas is always forward for the player.
-    this.ctx.save();
-    this.ctx.translate(center, center);
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.strokeStyle = '#000000';
-    this.ctx.lineWidth = 1;
-    this.ctx.beginPath();
-    this.ctx.moveTo(0, -4);   // tip
-    this.ctx.lineTo(3, 3);    // back-right
-    this.ctx.lineTo(0, 1);    // notch (arrow shape, not triangle)
-    this.ctx.lineTo(-3, 3);   // back-left
-    this.ctx.closePath();
-    this.ctx.fill();
-    this.ctx.stroke();
-    this.ctx.restore();
+    // Player arrow (always centered)
+    ctx.save();
+    ctx.translate(center, center);
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, -7);
+    ctx.lineTo(5, 5);
+    ctx.lineTo(0, 2);
+    ctx.lineTo(-5, 5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
   }
 }

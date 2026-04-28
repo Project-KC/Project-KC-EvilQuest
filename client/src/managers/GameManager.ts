@@ -9,6 +9,7 @@ import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode';
 import { Skeleton } from '@babylonjs/core/Bones/skeleton';
+import { SceneLoader } from '@babylonjs/core/Loading/sceneLoader';
 import '@babylonjs/loaders/glTF';
 import { ChunkManager } from '../rendering/ChunkManager';
 import { GameCamera } from '../rendering/Camera';
@@ -74,8 +75,13 @@ export class GameManager {
   private _minimapRemotes: { x: number; z: number }[] = [];
   private _minimapNpcs: { x: number; z: number }[] = [];
   private _minimapObjects: { x: number; z: number; category: string }[] = [];
+  private _minimapWallFence: { x: number; z: number }[] = [];
   // NOTE: do NOT reuse a single Vector3 for entity positions — the setter stores the reference
-  private _splatVp = new Viewport(0, 0, 1, 1); // reusable viewport for hit splat projection
+  private _overlayVp = new Viewport(0, 0, 1, 1);
+  private _overlayTransform = Matrix.Identity();
+  private _overlayTransformReady = false;
+  private _overlayWorldPos = new Vector3();
+  private _overlayScreenPos = new Vector3();
 
   // Local player equipment tracking (slot index → item ID)
   private localEquipment: Map<number, number> = new Map();
@@ -119,6 +125,9 @@ export class GameManager {
   private hiddenRoofNodes: TransformNode[] = [];
   private _lastIndoorTileX: number = -9999;
   private _lastIndoorTileZ: number = -9999;
+  private _lastBiomeCX: number = -9999;
+  private _lastBiomeCZ: number = -9999;
+  private _lastBiomeDef: BiomeDef | undefined = undefined;
   private _roofDedup: Set<TransformNode> = new Set();
   private skillingObjectId: number = -1;
 
@@ -139,6 +148,8 @@ export class GameManager {
   private armorBrowser: ArmorBrowserPanel | null = null;
   private armorPreviewNodes: Map<string, TransformNode> = new Map();
   private armorSkeletons: Map<string, Skeleton> = new Map();
+  private _charBoneMap: Map<string, TransformNode> | null = null;
+  private _charBoneMapSkeleton: Skeleton | null = null;
   private shopPanel: ShopPanel | null = null;
   private smithingPanel: SmithingPanel | null = null;
 
@@ -159,6 +170,17 @@ export class GameManager {
     // Groups 1 (water) and 2 (texture planes) must NOT clear depth — they need terrain depth from group 0
     this.scene.setRenderingAutoClearDepthStencil(1, false, false, false);
     this.scene.setRenderingAutoClearDepthStencil(2, false, false, false);
+    // skipPointerMovePicking disabled — InputManager relies on pointer events
+
+    // Disable unused Babylon subsystems to skip per-frame checks
+    this.scene.lensFlaresEnabled = false;
+    this.scene.particlesEnabled = false;
+    this.scene.spritesEnabled = false;
+    this.scene.proceduralTexturesEnabled = false;
+    this.scene.physicsEnabled = false;
+    this.scene.postProcessesEnabled = false;
+    this.scene.probesEnabled = false;
+    this.scene.audioEnabled = false;
 
     // Lighting — matched to KC editor's Three.js scene for correct terrain colors
     const ambient = new HemisphericLight('ambient', new Vector3(0, 1, 0), this.scene);
@@ -373,6 +395,9 @@ export class GameManager {
   private async loadBiomes(mapId: string): Promise<void> {
     this.biomesFile = null;
     this.biomeById.clear();
+    this._lastBiomeCX = -9999;
+    this._lastBiomeCZ = -9999;
+    this._lastBiomeDef = undefined;
     try {
       const res = await fetch(`/maps/${mapId}/biomes.json`);
       if (!res.ok) return;
@@ -396,8 +421,13 @@ export class GameManager {
     if (this.biomesFile) {
       const cx = Math.floor(this.playerX / BIOME_CELL_SIZE);
       const cz = Math.floor(this.playerZ / BIOME_CELL_SIZE);
-      const id = this.biomesFile.cells[`${cx},${cz}`];
-      const biome = id != null ? this.biomeById.get(id) : undefined;
+      if (cx !== this._lastBiomeCX || cz !== this._lastBiomeCZ) {
+        this._lastBiomeCX = cx;
+        this._lastBiomeCZ = cz;
+        const id = this.biomesFile.cells[`${cx},${cz}`];
+        this._lastBiomeDef = id != null ? this.biomeById.get(id) : undefined;
+      }
+      const biome = this._lastBiomeDef;
       if (biome) {
         targetColor = biome.fogColor;
         targetStart = biome.fogStart;
@@ -1780,22 +1810,61 @@ export class GameManager {
           if (!this.localPlayer) throw new Error('No local player');
           const boneConfig = EQUIP_SLOT_BONES[slot];
           if (!boneConfig) throw new Error('Unknown slot: ' + slot);
-          const gearDef: GearDef = {
-            itemId: -999,
-            file: path,
-            boneName: boneConfig.boneName,
-            localPosition: boneConfig.localPosition,
-            localRotation: boneConfig.localRotation,
-            scale: boneConfig.scale,
-            centerOrigin: false,
-          };
-          const tmpl = await loadGearTemplate(this.scene, gearDef);
-          if (!tmpl) throw new Error('Failed to load ' + path);
-          this.localPlayer.attachGear(slot, -999, tmpl);
+
+          const lastSlash = path.lastIndexOf('/');
+          const dir = path.substring(0, lastSlash + 1);
+          const file = path.substring(lastSlash + 1);
+          const result = await SceneLoader.ImportMeshAsync('', dir, file, this.scene);
+          const hasSkeleton = result.skeletons.length > 0;
+
+          if (hasSkeleton) {
+            this.localPlayer.detachGear(slot);
+            const prevNode = this.armorPreviewNodes.get(slot);
+            if (prevNode) prevNode.dispose();
+            const prevSkel = this.armorSkeletons.get(slot);
+            if (prevSkel) prevSkel.dispose();
+
+            const root = new TransformNode(`gearDebug_${slot}`, this.scene);
+            const loaderRoot = result.meshes.find(m => m.name === '__root__');
+            for (const mesh of result.meshes) {
+              if (!mesh.parent || mesh.parent.name === '__root__') mesh.parent = root;
+            }
+            if (loaderRoot) {
+              for (const child of loaderRoot.getChildren()) (child as TransformNode).parent = root;
+            }
+
+            const charRoot = this.localPlayer.getRoot?.();
+            if (charRoot) {
+              root.parent = charRoot;
+              root.rotationQuaternion = null;
+              root.position.set(0, 0, 0);
+              root.rotation.set(0, 0, 0);
+              root.scaling.set(1, 1, 1);
+            }
+            this.armorPreviewNodes.set(slot, root);
+            this.armorSkeletons.set(slot, result.skeletons[0]);
+          } else {
+            const gearDef: GearDef = {
+              itemId: -999,
+              file: path,
+              boneName: boneConfig.boneName,
+              localPosition: boneConfig.localPosition,
+              localRotation: boneConfig.localRotation,
+              scale: boneConfig.scale,
+              centerOrigin: false,
+            };
+            const tmpl = await loadGearTemplate(this.scene, gearDef);
+            if (!tmpl) throw new Error('Failed to load ' + path);
+            this.localPlayer.attachGear(slot, -999, tmpl);
+          }
         });
         this.gearDebugPanel.setUnequipCallback((slot) => {
           if (!this.localPlayer) return;
           this.localPlayer.detachGear(slot);
+          const prevNode = this.armorPreviewNodes.get(slot);
+          if (prevNode) { prevNode.dispose(); this.armorPreviewNodes.delete(slot); }
+          const prevSkel = this.armorSkeletons.get(slot);
+          if (prevSkel) { prevSkel.dispose(); this.armorSkeletons.delete(slot); }
         });
         this.gearDebugPanel.setAnimCallback((anim) => {
           if (!this.localPlayer) return;
@@ -2187,30 +2256,36 @@ export class GameManager {
 
   private static readonly MAX_OVERLAY_DIST_SQ = 45 * 45;
 
-  private updateOverlayPositions(): void {
+  private ensureOverlayTransform(): boolean {
+    if (this._overlayTransformReady) return true;
     const cam = this.scene.activeCamera;
-    if (!cam) return;
+    if (!cam) return false;
+    cam.getViewMatrix().multiplyToRef(cam.getProjectionMatrix(), this._overlayTransform);
+    const w = this.engine.getRenderWidth();
+    const h = this.engine.getRenderHeight();
+    this._overlayVp.x = 0; this._overlayVp.y = 0;
+    this._overlayVp.width = w; this._overlayVp.height = h;
+    this._overlayTransformReady = true;
+    return true;
+  }
 
-    const engine = this.engine;
-    const w = engine.getRenderWidth();
-    const h = engine.getRenderHeight();
-    const viewMatrix = cam.getViewMatrix();
-    const projMatrix = cam.getProjectionMatrix();
-    const transform = viewMatrix.multiply(projMatrix);
-    const viewport = new Viewport(0, 0, w, h);
+  private updateOverlayPositions(): void {
+    if (!this.ensureOverlayTransform()) return;
+    const cam = this.scene.activeCamera!;
+    const transform = this._overlayTransform;
+    const vp = this._overlayVp;
     const identity = GameManager.IDENTITY;
     const camPos = cam.position;
     const maxDistSq = GameManager.MAX_OVERLAY_DIST_SQ;
+    const screenPos = this._overlayScreenPos;
 
     const projectOverlay = (
-      getWorldPos: () => Vector3 | null,
+      worldPos: Vector3,
       updateScreenPos: (x: number, y: number) => void,
     ) => {
-      const worldPos = getWorldPos();
-      if (!worldPos) return;
-      const sp = Vector3.Project(worldPos, identity, transform, viewport);
-      if (sp.z > 0 && sp.z < 1) {
-        updateScreenPos(sp.x, sp.y);
+      Vector3.ProjectToRef(worldPos, identity, transform, vp, screenPos);
+      if (screenPos.z > 0 && screenPos.z < 1) {
+        updateScreenPos(screenPos.x, screenPos.y);
       } else {
         updateScreenPos(-9999, -9999);
       }
@@ -2233,8 +2308,14 @@ export class GameManager {
         }
       }
 
-      if (hasBubble) projectOverlay(() => sprite.getChatBubbleWorldPos(), (x, y) => sprite.updateChatBubbleScreenPos(x, y));
-      if (hasBar) projectOverlay(() => sprite.getHealthBarWorldPos(), (x, y) => sprite.updateHealthBarScreenPos(x, y));
+      if (hasBubble) {
+        const wp = sprite.getChatBubbleWorldPos(this._overlayWorldPos);
+        if (wp) projectOverlay(wp, (x, y) => sprite.updateChatBubbleScreenPos(x, y));
+      }
+      if (hasBar) {
+        const wp = sprite.getHealthBarWorldPos(this._overlayWorldPos);
+        if (wp) projectOverlay(wp, (x, y) => sprite.updateHealthBarScreenPos(x, y));
+      }
     };
 
     if (this.localPlayer) projectSprite(this.localPlayer, true);
@@ -2281,27 +2362,33 @@ export class GameManager {
 
   private updateThinkingBubble(): void {
     if (!this.thinkingBubble || !this.localPlayer) return;
-    const cam = this.scene.activeCamera;
-    if (!cam) return;
-    const pos = this.localPlayer.position.clone();
-    pos.y += 2.2; // above player head
-    const screenPos = Vector3.Project(pos, Matrix.Identity(),
-      cam.getViewMatrix().multiply(cam.getProjectionMatrix()),
-      new Viewport(0, 0, this.engine.getRenderWidth(), this.engine.getRenderHeight()));
-    this.thinkingBubble.style.left = `${screenPos.x - 20}px`;
-    this.thinkingBubble.style.top = `${screenPos.y - 48}px`;
+    if (!this.ensureOverlayTransform()) return;
+    const wp = this._overlayWorldPos;
+    wp.copyFrom(this.localPlayer.position);
+    wp.y += 2.2;
+    Vector3.ProjectToRef(wp, GameManager.IDENTITY, this._overlayTransform, this._overlayVp, this._overlayScreenPos);
+    this.thinkingBubble.style.left = `${this._overlayScreenPos.x - 20}px`;
+    this.thinkingBubble.style.top = `${this._overlayScreenPos.y - 48}px`;
   }
 
   private syncArmorBones(): void {
     const charSkeleton = this.localPlayer?.getSkeleton?.();
     if (!charSkeleton) return;
+    if (this._charBoneMapSkeleton !== charSkeleton) {
+      this._charBoneMapSkeleton = charSkeleton;
+      this._charBoneMap = new Map();
+      for (const bone of charSkeleton.bones) {
+        const tn = bone.getTransformNode();
+        if (tn) this._charBoneMap.set(bone.name, tn);
+      }
+    }
+    const boneMap = this._charBoneMap!;
     for (const armorSkeleton of this.armorSkeletons.values()) {
       for (const armorBone of armorSkeleton.bones) {
-        const charBone = charSkeleton.bones.find(b => b.name === armorBone.name);
-        if (!charBone) continue;
-        const charTN = charBone.getTransformNode();
+        const charTN = boneMap.get(armorBone.name);
+        if (!charTN) continue;
         const armorTN = armorBone.getTransformNode();
-        if (!charTN || !armorTN) continue;
+        if (!armorTN) continue;
         if (charTN.rotationQuaternion) {
           if (!armorTN.rotationQuaternion) {
             armorTN.rotationQuaternion = charTN.rotationQuaternion.clone();
@@ -2344,7 +2431,6 @@ export class GameManager {
     this.entities.interpolateRemotePlayers(dt, camPos);
     this.entities.interpolateNpcs(dt, camPos, this.localPlayerId, this.localPlayer?.position ?? null);
 
-    this.updateHitSplats(dt);
     this.updateIndoorDetection();
 
     if (this.localPlayer) {
@@ -2352,7 +2438,9 @@ export class GameManager {
       this.camera.followTarget(this._tempVec);
     }
 
+    this._overlayTransformReady = false;
     this.updateOverlayPositions();
+    this.updateHitSplats(dt);
     this.updateThinkingBubble();
     this.updateMinimap();
   }
@@ -2469,12 +2557,9 @@ export class GameManager {
   }
 
   private updateHitSplats(dt: number): void {
-    const cam = this.scene.activeCamera;
-    if (!cam || this.hitSplats.length === 0) return;
-    const w = this.engine.getRenderWidth();
-    const h = this.engine.getRenderHeight();
-    const transform = cam.getViewMatrix().multiply(cam.getProjectionMatrix());
-    this._splatVp.x = 0; this._splatVp.y = 0; this._splatVp.width = w; this._splatVp.height = h;
+    if (this.hitSplats.length === 0) return;
+    if (!this.ensureOverlayTransform()) return;
+    const sp = this._overlayScreenPos;
 
     let writeIdx = 0;
     for (let i = 0; i < this.hitSplats.length; i++) {
@@ -2485,9 +2570,9 @@ export class GameManager {
         splat.el.remove();
       } else {
         splat.el.style.opacity = (splat.timer < 0.3 ? splat.timer / 0.3 : 1).toString();
-        const screenPos = Vector3.Project(splat.worldPos, Matrix.Identity(), transform, this._splatVp);
-        splat.el.style.left = `${screenPos.x}px`;
-        splat.el.style.top = `${screenPos.y}px`;
+        Vector3.ProjectToRef(splat.worldPos, GameManager.IDENTITY, this._overlayTransform, this._overlayVp, sp);
+        splat.el.style.left = `${sp.x}px`;
+        splat.el.style.top = `${sp.y}px`;
         this.hitSplats[writeIdx++] = splat;
       }
     }
@@ -2548,6 +2633,7 @@ export class GameManager {
       if (!def) continue;
       this._minimapObjects.push({ x: data.x, z: data.z, category: def.category });
     }
+    this._minimapWallFence = this.chunkManager.getWallFenceObjectsForMinimap(this.playerX, this.playerZ, 22);
     const camAlpha = this.camera.getCamera().alpha;
     this.minimap.update(
       this.playerX, this.playerZ,
@@ -2555,6 +2641,7 @@ export class GameManager {
       this.chunkManager,
       camAlpha,
       this._minimapObjects,
+      this._minimapWallFence,
     );
   }
 }

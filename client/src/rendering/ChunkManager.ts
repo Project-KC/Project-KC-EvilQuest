@@ -5,11 +5,12 @@ import { Color3, Color4 } from '@babylonjs/core/Maths/math.color';
 import { Mesh } from '@babylonjs/core/Meshes/mesh';
 import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder';
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData';
-import { Vector3, Quaternion } from '@babylonjs/core/Maths/math.vector';
+import { Vector3, Quaternion, Matrix, TmpVectors } from '@babylonjs/core/Maths/math.vector';
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode';
 import { Texture } from '@babylonjs/core/Materials/Textures/texture';
 import { SceneLoader } from '@babylonjs/core/Loading/sceneLoader';
 import { AnimationGroup } from '@babylonjs/core/Animations/animationGroup';
+import { BoundingInfo } from '@babylonjs/core/Culling/boundingInfo';
 import '@babylonjs/loaders/glTF';
 import { CHUNK_SIZE, CHUNK_LOAD_RADIUS, TILE_SIZE, TileType, BLOCKING_TILES, WallEdge, DEFAULT_WALL_HEIGHT, groundTypeToTileType, shouldTileRenderWater, classifyTileType } from '@projectrs/shared';
 import { ASSET_TO_OBJECT_DEF, STAIR_ASSET_CONFIG, rotateStairDirection } from '@projectrs/shared';
@@ -140,6 +141,7 @@ export class ChunkManager {
   /** Callback fired when a chunk's placed objects finish loading */
   private onChunkObjectsLoaded: ((chunkKey: string) => void) | null = null;
   private texturePlaneMeshes: Mesh[] = [];
+  private texturePlanesByChunk: Map<string, Mesh[]> = new Map();
   private assetRegistry: Map<string, { path: string }> = new Map();
   private loadedModelCache: Map<string, TransformNode | null> = new Map();
   private modelAnimationGroups: Map<string, AnimationGroup[]> = new Map();
@@ -147,6 +149,8 @@ export class ChunkManager {
   private textureCache: Map<string, Texture> = new Map();
   private textureRegistry: Map<string, { path: string }> = new Map();
   private overlayMatCache: Map<string, StandardMaterial> = new Map();
+  private templateBaseMatrices: Map<string, { sourceMesh: Mesh; baseMatrix: Matrix }[]> = new Map();
+  private chunkThinInstSources: Map<string, Mesh[]> = new Map();
 
   constructor(scene: Scene) {
     this.scene = scene;
@@ -501,6 +505,7 @@ export class ChunkManager {
           floorSet.floor?.setEnabled(true);
           floorSet.stairs?.setEnabled(true);
         }
+        this.setChunkPlacedObjectsEnabled(key, true);
       } else if (keep.has(key)) {
         // Just hide — meshes stay allocated for fast re-show.
         meshes.ground.setEnabled(false);
@@ -518,6 +523,7 @@ export class ChunkManager {
           floorSet.floor?.setEnabled(false);
           floorSet.stairs?.setEnabled(false);
         }
+        this.setChunkPlacedObjectsEnabled(key, false);
       } else {
         meshes.ground.dispose();
         meshes.water?.dispose();
@@ -536,6 +542,13 @@ export class ChunkManager {
         }
         this.chunks.delete(key);
       }
+    }
+
+    // Toggle texture planes by chunk — these are loaded globally so may exist
+    // in chunks that don't have terrain meshes in this.chunks.
+    for (const [key, planes] of this.texturePlanesByChunk) {
+      const show = desired.has(key);
+      for (const m of planes) m.setEnabled(show);
     }
 
     // In chunked mode, trigger on-demand loading of needed editor chunks
@@ -1290,7 +1303,16 @@ export class ChunkManager {
           }
           mesh.material = mat;
           mesh.isPickable = false;
-          this.texturePlaneMeshes.push(mesh); // reuse disposal list
+          mesh.freezeWorldMatrix();
+          mesh.doNotSyncBoundingInfo = true;
+          this.texturePlaneMeshes.push(mesh);
+
+          const ocx = Math.floor(x / CHUNK_SIZE);
+          const ocz = Math.floor(z / CHUNK_SIZE);
+          const okey = `${ocx},${ocz}`;
+          let oarr = this.texturePlanesByChunk.get(okey);
+          if (!oarr) { oarr = []; this.texturePlanesByChunk.set(okey, oarr); }
+          oarr.push(mesh);
         };
 
         if (tile.textureHalfMode) {
@@ -2019,26 +2041,62 @@ export class ChunkManager {
     return false;
   }
 
-  getTilesForMinimap(centerX: number, centerZ: number, radius: number): { tiles: Uint8Array; walls: Uint8Array; roofs: Uint8Array; size: number; startX: number; startZ: number } {
+  getTilesForMinimap(centerX: number, centerZ: number, radius: number): { tiles: Uint8Array; walls: Uint8Array; roofs: Uint8Array; textured: Uint8Array; size: number; startX: number; startZ: number } {
     const size = radius * 2;
     const startX = Math.floor(centerX) - radius;
     const startZ = Math.floor(centerZ) - radius;
     const tiles = new Uint8Array(size * size);
     const walls = new Uint8Array(size * size);
     const roofs = new Uint8Array(size * size);
+    const textured = new Uint8Array(size * size);
     for (let dz = 0; dz < size; dz++) {
       for (let dx = 0; dx < size; dx++) {
         const idx = dz * size + dx;
         const tx = startX + dx;
         const tz = startZ + dz;
+        if (this.activeChunks && !this.activeChunks.has(`${Math.floor(tx / 64)},${Math.floor(tz / 64)}`)) {
+          tiles[idx] = TileType.WALL;
+          continue;
+        }
         tiles[idx] = this.getTileTypeRaw(tx, tz);
         walls[idx] = this.getWallRaw(tx, tz);
         if (tx >= 0 && tz >= 0 && tx < this.mapWidth && tz < this.mapHeight) {
           if (this.roofData.has(tz * this.mapWidth + tx)) roofs[idx] = 1;
+          const kcTile = this.getTileRaw(tx, tz);
+          if (kcTile && kcTile.textureId) textured[idx] = 1;
         }
       }
     }
-    return { tiles, walls, roofs, size, startX, startZ };
+    return { tiles, walls, roofs, textured, size, startX, startZ };
+  }
+
+  private static readonly WALL_FENCE_RE = /wall|fence|halfwall/i;
+
+  getWallFenceObjectsForMinimap(centerX: number, centerZ: number, radius: number): { x: number; z: number }[] {
+    const result: { x: number; z: number }[] = [];
+    const minX = centerX - radius;
+    const maxX = centerX + radius;
+    const minZ = centerZ - radius;
+    const maxZ = centerZ + radius;
+    const minCX = Math.floor(minX / CHUNK_SIZE);
+    const maxCX = Math.floor(maxX / CHUNK_SIZE);
+    const minCZ = Math.floor(minZ / CHUNK_SIZE);
+    const maxCZ = Math.floor(maxZ / CHUNK_SIZE);
+    for (let cz = minCZ; cz <= maxCZ; cz++) {
+      for (let cx = minCX; cx <= maxCX; cx++) {
+        const bucket = this.placedObjectsByChunk.get(`${cx},${cz}`);
+        if (!bucket) continue;
+        for (const obj of bucket) {
+          const ox = obj.position.x;
+          const oz = obj.position.z;
+          if (ox >= minX && ox <= maxX && oz >= minZ && oz <= maxZ
+            && ChunkManager.WALL_FENCE_RE.test(obj.assetId)) {
+            result.push({ x: ox, z: oz });
+          }
+        }
+      }
+    }
+    return result;
   }
 
   isGroundMesh(meshName: string): boolean {
@@ -2295,6 +2353,33 @@ export class ChunkManager {
     }
   }
 
+  private getTemplateBaseMatrices(assetId: string, template: TransformNode): { sourceMesh: Mesh; baseMatrix: Matrix }[] {
+    if (this.templateBaseMatrices.has(assetId)) return this.templateBaseMatrices.get(assetId)!;
+    // Force full hierarchy recompute — disabled nodes have stale matrices
+    const allNodes: TransformNode[] = [template];
+    template.getChildTransformNodes(false).forEach(n => allNodes.push(n));
+    for (const n of allNodes) n.computeWorldMatrix(true);
+
+    const templateWorld = template.getWorldMatrix();
+    const templateInv = new Matrix();
+    templateWorld.invertToRef(templateInv);
+    const entries: { sourceMesh: Mesh; baseMatrix: Matrix }[] = [];
+    for (const child of template.getChildMeshes(false)) {
+      if (child.getTotalVertices() === 0) continue;
+      entries.push({ sourceMesh: child as Mesh, baseMatrix: child.getWorldMatrix().multiply(templateInv) });
+    }
+    this.templateBaseMatrices.set(assetId, entries);
+    return entries;
+  }
+
+  private canThinInstance(obj: PlacedObject): boolean {
+    if (obj.assetId in ASSET_TO_OBJECT_DEF) return false;
+    if (obj.assetId in STAIR_ASSET_CONFIG) return false;
+    if (obj.assetId.toLowerCase().includes('roof')) return false;
+    if (this.modelAnimationGroups.has(obj.assetId)) return false;
+    return true;
+  }
+
   /** Index placed objects by chunk key — no mesh instantiation, just data bucketing */
   private indexPlacedObjectsByChunk(objects: PlacedObject[]): void {
     this.placedObjectsByChunk.clear();
@@ -2353,12 +2438,109 @@ export class ChunkManager {
       return;
     }
 
+    // Split into thin-instanceable (static decorations) vs regular (interactable/animated/roofs/stairs).
+    // Need to load templates first so canThinInstance can check for animations.
+    const templatePromises = new Map<string, Promise<TransformNode | null>>();
+    for (const obj of objects) {
+      if (!templatePromises.has(obj.assetId)) {
+        templatePromises.set(obj.assetId, this.loadGLBModel(obj.assetId));
+      }
+    }
+    await Promise.all(templatePromises.values());
+
+    const regularObjects: PlacedObject[] = [];
+    const thinGroups = new Map<string, PlacedObject[]>();
+    for (const obj of objects) {
+      if (!this.loadedModelCache.get(obj.assetId)) continue;
+      if (this.canThinInstance(obj)) {
+        let group = thinGroups.get(obj.assetId);
+        if (!group) { group = []; thinGroups.set(obj.assetId, group); }
+        group.push(obj);
+      } else {
+        regularObjects.push(obj);
+      }
+    }
+
+    // --- Thin instances: one source mesh per sub-mesh per asset per chunk ---
+    const thinSources: Mesh[] = [];
+    let thinCount = 0;
+    const _tmpMatrix = Matrix.Identity();
+    const _placementMatrix = Matrix.Identity();
+
+    for (const [assetId, placements] of thinGroups) {
+      const template = this.loadedModelCache.get(assetId)!;
+      const baseEntries = this.getTemplateBaseMatrices(assetId, template);
+      if (baseEntries.length === 0) continue;
+
+      const assetDef = this.assetRegistry.get(assetId);
+      const treeBoost = assetDef?.path?.toLowerCase().includes('tree') ? 1.15 : 1.0;
+
+      for (const { sourceMesh, baseMatrix } of baseEntries) {
+        const src = sourceMesh.clone(`thin_${chunkKey}_${assetId}_${sourceMesh.name}`, null)!;
+        src.parent = null;
+        src.position.set(0, 0, 0);
+        src.rotation.set(0, 0, 0);
+        src.rotationQuaternion = null;
+        src.scaling.set(1, 1, 1);
+        src.setEnabled(true);
+        src.makeGeometryUnique();
+        const mat = src.material;
+        if (mat) {
+          if ((mat as any).transparencyMode !== undefined) (mat as any).transparencyMode = 1;
+          (mat as any).alpha = 1;
+          mat.backFaceCulling = false;
+          (mat as any).freeze?.();
+        }
+        src.isPickable = false;
+
+        for (const obj of placements) {
+          const { x: orx, y: ory, z: orz } = obj.rotation;
+          const quat = Quaternion.RotationAxis(Vector3.Right(), orx)
+            .multiply(Quaternion.RotationAxis(Vector3.Up(), ory))
+            .multiply(Quaternion.RotationAxis(Vector3.Forward(), orz));
+          const sx = obj.scale.x * treeBoost, sy = obj.scale.y * treeBoost, sz = obj.scale.z * treeBoost;
+          Matrix.ComposeToRef(
+            TmpVectors.Vector3[0].set(sx, sy, sz),
+            quat,
+            TmpVectors.Vector3[1].set(obj.position.x, obj.position.y, obj.position.z),
+            _placementMatrix
+          );
+          baseMatrix.multiplyToRef(_placementMatrix, _tmpMatrix);
+          src.thinInstanceAdd(_tmpMatrix);
+        }
+        // Compute AABB from instance translations + generous padding
+        const pad = 5;
+        let bMinX = Infinity, bMinY = Infinity, bMinZ = Infinity;
+        let bMaxX = -Infinity, bMaxY = -Infinity, bMaxZ = -Infinity;
+        const matBuf = (src as any)._thinInstanceDataStorage?.matrixData;
+        if (matBuf) {
+          for (let i = 0; i < src.thinInstanceCount; i++) {
+            const tx = matBuf[i * 16 + 12], ty = matBuf[i * 16 + 13], tz = matBuf[i * 16 + 14];
+            if (tx - pad < bMinX) bMinX = tx - pad;
+            if (ty - pad < bMinY) bMinY = ty - pad;
+            if (tz - pad < bMinZ) bMinZ = tz - pad;
+            if (tx + pad > bMaxX) bMaxX = tx + pad;
+            if (ty + pad > bMaxY) bMaxY = ty + pad;
+            if (tz + pad > bMaxZ) bMaxZ = tz + pad;
+          }
+          src.setBoundingInfo(new BoundingInfo(
+            new Vector3(bMinX, bMinY, bMinZ),
+            new Vector3(bMaxX, bMaxY, bMaxZ)
+          ));
+        }
+        src.doNotSyncBoundingInfo = true;
+        thinSources.push(src);
+      }
+      thinCount += placements.length;
+    }
+    this.chunkThinInstSources.set(chunkKey, thinSources);
+
+    // --- Regular instances: interactable, animated, roofs, stairs ---
     const nodes: TransformNode[] = [];
     const anims: AnimationGroup[] = [];
     let idx = 0;
-    for (const obj of objects) {
-      const template = await this.loadGLBModel(obj.assetId);
-      if (!template) continue;
+    for (const obj of regularObjects) {
+      const template = this.loadedModelCache.get(obj.assetId)!;
 
       const instance = template.instantiateHierarchy(null, undefined, (source, cloned) => {
         cloned.name = `placed_${chunkKey}_${idx}_${source.name}`;
@@ -2375,7 +2557,6 @@ export class ChunkManager {
       }
       const root = instance;
 
-      // Clone and play animations if asset has them
       const templateAnims = this.modelAnimationGroups.get(obj.assetId);
       if (templateAnims) {
         const clonedNodes = new Map<string, any>();
@@ -2414,7 +2595,6 @@ export class ChunkManager {
       root.scaling = new Vector3(obj.scale.x * treeBoost, obj.scale.y * treeBoost, obj.scale.z * treeBoost);
       root.metadata = { ...root.metadata, assetId: obj.assetId };
 
-      // Freeze static placed objects — they never move
       const hasAnims = !!templateAnims && templateAnims.length > 0;
       if (!hasAnims) {
         root.freezeWorldMatrix();
@@ -2428,14 +2608,11 @@ export class ChunkManager {
       nodes.push(root);
       this.placedObjectNodes.push(root);
 
-      // Index interactable objects
       if (obj.assetId in ASSET_TO_OBJECT_DEF) {
         const gridKey = `${Math.floor(obj.position.x)},${Math.floor(obj.position.z)}`;
         this.placedObjectGrid.set(gridKey, root);
       }
 
-      // Index roof objects for indoor detection — cover a 2-tile radius around placement
-      // isUnderRoof checks Y height to prevent triggering from outside
       if (obj.assetId.toLowerCase().includes('roof')) {
         const tx = Math.floor(obj.position.x);
         const tz = Math.floor(obj.position.z);
@@ -2449,8 +2626,6 @@ export class ChunkManager {
         }
       }
 
-      // Register placed stair GLBs as ramp zones for height interpolation
-      // Stair ramp zones are registered in placedStairRamps for proximity-based height
       if (STAIR_ASSET_CONFIG[obj.assetId]) {
         const stairCfg = STAIR_ASSET_CONFIG[obj.assetId];
         const rotY = obj.rotation?.y ?? 0;
@@ -2471,14 +2646,11 @@ export class ChunkManager {
     this.chunkAnimGroups.set(chunkKey, anims);
     this.loadingObjectChunks.delete(chunkKey);
 
-    // Rebuild ground chunks now that objects (and their shadows) are loaded
-    // Ground chunks exist by now, so the rebuild will find them
     if (objects && objects.length > 0) {
       this.addShadowsForObjects(objects);
       this.rebuildGroundChunksForObjects(objects);
     }
 
-    // Log mesh counts per asset to identify expensive models
     const meshCountByAsset = new Map<string, { count: number; meshes: number }>();
     for (const node of nodes) {
       const assetId = node.metadata?.assetId ?? 'unknown';
@@ -2490,7 +2662,7 @@ export class ChunkManager {
     }
     const sorted = [...meshCountByAsset.entries()].sort((a, b) => b[1].meshes - a[1].meshes);
     const totalMeshes = sorted.reduce((s, [, v]) => s + v.meshes, 0);
-    console.log(`[ChunkManager] Chunk ${chunkKey}: ${nodes.length} objects → ${totalMeshes} meshes`);
+    console.log(`[ChunkManager] Chunk ${chunkKey}: ${nodes.length} regular + ${thinCount} thin-instanced → ${totalMeshes} meshes + ${thinSources.length} thin sources`);
     for (const [asset, { count, meshes }] of sorted.slice(0, 5)) {
       console.log(`  ${asset}: ${count} instances × ${Math.round(meshes / count)} meshes = ${meshes} total`);
     }
@@ -2540,6 +2712,22 @@ export class ChunkManager {
         ag.dispose();
       }
       this.chunkAnimGroups.delete(chunkKey);
+    }
+    const thinSrcs = this.chunkThinInstSources.get(chunkKey);
+    if (thinSrcs) {
+      for (const m of thinSrcs) m.dispose();
+      this.chunkThinInstSources.delete(chunkKey);
+    }
+  }
+
+  private setChunkPlacedObjectsEnabled(chunkKey: string, enabled: boolean): void {
+    const nodes = this.chunkPlacedNodes.get(chunkKey);
+    if (nodes) {
+      for (const node of nodes) node.setEnabled(enabled);
+    }
+    const thinSrcs = this.chunkThinInstSources.get(chunkKey);
+    if (thinSrcs) {
+      for (const m of thinSrcs) m.setEnabled(enabled);
     }
   }
 
@@ -2821,10 +3009,21 @@ export class ChunkManager {
         mesh.isPickable = false;
         mesh.renderingGroupId = 0; // Same group as GLBs/ground so fog applies correctly
       }
+      mesh.freezeWorldMatrix();
+      mesh.doNotSyncBoundingInfo = true;
+      mat.freeze();
       this.texturePlaneMeshes.push(mesh);
+
+      const pcx = Math.floor(plane.position.x / CHUNK_SIZE);
+      const pcz = Math.floor(plane.position.z / CHUNK_SIZE);
+      const pkey = `${pcx},${pcz}`;
+      let arr = this.texturePlanesByChunk.get(pkey);
+      if (!arr) { arr = []; this.texturePlanesByChunk.set(pkey, arr); }
+      arr.push(mesh);
+
       loaded++;
     }
-    console.log(`[ChunkManager] Loaded ${loaded}/${planes.length} texture planes`);
+    console.log(`[ChunkManager] Loaded ${loaded}/${planes.length} texture planes (${this.texturePlanesByChunk.size} chunks)`);
   }
 
   disposeAll(): void {
@@ -2842,12 +3041,18 @@ export class ChunkManager {
     this.placedObjectsByChunk.clear();
     this.chunkPlacedNodes.clear();
     this.chunkAnimGroups.clear();
+    for (const [, srcs] of this.chunkThinInstSources) {
+      for (const m of srcs) m.dispose();
+    }
+    this.chunkThinInstSources.clear();
+    this.templateBaseMatrices.clear();
     this.loadingObjectChunks.clear();
     this.roofObjectGrid.clear();
     this.placedStairRamps = [];
     this.elevatedFloorHeights.clear();
     for (const m of this.texturePlaneMeshes) m.dispose();
     this.texturePlaneMeshes = [];
+    this.texturePlanesByChunk.clear();
     for (const [, m] of this.loadedModelCache) m?.dispose();
     this.loadedModelCache.clear();
     for (const [, t] of this.textureCache) t.dispose();

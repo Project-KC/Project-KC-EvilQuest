@@ -737,10 +737,11 @@ export class SpriteEntity {
     }
   }
 
-  /** Returns the world position where the health bar should be rendered */
-  getHealthBarWorldPos(): Vector3 | null {
+  getHealthBarWorldPos(out?: Vector3): Vector3 | null {
     if (!this.healthBarVisible || !this.healthBarEl) return null;
-    return new Vector3(this._position.x, this._position.y + this.yOffset * 2 + 0.3, this._position.z);
+    const v = out ?? new Vector3();
+    v.set(this._position.x, this._position.y + this.yOffset * 2 + 0.3, this._position.z);
+    return v;
   }
 
   /** Update the health bar screen position */
@@ -791,10 +792,11 @@ export class SpriteEntity {
     }
   }
 
-  /** Returns the world position where the chat bubble should appear (above head) */
-  getChatBubbleWorldPos(): Vector3 | null {
+  getChatBubbleWorldPos(out?: Vector3): Vector3 | null {
     if (!this.chatBubbleEl) return null;
-    return new Vector3(this._position.x, this._position.y + this.yOffset * 2 + 0.6, this._position.z);
+    const v = out ?? new Vector3();
+    v.set(this._position.x, this._position.y + this.yOffset * 2 + 0.6, this._position.z);
+    return v;
   }
 
   /** Update the screen position of the chat bubble HTML element */

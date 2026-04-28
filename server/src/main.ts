@@ -547,6 +547,14 @@ const server = Bun.serve<SocketData>({
         const itemMap = new Map<number, string>();
         for (const def of itemDefs) itemMap.set(def.id, def.name);
 
+        const manifestNames = new Map<string, string>();
+        try {
+          const manifest = JSON.parse(readFileSync(resolve(equipRoot, 'polytope/manifest.json'), 'utf-8'));
+          for (const entries of Object.values(manifest) as any[]) {
+            for (const entry of entries) manifestNames.set(entry.file, entry.name);
+          }
+        } catch {}
+
         const polytopeDirMap: Record<string, string[]> = {
           weapon:  ['weapon', 'polytope/weapons', 'Tools'],
           shield:  ['shield', 'polytope/weapons'],
@@ -576,11 +584,14 @@ const server = Bun.serve<SocketData>({
               file: f,
               path: relPath,
               itemId: isNaN(itemId) ? -1 : itemId,
-              name: (!isNaN(itemId) && itemMap.get(itemId)) || f.replace(/\.[^.]+$/, ''),
+              name: (!isNaN(itemId) && itemMap.get(itemId)) || manifestNames.get(relPath) || f.replace(/\.[^.]+$/, ''),
             });
           }
         }
-        files.sort((a, b) => a.itemId - b.itemId);
+        files.sort((a, b) => {
+          if (a.itemId !== b.itemId) return a.itemId - b.itemId;
+          return a.name.localeCompare(b.name);
+        });
         return jsonResponse({ files });
       } catch {
         return jsonResponse({ files: [] });

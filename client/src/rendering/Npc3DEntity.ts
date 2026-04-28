@@ -203,9 +203,11 @@ export class Npc3DEntity {
     if (this.healthBarEl) { this.healthBarEl.remove(); this.healthBarEl = null; }
   }
 
-  getHealthBarWorldPos(): Vector3 | null {
+  getHealthBarWorldPos(out?: Vector3): Vector3 | null {
     if (!this.healthBarVisible) return null;
-    return new Vector3(this._position.x, this._position.y + this.yOffset * 2 + 0.3, this._position.z);
+    const v = out ?? new Vector3();
+    v.set(this._position.x, this._position.y + this.yOffset * 2 + 0.3, this._position.z);
+    return v;
   }
 
   updateHealthBarScreenPos(x: number, y: number): void {
@@ -217,7 +219,7 @@ export class Npc3DEntity {
   // Chat bubble stubs
   showChatBubble(_msg: string, _dur?: number): void { }
   hideChatBubble(): void { }
-  getChatBubbleWorldPos(): Vector3 | null { return null; }
+  getChatBubbleWorldPos(_out?: Vector3): Vector3 | null { return null; }
   updateChatBubbleScreenPos(_x: number, _y: number): void { }
   hasChatBubble(): boolean { return false; }
 
