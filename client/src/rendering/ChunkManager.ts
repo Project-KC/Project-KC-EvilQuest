@@ -1237,8 +1237,11 @@ export class ChunkManager {
   }
 
   // --- Tile texture overlays (painted textures on individual tiles) ---
+  // Batched: all overlays sharing the same texture within a chunk are merged into one mesh.
 
   private buildTextureOverlays(chunkX: number, chunkZ: number, startX: number, startZ: number, endX: number, endZ: number): void {
+    const batches = new Map<string, { positions: number[]; uvs: number[]; indices: number[]; vertCount: number }>();
+
     for (let x = startX; x < endX; x++) {
       for (let z = startZ; z < endZ; z++) {
         if (this.holeTiles.has(z * this.mapWidth + x)) continue;
@@ -1249,80 +1252,86 @@ export class ChunkManager {
         const offset = 0.008;
         const splitFwd = tile.split === 'forward';
 
-        const buildOverlay = (textureId: string, rotation: number, scale: number, worldUV: boolean, useFirst: boolean) => {
-          const tex = this.getOrLoadTexture(textureId);
-          if (!tex) return;
+        const appendOverlay = (textureId: string, rotation: number, scale: number, worldUV: boolean, useFirst: boolean) => {
+          if (!this.getOrLoadTexture(textureId)) return;
 
-          const positions = [x, h.tl + offset, z, x + 1, h.tr + offset, z, x, h.bl + offset, z + 1, x + 1, h.br + offset, z + 1];
+          let batch = batches.get(textureId);
+          if (!batch) { batch = { positions: [], uvs: [], indices: [], vertCount: 0 }; batches.set(textureId, batch); }
+
+          const base = batch.vertCount;
+          batch.positions.push(x, h.tl + offset, z, x + 1, h.tr + offset, z, x, h.bl + offset, z + 1, x + 1, h.br + offset, z + 1);
+
           const s = Math.max(0.1, scale);
-          let uvs: number[];
           if (worldUV) {
-            uvs = [x / s, z / s, (x + 1) / s, z / s, x / s, (z + 1) / s, (x + 1) / s, (z + 1) / s];
+            batch.uvs.push(x / s, z / s, (x + 1) / s, z / s, x / s, (z + 1) / s, (x + 1) / s, (z + 1) / s);
           } else {
-            // Simple scaled UVs (rotation handled by UV transform)
-            const base = [[0, 0], [1, 0], [0, 1], [1, 1]];
+            const baseUV: [number, number][] = [[0, 0], [1, 0], [0, 1], [1, 1]];
             const r = rotation % 4;
-            uvs = [];
-            for (const [u, v] of base) {
+            for (const [u, v] of baseUV) {
               const su = (u - 0.5) / s + 0.5, sv = (v - 0.5) / s + 0.5;
               let ru = su, rv = sv;
               if (r === 1) { ru = -(sv - 0.5) + 0.5; rv = (su - 0.5) + 0.5; }
               else if (r === 2) { ru = -(su - 0.5) + 0.5; rv = -(sv - 0.5) + 0.5; }
               else if (r === 3) { ru = (sv - 0.5) + 0.5; rv = -(su - 0.5) + 0.5; }
-              uvs.push(ru, rv);
+              batch.uvs.push(ru, rv);
             }
           }
 
-          let indices: number[];
           if (tile.textureHalfMode) {
-            indices = useFirst
+            const tri = useFirst
               ? (splitFwd ? [0, 2, 1] : [0, 2, 3])
               : (splitFwd ? [2, 3, 1] : [0, 3, 1]);
+            for (const i of tri) batch.indices.push(base + i);
           } else {
-            indices = splitFwd ? [0, 2, 1, 2, 3, 1] : [0, 2, 3, 0, 3, 1];
+            const quad = splitFwd ? [0, 2, 1, 2, 3, 1] : [0, 2, 3, 0, 3, 1];
+            for (const i of quad) batch.indices.push(base + i);
           }
-
-          const mesh = new Mesh(`texoverlay_${x}_${z}`, this.scene);
-          const vd = new VertexData();
-          vd.positions = positions;
-          vd.uvs = uvs;
-          vd.indices = indices;
-          const normals: number[] = [];
-          VertexData.ComputeNormals(positions, indices, normals);
-          vd.normals = normals;
-          vd.applyToMesh(mesh);
-
-          let mat = this.overlayMatCache.get(textureId);
-          if (!mat) {
-            mat = new StandardMaterial(`texoverlay_mat_${textureId}`, this.scene);
-            mat.diffuseTexture = tex;
-            mat.diffuseColor = new Color3(0.82, 0.82, 0.82);
-            mat.specularColor = new Color3(0, 0, 0);
-            mat.useAlphaFromDiffuseTexture = true;
-            mat.backFaceCulling = false;
-            this.overlayMatCache.set(textureId, mat);
-          }
-          mesh.material = mat;
-          mesh.isPickable = false;
-          mesh.freezeWorldMatrix();
-          mesh.doNotSyncBoundingInfo = true;
-          this.texturePlaneMeshes.push(mesh);
-
-          const ocx = Math.floor(x / CHUNK_SIZE);
-          const ocz = Math.floor(z / CHUNK_SIZE);
-          const okey = `${ocx},${ocz}`;
-          let oarr = this.texturePlanesByChunk.get(okey);
-          if (!oarr) { oarr = []; this.texturePlanesByChunk.set(okey, oarr); }
-          oarr.push(mesh);
+          batch.vertCount += 4;
         };
 
         if (tile.textureHalfMode) {
-          if (tile.textureId) buildOverlay(tile.textureId, tile.textureRotation, tile.textureScale, tile.textureWorldUV, true);
-          if (tile.textureIdB) buildOverlay(tile.textureIdB, tile.textureRotationB, tile.textureScaleB, false, false);
+          if (tile.textureId) appendOverlay(tile.textureId, tile.textureRotation, tile.textureScale, tile.textureWorldUV, true);
+          if (tile.textureIdB) appendOverlay(tile.textureIdB, tile.textureRotationB, tile.textureScaleB, false, false);
         } else if (tile.textureId) {
-          buildOverlay(tile.textureId, tile.textureRotation, tile.textureScale, tile.textureWorldUV, true);
+          appendOverlay(tile.textureId, tile.textureRotation, tile.textureScale, tile.textureWorldUV, true);
         }
       }
+    }
+
+    const chunkKey = `${chunkX},${chunkZ}`;
+    for (const [textureId, batch] of batches) {
+      if (batch.indices.length === 0) continue;
+      const tex = this.getOrLoadTexture(textureId)!;
+
+      const mesh = new Mesh(`texoverlay_${chunkKey}_${textureId}`, this.scene);
+      const vd = new VertexData();
+      vd.positions = batch.positions;
+      vd.uvs = batch.uvs;
+      vd.indices = batch.indices;
+      const normals: number[] = [];
+      VertexData.ComputeNormals(batch.positions, batch.indices, normals);
+      vd.normals = normals;
+      vd.applyToMesh(mesh);
+
+      let mat = this.overlayMatCache.get(textureId);
+      if (!mat) {
+        mat = new StandardMaterial(`texoverlay_mat_${textureId}`, this.scene);
+        mat.diffuseTexture = tex;
+        mat.diffuseColor = new Color3(0.82, 0.82, 0.82);
+        mat.specularColor = new Color3(0, 0, 0);
+        mat.useAlphaFromDiffuseTexture = true;
+        mat.backFaceCulling = false;
+        this.overlayMatCache.set(textureId, mat);
+      }
+      mesh.material = mat;
+      mesh.isPickable = false;
+      mesh.freezeWorldMatrix();
+      mesh.doNotSyncBoundingInfo = true;
+      this.texturePlaneMeshes.push(mesh);
+
+      let oarr = this.texturePlanesByChunk.get(chunkKey);
+      if (!oarr) { oarr = []; this.texturePlanesByChunk.set(chunkKey, oarr); }
+      oarr.push(mesh);
     }
   }
 
@@ -3002,92 +3011,175 @@ export class ChunkManager {
     return tex;
   }
 
+  private texPlaneMaterialCache: Map<string, StandardMaterial> = new Map();
+
+  private getTexPlaneMaterial(plane: TexturePlane, isFlat: boolean): StandardMaterial {
+    const tintKey = plane.tintColor ? `${plane.tintColor.r.toFixed(2)}_${plane.tintColor.g.toFixed(2)}_${plane.tintColor.b.toFixed(2)}` : '';
+    const matKey = `${plane.textureId}_${plane.uvRepeat || 0}_${plane.texRotation || 0}_${tintKey}_${plane.doubleSided ? 1 : 0}_${isFlat ? 1 : 0}`;
+    let mat = this.texPlaneMaterialCache.get(matKey);
+    if (mat) return mat;
+
+    const tex = this.getOrLoadTexture(plane.textureId);
+    if (!tex) return this.texPlaneMaterialCache.values().next().value!;
+    const planeTex = new Texture(tex.url, this.scene, false, true, Texture.NEAREST_NEAREST_MIPLINEAR);
+    planeTex.hasAlpha = true;
+    const uvScale = plane.uvRepeat ? 1 / plane.uvRepeat : 1;
+    planeTex.uScale = uvScale;
+    planeTex.vScale = uvScale;
+    planeTex.wAng = (plane.texRotation || 0) * Math.PI / 2;
+    planeTex.wrapU = Texture.WRAP_ADDRESSMODE;
+    planeTex.wrapV = Texture.WRAP_ADDRESSMODE;
+    mat = new StandardMaterial(`texplane_mat_${matKey}`, this.scene);
+    mat.diffuseTexture = planeTex;
+    if (plane.tintColor) {
+      mat.diffuseColor = new Color3(plane.tintColor.r, plane.tintColor.g, plane.tintColor.b);
+    }
+    mat.specularColor = new Color3(0, 0, 0);
+    mat.useAlphaFromDiffuseTexture = true;
+    mat.backFaceCulling = isFlat ? false : !plane.doubleSided;
+    mat.transparencyMode = isFlat ? 2 : 1;
+    if (isFlat) mat.needDepthPrePass = true;
+    if (!isFlat) mat.freeze();
+    this.texPlaneMaterialCache.set(matKey, mat);
+    return mat;
+  }
+
+  private buildPlaneWorldVerts(plane: TexturePlane): { positions: number[]; normals: number[]; uvs: number[]; indices: number[] } {
+    const hw = plane.width / 2, hh = plane.height / 2;
+    // Plane quad in local space (XY plane, facing +Z)
+    const localVerts = [
+      new Vector3(-hw, -hh, 0), new Vector3(hw, -hh, 0),
+      new Vector3(hw, hh, 0), new Vector3(-hw, hh, 0),
+    ];
+    const localNormal = new Vector3(0, 0, 1);
+
+    // Build world matrix
+    const { x: rx, y: ry, z: rz } = plane.rotation;
+    const quat = Quaternion.RotationAxis(new Vector3(1, 0, 0), rx)
+      .multiply(Quaternion.RotationAxis(new Vector3(0, 1, 0), ry))
+      .multiply(Quaternion.RotationAxis(new Vector3(0, 0, 1), rz));
+    const scale = new Vector3(plane.scale.x, plane.scale.y, plane.scale.z);
+    const pos = new Vector3(plane.position.x, plane.position.y, plane.position.z);
+    const worldMat = Matrix.Compose(scale, quat, pos);
+
+    const positions: number[] = [];
+    const normals: number[] = [];
+    for (const lv of localVerts) {
+      const wv = Vector3.TransformCoordinates(lv, worldMat);
+      positions.push(wv.x, wv.y, wv.z);
+    }
+    const wn = Vector3.TransformNormal(localNormal, worldMat).normalize();
+    for (let i = 0; i < 4; i++) normals.push(wn.x, wn.y, wn.z);
+
+    const uvs = [0, 0, 1, 0, 1, 1, 0, 1];
+    const indices = plane.doubleSided
+      ? [0, 1, 2, 0, 2, 3, 0, 2, 1, 0, 3, 2]
+      : [0, 1, 2, 0, 2, 3];
+    return { positions, normals, uvs, indices };
+  }
+
   private loadTexturePlanes(planes: TexturePlane[]): void {
     if (planes.length === 0) return;
     console.log(`[ChunkManager] Loading ${planes.length} texture planes...`);
-    let loaded = 0;
+
+    // Classify each plane into a merge group
+    interface MergeGroup {
+      planes: TexturePlane[];
+      isFlat: boolean;
+      isRoof: boolean;
+      roofFloor: number;
+    }
+    const mergeGroups = new Map<string, MergeGroup>();
+
     for (const plane of planes) {
-      const tex = this.getOrLoadTexture(plane.textureId);
-      if (!tex) continue;
-      const mesh = MeshBuilder.CreatePlane(`texplane_${plane.id}`, {
-        width: plane.width,
-        height: plane.height,
-        sideOrientation: plane.doubleSided ? Mesh.DOUBLESIDE : Mesh.DEFAULTSIDE,
-      }, this.scene);
-      const planeTex = new Texture(tex.url, this.scene, false, true, Texture.NEAREST_NEAREST_MIPLINEAR);
-      planeTex.hasAlpha = true;
-      const uvScale = plane.uvRepeat ? 1 / plane.uvRepeat : 1;
-      planeTex.uScale = uvScale;
-      planeTex.vScale = uvScale;
-      planeTex.wAng = (plane.texRotation || 0) * Math.PI / 2;
-      planeTex.wrapU = Texture.WRAP_ADDRESSMODE;
-      planeTex.wrapV = Texture.WRAP_ADDRESSMODE;
-      const mat = new StandardMaterial(`texplane_mat_${plane.id}`, this.scene);
-      mat.diffuseTexture = planeTex;
-      if (plane.tintColor) {
-        mat.diffuseColor = new Color3(plane.tintColor.r, plane.tintColor.g, plane.tintColor.b);
-      }
-      mat.specularColor = new Color3(0, 0, 0);
-      mat.useAlphaFromDiffuseTexture = true;
-      mat.backFaceCulling = !plane.doubleSided;
-      mat.transparencyMode = 1;
-      mesh.material = mat;
-      mesh.position = new Vector3(plane.position.x, plane.position.y, plane.position.z);
-      // Three.js saves Euler angles in XYZ order (intrinsic). Babylon's mesh.rotation uses YXZ.
-      // Correct: Q = Qx * Qy * Qz (Babylon multiply: a.multiply(b) = a*b, rightmost applied first)
-      const { x: rx, y: ry, z: rz } = plane.rotation;
-      mesh.rotationQuaternion = Quaternion.RotationAxis(new Vector3(1, 0, 0), rx)
-        .multiply(Quaternion.RotationAxis(new Vector3(0, 1, 0), ry))
-        .multiply(Quaternion.RotationAxis(new Vector3(0, 0, 1), rz));
-      mesh.scaling = new Vector3(plane.scale.x, plane.scale.y, plane.scale.z);
-      // Flat texture planes (bridges/floors) should be pickable for click-to-walk
+      if (!this.getOrLoadTexture(plane.textureId)) continue;
+      const { x: rx } = plane.rotation;
       const isFlat = Math.abs(Math.abs(rx) - Math.PI / 2) < 0.1;
-      if (isFlat) {
-        mesh.name = `texplane_bridge_${plane.id}`;
-        mesh.isPickable = true;
-        mesh.renderingGroupId = 0;
-        mat.needDepthPrePass = true;
-        mat.backFaceCulling = false;
-        mat.transparencyMode = 2;
-
-        // Elevated flat planes act as ceilings — index in roof grid for indoor detection
-        const terrainH = this.getEffectiveHeight(plane.position.x, plane.position.z);
-        if (plane.position.y > terrainH + 1.0 && !plane.noRoof) {
-          const tx = Math.floor(plane.position.x);
-          const tz = Math.floor(plane.position.z);
-          const roofFloor = this.assignRoofFloor(plane.position.x, plane.position.z, plane.position.y);
-          const hw = Math.min(8, Math.ceil((plane.width * Math.abs(plane.scale.x || 1)) / 2));
-          const hh = Math.min(8, Math.ceil((plane.height * Math.abs(plane.scale.z || plane.scale.y || 1)) / 2));
-          for (let dz = -hh; dz <= hh; dz++) {
-            for (let dx = -hw; dx <= hw; dx++) {
-              const rk = `${tx + dx},${tz + dz}`;
-              let arr = this.roofObjectGrid.get(rk);
-              if (!arr) { arr = []; this.roofObjectGrid.set(rk, arr); }
-              arr.push({ node: mesh, floor: roofFloor, y: plane.position.y });
-            }
-          }
-        }
-      } else {
-        mesh.isPickable = false;
-        mesh.renderingGroupId = 0; // Same group as GLBs/ground so fog applies correctly
-      }
-      mesh.freezeWorldMatrix();
-      mesh.doNotSyncBoundingInfo = true;
-      if (!isFlat) {
-        mat.freeze();
-      }
-      this.texturePlaneMeshes.push(mesh);
-
       const pcx = Math.floor(plane.position.x / CHUNK_SIZE);
       const pcz = Math.floor(plane.position.z / CHUNK_SIZE);
+
+      let isRoof = false;
+      let roofFloor = 0;
+      if (isFlat) {
+        const terrainH = this.getEffectiveHeight(plane.position.x, plane.position.z);
+        if (plane.position.y > terrainH + 1.0 && !plane.noRoof) {
+          isRoof = true;
+          roofFloor = this.assignRoofFloor(plane.position.x, plane.position.z, plane.position.y);
+        }
+      }
+
+      const tintKey = plane.tintColor ? `${plane.tintColor.r.toFixed(2)}_${plane.tintColor.g.toFixed(2)}_${plane.tintColor.b.toFixed(2)}` : '';
+      const matKey = `${plane.textureId}_${plane.uvRepeat || 0}_${plane.texRotation || 0}_${tintKey}_${plane.doubleSided ? 1 : 0}_${isFlat ? 1 : 0}`;
+      const groupKey = isRoof
+        ? `${matKey}_chunk${pcx}_${pcz}_roof${roofFloor}`
+        : `${matKey}_chunk${pcx}_${pcz}`;
+
+      let group = mergeGroups.get(groupKey);
+      if (!group) { group = { planes: [], isFlat, isRoof, roofFloor }; mergeGroups.set(groupKey, group); }
+      group.planes.push(plane);
+    }
+
+    let mergedCount = 0;
+    for (const [, group] of mergeGroups) {
+      const allPositions: number[] = [];
+      const allNormals: number[] = [];
+      const allUvs: number[] = [];
+      const allIndices: number[] = [];
+      let vertOffset = 0;
+
+      for (const plane of group.planes) {
+        const { positions, normals, uvs, indices } = this.buildPlaneWorldVerts(plane);
+        allPositions.push(...positions);
+        allNormals.push(...normals);
+        allUvs.push(...uvs);
+        for (const idx of indices) allIndices.push(idx + vertOffset);
+        vertOffset += positions.length / 3;
+      }
+
+      const refPlane = group.planes[0];
+      const mesh = new Mesh(`texplane_merged_${mergedCount}`, this.scene);
+      const vd = new VertexData();
+      vd.positions = allPositions;
+      vd.normals = allNormals;
+      vd.uvs = allUvs;
+      vd.indices = allIndices;
+      vd.applyToMesh(mesh);
+
+      mesh.material = this.getTexPlaneMaterial(refPlane, group.isFlat);
+      mesh.renderingGroupId = 0;
+      mesh.isPickable = group.isFlat;
+      mesh.freezeWorldMatrix();
+      mesh.doNotSyncBoundingInfo = true;
+      this.texturePlaneMeshes.push(mesh);
+
+      const pcx = Math.floor(refPlane.position.x / CHUNK_SIZE);
+      const pcz = Math.floor(refPlane.position.z / CHUNK_SIZE);
       const pkey = `${pcx},${pcz}`;
       let arr = this.texturePlanesByChunk.get(pkey);
       if (!arr) { arr = []; this.texturePlanesByChunk.set(pkey, arr); }
       arr.push(mesh);
 
-      loaded++;
+      // Register roof entries for all planes in the group
+      if (group.isRoof) {
+        for (const plane of group.planes) {
+          const tx = Math.floor(plane.position.x);
+          const tz = Math.floor(plane.position.z);
+          const hw = Math.min(8, Math.ceil((plane.width * Math.abs(plane.scale.x || 1)) / 2));
+          const hh = Math.min(8, Math.ceil((plane.height * Math.abs(plane.scale.z || plane.scale.y || 1)) / 2));
+          for (let dz = -hh; dz <= hh; dz++) {
+            for (let dx = -hw; dx <= hw; dx++) {
+              const rk = `${tx + dx},${tz + dz}`;
+              let roofArr = this.roofObjectGrid.get(rk);
+              if (!roofArr) { roofArr = []; this.roofObjectGrid.set(rk, roofArr); }
+              roofArr.push({ node: mesh, floor: group.roofFloor, y: plane.position.y });
+            }
+          }
+        }
+      }
+
+      mergedCount++;
     }
-    console.log(`[ChunkManager] Loaded ${loaded}/${planes.length} texture planes (${this.texturePlanesByChunk.size} chunks)`);
+    console.log(`[ChunkManager] Merged ${planes.length} texture planes into ${mergedCount} batched meshes (${this.texturePlanesByChunk.size} chunks)`);
   }
 
   disposeAll(): void {
@@ -3123,6 +3215,8 @@ export class ChunkManager {
     this.textureCache.clear();
     for (const [, m] of this.overlayMatCache) m.dispose();
     this.overlayMatCache.clear();
+    for (const [, m] of this.texPlaneMaterialCache) m.dispose();
+    this.texPlaneMaterialCache.clear();
 
     for (const [, meshes] of this.chunks) {
       meshes.ground.dispose();

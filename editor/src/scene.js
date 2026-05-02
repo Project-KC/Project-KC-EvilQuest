@@ -3179,7 +3179,7 @@ let paintBrushRadius = 1
 
   function isStoneModularAsset(asset) {
     const p = asset?.path?.toLowerCase() ?? ''
-    return p.includes('stone modular') || p.includes('dark stone modular') || p.includes('wood modular')
+    return p.includes('stone modular') || p.includes('dark stone modular') || p.includes('new-dark-modular') || p.includes('wood modular')
   }
 
   function isModularAsset(assetId) {
