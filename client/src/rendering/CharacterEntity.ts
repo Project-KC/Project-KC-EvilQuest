@@ -12,7 +12,7 @@ import { Matrix } from '@babylonjs/core/Maths/math.vector';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
 import { Color3 } from '@babylonjs/core/Maths/math.color';
 import { Texture } from '@babylonjs/core/Materials/Textures/texture';
-import { type PlayerAppearance, type AppearanceColorSlot, APPEARANCE_MATERIAL_MAP, getPalette, BELT_NO_BELT, SHIRT_COLORS, HAIR_STYLE_COUNT, EYE_STYLE_COUNT, EYEBROW_STYLE_COUNT, MOUTH_STYLE_COUNT, FACIAL_HAIR_STYLE_COUNT } from '@projectrs/shared';
+import { type PlayerAppearance, type AppearanceColorSlot, APPEARANCE_MATERIAL_MAP, getPalette, BELT_NO_BELT, SHIRT_COLORS, HAIR_STYLE_COUNT, EYE_STYLE_COUNT, EYEBROW_STYLE_COUNT, MOUTH_STYLE_COUNT, FACIAL_HAIR_STYLE_COUNT, TOP_STYLE_COUNT, BOTTOM_STYLE_COUNT, GEAR_COLOR_COUNT } from '@projectrs/shared';
 import '@babylonjs/loaders/glTF';
 import { quantizeAnimationGroup, rs2Rotation, ANIM_DURATIONS, DEFAULT_QUANTIZE_FRAMES } from './AnimationQuantizer';
 
@@ -146,6 +146,13 @@ export class CharacterEntity {
   // Modular mesh parts — keyed by mesh name for show/hide
   private modularMeshes: Map<string, AbstractMesh> = new Map();
 
+  // Gear color texture swapping — materials whose name starts with genericRGBMat_Objects
+  private objectMaterials: StandardMaterial[] = [];
+  private static gearColorTextures: Map<string, Texture> = new Map();
+
+  // Last applied appearance — used to restore correct hair/face after helmet unequip
+  private lastAppearance: PlayerAppearance | null = null;
+
   // Health bar (HTML overlay — same pattern as SpriteEntity)
   private healthBarEl: HTMLDivElement | null = null;
   private healthBarFillEl: HTMLDivElement | null = null;
@@ -231,9 +238,24 @@ export class CharacterEntity {
         }
       }
 
-      // Compute model bounds for scaling
+      // Index modular meshes by name for show/hide (must happen before bounds calc)
+      for (const mesh of this.meshes) {
+        const n = mesh.name;
+        if (n.startsWith('M_') || n.startsWith('facialHair_')) {
+          this.modularMeshes.set(n, mesh);
+        }
+      }
+      if (this.modularMeshes.size > 0) {
+        for (const [name, mesh] of this.modularMeshes) {
+          if (name === 'M_Head' || name === 'M_TopBody' || name === 'M_BottomBody') continue;
+          mesh.setEnabled(false);
+        }
+      }
+
+      // Compute model bounds for scaling — only use enabled base body meshes
       let minY = Infinity, maxY = -Infinity;
       for (const mesh of this.meshes) {
+        if (!mesh.isEnabled()) continue;
         mesh.computeWorldMatrix(true);
         const bb = mesh.getBoundingInfo().boundingBox;
         if (bb.minimumWorld.y < minY) minY = bb.minimumWorld.y;
@@ -257,51 +279,34 @@ export class CharacterEntity {
         if (!pbrMat) continue;
 
         const flat = new StandardMaterial(`${pbrMat.name}_flat`, this.scene);
+        const hasTexture = !!pbrMat.albedoTexture;
 
-        // Extract base color from PBR (albedoColor or albedoTexture)
-        if (pbrMat.albedoTexture) {
+        if (hasTexture) {
           flat.diffuseTexture = pbrMat.albedoTexture;
-          // Disable texture filtering for a crisper pixelated look
           pbrMat.albedoTexture.updateSamplingMode(Texture.NEAREST_NEAREST);
         }
-        if (pbrMat.albedoColor) {
-          // Brighten albedo — PBR textures are authored dark since PBR lighting adds a lot
-          const boost = 1.3;
+        if (pbrMat.albedoColor && !hasTexture) {
           flat.diffuseColor = new Color3(
-            Math.min(1, pbrMat.albedoColor.r * boost),
-            Math.min(1, pbrMat.albedoColor.g * boost),
-            Math.min(1, pbrMat.albedoColor.b * boost),
+            Math.min(1, pbrMat.albedoColor.r),
+            Math.min(1, pbrMat.albedoColor.g),
+            Math.min(1, pbrMat.albedoColor.b),
           );
         }
 
-        // Flat shading — no specular, tinted emissive to brighten without washing out
         flat.specularColor = Color3.Black();
-        // Use a fraction of the diffuse color as emissive so skin/cloth tones are preserved
-        const dc = flat.diffuseColor;
-        flat.emissiveColor = new Color3(dc.r * 0.55, dc.g * 0.55, dc.b * 0.55);
+        if (!hasTexture) {
+          const dc = flat.diffuseColor;
+          flat.emissiveColor = new Color3(dc.r * 0.12, dc.g * 0.12, dc.b * 0.12);
+        }
 
-        // Note: convertToFlatShadedMesh() removed — it triples vertex count on a skeletal
-        // mesh which tanks FPS since every vertex gets bone-transformed each frame.
-
-        // Keep backface culling and transparency settings
         flat.backFaceCulling = pbrMat.backFaceCulling ?? true;
         flat.alpha = 1;
 
         mesh.material = flat;
-      }
 
-      // Index modular meshes by name for show/hide
-      for (const mesh of this.meshes) {
-        const n = mesh.name;
-        if (n.startsWith('M_') || n.startsWith('facialHair_')) {
-          this.modularMeshes.set(n, mesh);
-        }
-      }
-      if (this.modularMeshes.size > 0) {
-        // Hide all optional modular meshes initially — applyAppearance will show the right ones
-        for (const [name, mesh] of this.modularMeshes) {
-          if (name === 'M_Head' || name === 'M_TopBody' || name === 'M_BottomBody') continue;
-          mesh.setEnabled(false);
+        // Track object materials for gear color texture swapping
+        if (pbrMat.name.startsWith('genericRGBMat_Objects')) {
+          this.objectMaterials.push(flat);
         }
       }
 
@@ -560,7 +565,7 @@ export class CharacterEntity {
       case AnimState.Skill:
         return variant ? [variant, 'skill', 'chop', 'idle'] : ['skill', 'chop', 'mine', 'idle'];
       case AnimState.Attack:
-        return variant ? [variant, 'attack', 'attack_slash'] : ['attack', 'attack_slash', 'attack_punch'];
+        return variant ? [variant, 'attack_slash', 'attack'] : ['attack_punch', 'attack', 'attack_slash'];
       case AnimState.Death:
         return ['death', 'die'];
       default:
@@ -900,8 +905,19 @@ export class CharacterEntity {
   }
 
   setHeadVisible(visible: boolean): void {
-    for (const mesh of this.headMeshes) {
-      mesh.setEnabled(visible);
+    if (!visible) {
+      for (const mesh of this.headMeshes) {
+        mesh.setEnabled(false);
+      }
+    } else if (this.lastAppearance) {
+      // Re-apply correct hair style instead of enabling all variants
+      for (let i = 1; i <= HAIR_STYLE_COUNT; i++) {
+        this.modularMeshes.get(`M_hair_${i}`)?.setEnabled(this.lastAppearance.hairStyle === i);
+      }
+    } else {
+      for (const mesh of this.headMeshes) {
+        mesh.setEnabled(true);
+      }
     }
   }
 
@@ -1097,6 +1113,7 @@ export class CharacterEntity {
    * Material names are matched case-insensitively, with .001/.002 suffixes stripped.
    */
   applyAppearance(appearance: PlayerAppearance): void {
+    this.lastAppearance = appearance;
     // Color-based recoloring (per-material name matching)
     for (const mesh of this.meshes) {
       const mat = mesh.material;
@@ -1115,14 +1132,13 @@ export class CharacterEntity {
         for (const target of matNames) {
           if (baseName.toLowerCase() === target.toLowerCase()) {
             const rgb = palette[colorIdx];
-            const boost = 1.3;
             const c = new Color3(
-              Math.min(1, rgb[0] * boost),
-              Math.min(1, rgb[1] * boost),
-              Math.min(1, rgb[2] * boost),
+              Math.min(1, rgb[0]),
+              Math.min(1, rgb[1]),
+              Math.min(1, rgb[2]),
             );
             (mat as StandardMaterial).diffuseColor = c;
-            (mat as StandardMaterial).emissiveColor = new Color3(c.r * 0.55, c.g * 0.55, c.b * 0.55);
+            (mat as StandardMaterial).emissiveColor = new Color3(c.r * 0.12, c.g * 0.12, c.b * 0.12);
           }
         }
       }
@@ -1155,8 +1171,50 @@ export class CharacterEntity {
     for (let i = 1; i <= FACIAL_HAIR_STYLE_COUNT; i++) {
       this.modularMeshes.get(`facialHair_${i}`)?.setEnabled(appearance.facialHairStyle === i);
     }
+
+    // Top: 0 = bare body (M_TopBody), 1+ = M_top_1 … M_top_N
+    // Some meshes split into _primitiveN variants, so match by prefix
+    this.modularMeshes.get('M_TopBody')?.setEnabled(appearance.topStyle === 0);
+    for (let i = 1; i <= TOP_STYLE_COUNT; i++) {
+      const prefix = `M_top_${i}`;
+      for (const [name, mesh] of this.modularMeshes) {
+        if (name === prefix || name.startsWith(prefix + '_primitive')) {
+          mesh.setEnabled(appearance.topStyle === i);
+        }
+      }
+    }
+
+    // Bottom: 0 = bare body (M_BottomBody), 1+ = M_bottom_1 … M_bottom_N
+    this.modularMeshes.get('M_BottomBody')?.setEnabled(appearance.bottomStyle === 0);
+    for (let i = 1; i <= BOTTOM_STYLE_COUNT; i++) {
+      const prefix = `M_bottom_${i}`;
+      for (const [name, mesh] of this.modularMeshes) {
+        if (name === prefix || name.startsWith(prefix + '_primitive')) {
+          mesh.setEnabled(appearance.bottomStyle === i);
+        }
+      }
+    }
+
+    // Gear color: swap diffuseTexture on all genericRGBMat_Objects materials
+    if (this.objectMaterials.length > 0 && appearance.gearColor >= 0 && appearance.gearColor < GEAR_COLOR_COUNT) {
+      const colorIdx = appearance.gearColor + 1; // textures are 1-indexed (objectColor1.png)
+      const cacheKey = `${this.scene.uid}_${colorIdx}`;
+      let tex = CharacterEntity.gearColorTextures.get(cacheKey);
+      if (!tex || !tex.getScene()) {
+        tex = new Texture(
+          `/Character models/gear-colors/objectColor${colorIdx}.png`,
+          this.scene,
+          false, true, Texture.NEAREST_NEAREST,
+        );
+        CharacterEntity.gearColorTextures.set(cacheKey, tex);
+      }
+      for (const mat of this.objectMaterials) {
+        mat.diffuseTexture = tex;
+      }
+    }
   }
 
+  // ---------------------------------------------------------------------------
   // ---------------------------------------------------------------------------
   // Cleanup
   // ---------------------------------------------------------------------------

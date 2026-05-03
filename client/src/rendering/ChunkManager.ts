@@ -134,6 +134,8 @@ export class ChunkManager {
   private _lastStairLog: number = -1;
   /** Elevated texture plane floor heights (only applied when player is already at that height via stairs) */
   private elevatedFloorHeights: Map<number, number> = new Map();
+  /** Bridge tiles — elevated texture planes over originally-blocking terrain (always snap to height) */
+  private bridgeFloorTiles: Set<number> = new Set();
   /** Placed stair ramp zones for proximity-based height interpolation */
   private placedStairRamps: { cx: number; cz: number; baseY: number; topY: number; direction: 'N' | 'S' | 'E' | 'W'; halfLength: number }[] = [];
   /** Spatial index of roof objects: "tileX,tileZ" → roof entries with floor tag + Y height */
@@ -621,7 +623,7 @@ export class ChunkManager {
     // Load placed objects for chunks entering radius
     for (const key of desired) {
       if (!this.chunkPlacedNodes.has(key) && !this.loadingObjectChunks.has(key)) {
-        this.loadChunkPlacedObjects(key);
+        this.loadChunkPlacedObjects(key).catch(() => {});
       }
     }
   }
@@ -662,7 +664,7 @@ export class ChunkManager {
         this.chunks.set(key, meshes);
         // Load placed objects for newly built chunk
         if (!this.chunkPlacedNodes.has(key) && !this.loadingObjectChunks.has(key)) {
-          this.loadChunkPlacedObjects(key);
+          this.loadChunkPlacedObjects(key).catch(() => {});
         }
       }
     }
@@ -1827,10 +1829,12 @@ export class ChunkManager {
       }
       const floorH = this.floorHeights.get(tileIdx);
       if (floorH !== undefined) return floorH;
-      // Elevated texture plane floors: only walk on them if player is already near that height
       const elevH = this.elevatedFloorHeights.get(tileIdx);
-      if (elevH !== undefined && currentY !== undefined && currentY > elevH - 1.5) {
-        return elevH;
+      if (elevH !== undefined) {
+        // Bridge tiles (over water/walls): always snap to bridge height
+        if (this.bridgeFloorTiles.has(tileIdx)) return elevH;
+        // Roof tiles (over walkable terrain): only snap if player is already near that height
+        if (currentY !== undefined && currentY > elevH - 1.5) return elevH;
       }
       return this.getInterpolatedHeight(x, z);
     }
@@ -2188,22 +2192,24 @@ export class ChunkManager {
         for (let tx = tx0; tx <= tx1; tx++) {
           const idx = tz * this.mapWidth + tx;
           const terrainH = this.getInterpolatedHeight(tx + 0.5, tz + 0.5);
-          const isElevated = py > terrainH + 1.0;
+          if (py <= terrainH) continue;
 
           // Blocked tiles: make walkable (bridges over water/walls)
-          if (this.tileTypes && BLOCKING_TILES.has(this.tileTypes[idx] as TileType)) {
-            this.tileTypes[idx] = TileType.STONE;
+          const wasBlocking = this.tileTypes && BLOCKING_TILES.has(this.tileTypes[idx] as TileType);
+          if (wasBlocking) {
+            this.tileTypes![idx] = TileType.STONE;
           }
 
-          // Elevated planes: register in elevated floor map (only used when player is at that height)
-          if (isElevated) {
-            const existing = this.elevatedFloorHeights.get(idx);
-            if (existing === undefined || py < existing) {
-              this.elevatedFloorHeights.set(idx, py);
-            }
-            this.texturePlaneFloorTiles.add(idx);
-            count++;
+          const existing = this.elevatedFloorHeights.get(idx);
+          if (existing === undefined || py < existing) {
+            this.elevatedFloorHeights.set(idx, py);
           }
+          // Bridge tiles: over blocking terrain OR within 2 units of terrain (walkways/ramps)
+          if (wasBlocking || py < terrainH + 2.0) {
+            this.bridgeFloorTiles.add(idx);
+          }
+          this.texturePlaneFloorTiles.add(idx);
+          count++;
         }
       }
     }
@@ -2247,14 +2253,18 @@ export class ChunkManager {
       for (let tz = tz0; tz <= tz1; tz++) {
         for (let tx = tx0; tx <= tx1; tx++) {
           const idx = tz * this.mapWidth + tx;
-          if (this.tileTypes && BLOCKING_TILES.has(this.tileTypes[idx] as TileType)) {
-            this.tileTypes[idx] = TileType.STONE;
+          const wasBlocking = this.tileTypes && BLOCKING_TILES.has(this.tileTypes[idx] as TileType);
+          if (wasBlocking) {
+            this.tileTypes![idx] = TileType.STONE;
           }
           const terrainH = this.getInterpolatedHeight(tx + 0.5, tz + 0.5);
-          if (py > terrainH + 1.0) {
+          if (py > terrainH) {
             const existing = this.elevatedFloorHeights.get(idx);
             if (existing === undefined || py < existing) {
               this.elevatedFloorHeights.set(idx, py);
+            }
+            if (wasBlocking || py < terrainH + 2.0) {
+              this.bridgeFloorTiles.add(idx);
             }
             this.texturePlaneFloorTiles.add(idx);
           }
@@ -2388,8 +2398,8 @@ export class ChunkManager {
     templateWorld.invertToRef(templateInv);
     const entries: { sourceMesh: Mesh; baseMatrix: Matrix }[] = [];
     for (const child of template.getChildMeshes(false)) {
-      if (child.getTotalVertices() === 0) continue;
-      entries.push({ sourceMesh: child as Mesh, baseMatrix: child.getWorldMatrix().multiply(templateInv) });
+      if (!(child instanceof Mesh) || child.getTotalVertices() === 0) continue;
+      entries.push({ sourceMesh: child, baseMatrix: child.getWorldMatrix().multiply(templateInv) });
     }
     this.templateBaseMatrices.set(assetId, entries);
     return entries;
@@ -2432,6 +2442,7 @@ export class ChunkManager {
       return;
     }
     this.loadingObjectChunks.add(chunkKey);
+    try {
     let objects = this.placedObjectsByChunk.get(chunkKey);
     // If no pre-indexed objects, try fetching per-chunk file from server
     if (!objects || objects.length === 0) {
@@ -2511,7 +2522,7 @@ export class ChunkManager {
         src.rotationQuaternion = null;
         src.scaling.set(1, 1, 1);
         src.setEnabled(true);
-        src.makeGeometryUnique();
+        if (src instanceof Mesh) src.makeGeometryUnique();
         const mat = src.material;
         if (mat) {
           if ((mat as any).transparencyMode !== undefined) (mat as any).transparencyMode = 1;
@@ -2674,7 +2685,6 @@ export class ChunkManager {
 
     this.chunkPlacedNodes.set(chunkKey, nodes);
     this.chunkAnimGroups.set(chunkKey, anims);
-    this.loadingObjectChunks.delete(chunkKey);
 
     if (objects && objects.length > 0) {
       this.addShadowsForObjects(objects);
@@ -2698,6 +2708,13 @@ export class ChunkManager {
     }
 
     this.onChunkObjectsLoaded?.(chunkKey);
+    } catch (e) {
+      console.warn(`[ChunkManager] Failed to instantiate objects for chunk ${chunkKey}:`, e);
+      this.chunkPlacedNodes.set(chunkKey, []);
+      this.chunkThinInstSources.set(chunkKey, []);
+    } finally {
+      this.loadingObjectChunks.delete(chunkKey);
+    }
   }
 
   /** Dispose placed objects for a chunk leaving the player's radius */
@@ -3206,6 +3223,7 @@ export class ChunkManager {
     this.roofObjectGrid.clear();
     this.placedStairRamps = [];
     this.elevatedFloorHeights.clear();
+    this.bridgeFloorTiles.clear();
     for (const m of this.texturePlaneMeshes) m.dispose();
     this.texturePlaneMeshes = [];
     this.texturePlanesByChunk.clear();

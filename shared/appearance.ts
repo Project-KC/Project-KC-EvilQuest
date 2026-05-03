@@ -16,6 +16,9 @@ export interface PlayerAppearance {
   eyebrowStyle: number;
   mouthStyle: number;
   facialHairStyle: number;
+  topStyle: number;
+  bottomStyle: number;
+  gearColor: number;
 }
 
 /** RGB triplets (0-1 linear) — index maps to PlayerAppearance.*Color fields */
@@ -106,6 +109,9 @@ export const EYE_STYLE_COUNT = 5;         // M_eyes0 … M_eyes4
 export const EYEBROW_STYLE_COUNT = 5;     // M_eyebrows0 … M_eyebrows4
 export const MOUTH_STYLE_COUNT = 5;       // M_mouth0 … M_mouth4
 export const FACIAL_HAIR_STYLE_COUNT = 8; // facialHair_1 … facialHair_8 (0 = none)
+export const TOP_STYLE_COUNT = 8;         // M_top_1 … M_top_8 (0 = bare M_TopBody)
+export const BOTTOM_STYLE_COUNT = 8;      // M_bottom_1 … M_bottom_8 (0 = bare M_BottomBody)
+export const GEAR_COLOR_COUNT = 14;       // objectColor1 … objectColor14
 
 export const DEFAULT_APPEARANCE: PlayerAppearance = {
   shirtColor: 0,
@@ -119,6 +125,9 @@ export const DEFAULT_APPEARANCE: PlayerAppearance = {
   eyebrowStyle: 0,
   mouthStyle: 0,
   facialHairStyle: 0,
+  topStyle: 0,
+  bottomStyle: 0,
+  gearColor: 0,
 };
 
 /** Validate that all indices are within palette range */
@@ -134,7 +143,10 @@ export function isValidAppearance(a: PlayerAppearance): boolean {
     Number.isInteger(a.eyeStyle)   && a.eyeStyle >= 0   && a.eyeStyle < EYE_STYLE_COUNT &&
     Number.isInteger(a.eyebrowStyle) && a.eyebrowStyle >= 0 && a.eyebrowStyle < EYEBROW_STYLE_COUNT &&
     Number.isInteger(a.mouthStyle) && a.mouthStyle >= 0 && a.mouthStyle < MOUTH_STYLE_COUNT &&
-    Number.isInteger(a.facialHairStyle) && a.facialHairStyle >= 0 && a.facialHairStyle <= FACIAL_HAIR_STYLE_COUNT
+    Number.isInteger(a.facialHairStyle) && a.facialHairStyle >= 0 && a.facialHairStyle <= FACIAL_HAIR_STYLE_COUNT &&
+    Number.isInteger(a.topStyle) && a.topStyle >= 0 && a.topStyle <= TOP_STYLE_COUNT &&
+    Number.isInteger(a.bottomStyle) && a.bottomStyle >= 0 && a.bottomStyle <= BOTTOM_STYLE_COUNT &&
+    Number.isInteger(a.gearColor) && a.gearColor >= 0 && a.gearColor < GEAR_COLOR_COUNT
   );
 }
 
@@ -152,6 +164,9 @@ export function normalizeAppearance(a: Partial<PlayerAppearance>): PlayerAppeara
     eyebrowStyle: a.eyebrowStyle ?? 0,
     mouthStyle: a.mouthStyle ?? 0,
     facialHairStyle: a.facialHairStyle ?? 0,
+    topStyle: a.topStyle ?? 0,
+    bottomStyle: a.bottomStyle ?? 0,
+    gearColor: a.gearColor ?? 0,
   };
 }
 

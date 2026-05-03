@@ -1818,6 +1818,8 @@ export class World {
           a ? a.hairColor  : -1, a ? a.beltColor  : -1, a ? a.shirtStyle : -1,
           a ? a.hairStyle   : -1, a ? a.eyeStyle   : -1, a ? a.eyebrowStyle : -1,
           a ? a.mouthStyle  : -1, a ? a.facialHairStyle : -1,
+          a ? a.topStyle    : -1, a ? a.bottomStyle : -1,
+          a ? a.gearColor   : -1,
         ));
       }
     }
@@ -1914,6 +1916,9 @@ export class World {
       a ? a.eyebrowStyle : -1,
       a ? a.mouthStyle  : -1,
       a ? a.facialHairStyle : -1,
+      a ? a.topStyle    : -1,
+      a ? a.bottomStyle : -1,
+      a ? a.gearColor   : -1,
     );
   }
 

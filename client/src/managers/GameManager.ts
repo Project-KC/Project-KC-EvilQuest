@@ -523,16 +523,18 @@ export class GameManager {
    */
   private getPlayerAttackAnimName(attackerId: number): string {
     if (attackerId === this.localPlayerId && this.sidePanel) {
-      // Check if local player has a weapon equipped (slot 0)
       const weaponId = this.sidePanel.getEquipItem(0);
-      if (weaponId > 0) return 'sword';
-      // Check stance
+      if (weaponId > 0) {
+        const weaponDef = this.itemDefsCache.get(weaponId);
+        const style = weaponDef?.weaponStyle;
+        if (style === 'bow' || style === 'crossbow') return 'bow_attack';
+        return 'attack_slash';
+      }
       const stance = this.sidePanel.getStance();
       if (stance === 'aggressive') return 'kick';
-      return 'punch';
+      return 'attack_punch';
     }
-    // Remote players: default to punch
-    return 'punch';
+    return 'attack_punch';
   }
 
   /** Reposition all world objects/models after heightmap loads (fixes race condition) */
@@ -902,13 +904,13 @@ export class GameManager {
       label: this.username,
       labelColor: '#00ff00',
       additionalAnimations: [
-        { name: 'idle', path: '/Character models/new animations/idle.glb' },
+        { name: 'idle', path: '/Character models/new animations/idle.glb', animName: 'idle' },
         { name: 'walk', path: '/Character models/new animations/standard_walk_new.glb' },
-        { name: 'attack', path: '/Character models/new animations/attack.glb' },
-        { name: 'attack_slash', path: '/Character models/new animations/attack_slash.glb' },
-        { name: 'attack_punch', path: '/Character models/new animations/attack_punch.glb' },
-        { name: 'chop', path: '/Character models/new animations/attack.glb' },
-        { name: 'mine', path: '/Character models/new animations/attack.glb' },
+        { name: 'attack', path: '/Character models/new animations/attack.glb', animName: 'attack' },
+        { name: 'attack_slash', path: '/Character models/new animations/attack_slash.glb', animName: 'attack_slash' },
+        { name: 'attack_punch', path: '/Character models/new animations/attack_punch.glb', animName: 'attack_punch' },
+        { name: 'chop', path: '/Character models/new animations/attack.glb', animName: 'attack' },
+        { name: 'mine', path: '/Character models/new animations/attack.glb', animName: 'attack' },
       ],
     });
   }
@@ -943,32 +945,7 @@ export class GameManager {
     });
 
     this.network.on(ServerOpcode.SHOW_CHARACTER_CREATOR, () => {
-      if (this.characterCreator) return;
-      this.characterCreator = new CharacterCreator(this.scene, (appearance) => {
-        this.network.sendRaw(encodePacket(
-          ClientOpcode.SET_APPEARANCE,
-          appearance.shirtColor,
-          appearance.pantsColor,
-          appearance.shoesColor,
-          appearance.hairColor,
-          appearance.beltColor,
-          appearance.shirtStyle,
-          appearance.hairStyle,
-          appearance.eyeStyle,
-          appearance.eyebrowStyle,
-          appearance.mouthStyle,
-          appearance.facialHairStyle,
-        ));
-        const oldStyle = this.localAppearance?.shirtStyle ?? 0;
-        this.localAppearance = appearance;
-        if (appearance.shirtStyle !== oldStyle) {
-          this.rebuildLocalPlayer(appearance.shirtStyle);
-        } else if (this.localPlayer) {
-          this.localPlayer.applyAppearance(appearance);
-        }
-        this.characterCreator!.destroy();
-        this.characterCreator = null;
-      });
+      this.openCharacterCreator();
     });
   }
 
@@ -978,10 +955,11 @@ export class GameManager {
       const x = x10 / 10;
       const z = z10 / 10;
 
-      const hasAppearance = v.length >= 16 && v[5] >= 0;
+      const hasAppearance = v.length >= 18 && v[5] >= 0;
       const syncAppearance: PlayerAppearance | null = hasAppearance ? {
         shirtColor: v[5], pantsColor: v[6], shoesColor: v[7], hairColor: v[8], beltColor: v[9], shirtStyle: v[10],
         hairStyle: v[11], eyeStyle: v[12], eyebrowStyle: v[13], mouthStyle: v[14], facialHairStyle: v[15],
+        topStyle: v[16], bottomStyle: v[17], gearColor: v[18] ?? 0,
       } : null;
 
       if (entityId === this.localPlayerId) {
@@ -1089,10 +1067,7 @@ export class GameManager {
       }
 
       if (attackerId === this.localPlayerId && this.localPlayer) {
-        const weaponId = this.localEquipment.get(0) ?? -1;
-        const weaponDef = this.itemDefsCache.get(weaponId);
-        const isBow = weaponDef?.weaponStyle === 'bow' || weaponDef?.weaponStyle === 'crossbow';
-        this.localPlayer.playAttackAnimation(isBow ? 'bow_attack' : undefined);
+        this.localPlayer.playAttackAnimation(this.getPlayerAttackAnimName(attackerId));
       } else {
         const attackerSprite = this.entities.npcSprites.get(attackerId)
           || this.entities.remotePlayers.get(attackerId);
@@ -2124,7 +2099,43 @@ export class GameManager {
       else this.camera.exitDebugZoom();
       return true;
     }
+    if (msg === '/appearance') {
+      this.openCharacterCreator();
+      return true;
+    }
     return false;
+  }
+
+  private openCharacterCreator(): void {
+    if (this.characterCreator) return;
+    this.characterCreator = new CharacterCreator(this.scene, (appearance) => {
+      this.network.sendRaw(encodePacket(
+        ClientOpcode.SET_APPEARANCE,
+        appearance.shirtColor,
+        appearance.pantsColor,
+        appearance.shoesColor,
+        appearance.hairColor,
+        appearance.beltColor,
+        appearance.shirtStyle,
+        appearance.hairStyle,
+        appearance.eyeStyle,
+        appearance.eyebrowStyle,
+        appearance.mouthStyle,
+        appearance.facialHairStyle,
+        appearance.topStyle,
+        appearance.bottomStyle,
+        appearance.gearColor,
+      ));
+      const oldStyle = this.localAppearance?.shirtStyle ?? 0;
+      this.localAppearance = appearance;
+      if (appearance.shirtStyle !== oldStyle) {
+        this.rebuildLocalPlayer(appearance.shirtStyle);
+      } else if (this.localPlayer) {
+        this.localPlayer.applyAppearance(appearance);
+      }
+      this.characterCreator!.destroy();
+      this.characterCreator = null;
+    });
   }
 
   private showPlayerChatBubble(fromName: string, message: string): void {

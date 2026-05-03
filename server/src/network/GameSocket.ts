@@ -180,6 +180,9 @@ export function handleGameSocketMessage(
         eyebrowStyle: values[8] ?? 0,
         mouthStyle: values[9] ?? 0,
         facialHairStyle: values[10] ?? 0,
+        topStyle: values[11] ?? 0,
+        bottomStyle: values[12] ?? 0,
+        gearColor: values[13] ?? 0,
       };
       world.handleSetAppearance(playerId, appearance);
       break;
