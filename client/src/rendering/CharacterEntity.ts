@@ -12,7 +12,7 @@ import { Matrix } from '@babylonjs/core/Maths/math.vector';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
 import { Color3 } from '@babylonjs/core/Maths/math.color';
 import { Texture } from '@babylonjs/core/Materials/Textures/texture';
-import { type PlayerAppearance, type AppearanceColorSlot, APPEARANCE_MATERIAL_MAP, getPalette, BELT_NO_BELT, SHIRT_COLORS } from '@projectrs/shared';
+import { type PlayerAppearance, type AppearanceColorSlot, APPEARANCE_MATERIAL_MAP, getPalette, BELT_NO_BELT, SHIRT_COLORS, HAIR_STYLE_COUNT, EYE_STYLE_COUNT, EYEBROW_STYLE_COUNT, MOUTH_STYLE_COUNT, FACIAL_HAIR_STYLE_COUNT } from '@projectrs/shared';
 import '@babylonjs/loaders/glTF';
 import { quantizeAnimationGroup, rs2Rotation, ANIM_DURATIONS, DEFAULT_QUANTIZE_FRAMES } from './AnimationQuantizer';
 
@@ -142,6 +142,9 @@ export class CharacterEntity {
 
   // Head meshes — collected during load for hide/show under full helmets
   private headMeshes: AbstractMesh[] = [];
+
+  // Modular mesh parts — keyed by mesh name for show/hide
+  private modularMeshes: Map<string, AbstractMesh> = new Map();
 
   // Health bar (HTML overlay — same pattern as SpriteEntity)
   private healthBarEl: HTMLDivElement | null = null;
@@ -287,8 +290,28 @@ export class CharacterEntity {
         mesh.material = flat;
       }
 
+      // Index modular meshes by name for show/hide
+      for (const mesh of this.meshes) {
+        const n = mesh.name;
+        if (n.startsWith('M_') || n.startsWith('facialHair_')) {
+          this.modularMeshes.set(n, mesh);
+        }
+      }
+      if (this.modularMeshes.size > 0) {
+        // Hide all optional modular meshes initially — applyAppearance will show the right ones
+        for (const [name, mesh] of this.modularMeshes) {
+          if (name === 'M_Head' || name === 'M_TopBody' || name === 'M_BottomBody') continue;
+          mesh.setEnabled(false);
+        }
+      }
+
       // Identify hair meshes for hide/show under full helmets
       for (const mesh of this.meshes) {
+        const n = mesh.name;
+        if (n.startsWith('M_hair_')) {
+          this.headMeshes.push(mesh);
+          continue;
+        }
         const matBase = mesh.material?.name.replace(/_flat$/, '').replace(/\.\d+$/, '').toLowerCase() ?? '';
         if (HAIR_MATERIAL_NAMES.has(matBase)) {
           this.headMeshes.push(mesh);
@@ -1074,16 +1097,15 @@ export class CharacterEntity {
    * Material names are matched case-insensitively, with .001/.002 suffixes stripped.
    */
   applyAppearance(appearance: PlayerAppearance): void {
+    // Color-based recoloring (per-material name matching)
     for (const mesh of this.meshes) {
       const mat = mesh.material;
       if (!mat) continue;
-      // Strip numeric suffixes (.001, .002) and _flat suffix for matching
       const baseName = mat.name.replace(/_flat$/, '').replace(/\.\d+$/, '');
 
       for (const [slot, matNames] of Object.entries(APPEARANCE_MATERIAL_MAP)) {
         let colorIdx = appearance[slot as AppearanceColorSlot];
         let palette = getPalette(slot as AppearanceColorSlot);
-        // "No Belt" option: use shirt color instead
         if (slot === 'beltColor' && colorIdx === BELT_NO_BELT) {
           colorIdx = appearance.shirtColor;
           palette = SHIRT_COLORS;
@@ -1093,7 +1115,7 @@ export class CharacterEntity {
         for (const target of matNames) {
           if (baseName.toLowerCase() === target.toLowerCase()) {
             const rgb = palette[colorIdx];
-            const boost = 1.3; // match the PBR→flat boost in load()
+            const boost = 1.3;
             const c = new Color3(
               Math.min(1, rgb[0] * boost),
               Math.min(1, rgb[1] * boost),
@@ -1104,6 +1126,34 @@ export class CharacterEntity {
           }
         }
       }
+    }
+
+    // Modular mesh show/hide
+    if (this.modularMeshes.size === 0) return;
+
+    // Hair: 0 = bald, 1-14 = M_hair_1 … M_hair_14
+    for (let i = 1; i <= HAIR_STYLE_COUNT; i++) {
+      this.modularMeshes.get(`M_hair_${i}`)?.setEnabled(appearance.hairStyle === i);
+    }
+
+    // Eyes
+    for (let i = 0; i < EYE_STYLE_COUNT; i++) {
+      this.modularMeshes.get(`M_eyes${i}`)?.setEnabled(appearance.eyeStyle === i);
+    }
+
+    // Eyebrows
+    for (let i = 0; i < EYEBROW_STYLE_COUNT; i++) {
+      this.modularMeshes.get(`M_eyebrows${i}`)?.setEnabled(appearance.eyebrowStyle === i);
+    }
+
+    // Mouths
+    for (let i = 0; i < MOUTH_STYLE_COUNT; i++) {
+      this.modularMeshes.get(`M_mouth${i}`)?.setEnabled(appearance.mouthStyle === i);
+    }
+
+    // Facial hair: 0 = none, 1-8 = facialHair_1 … facialHair_8
+    for (let i = 1; i <= FACIAL_HAIR_STYLE_COUNT; i++) {
+      this.modularMeshes.get(`facialHair_${i}`)?.setEnabled(appearance.facialHairStyle === i);
     }
   }
 
@@ -1129,6 +1179,7 @@ export class CharacterEntity {
     }
     this.meshes = [];
     this.headMeshes = [];
+    this.modularMeshes.clear();
 
     if (this.root) {
       this.root.dispose();

@@ -877,8 +877,7 @@ export class GameManager {
   private getCharacterModelPath(shirtStyle: number = 0): string {
     const override = getExperimentalCharacterPath();
     if (override) return override;
-    const style = SHIRT_STYLES[shirtStyle] ?? SHIRT_STYLES[0];
-    return `/Character models/main character${style.glbSuffix}.glb`;
+    return `/Character models/polysplit_male_modular.glb`;
   }
 
   /** Rebuild the local player's CharacterEntity with a different model (e.g. after shirt style change) */
@@ -903,13 +902,13 @@ export class GameManager {
       label: this.username,
       labelColor: '#00ff00',
       additionalAnimations: [
-        { name: 'idle', path: '/Character models/animations/idle.glb' },
-        { name: 'walk', path: '/Character models/animations/walk.glb' },
-        { name: 'attack', path: '/Character models/animations/attack.glb' },
-        { name: 'attack_slash', path: '/Character models/animations/attack_slash.glb' },
-        { name: 'attack_punch', path: '/Character models/animations/attack_punch.glb' },
-        { name: 'chop', path: '/Character models/animations/chop.glb' },
-        { name: 'mine', path: '/Character models/animations/mine.glb' },
+        { name: 'idle', path: '/Character models/new animations/idle.glb' },
+        { name: 'walk', path: '/Character models/new animations/standard_walk_new.glb' },
+        { name: 'attack', path: '/Character models/new animations/attack.glb' },
+        { name: 'attack_slash', path: '/Character models/new animations/attack_slash.glb' },
+        { name: 'attack_punch', path: '/Character models/new animations/attack_punch.glb' },
+        { name: 'chop', path: '/Character models/new animations/attack.glb' },
+        { name: 'mine', path: '/Character models/new animations/attack.glb' },
       ],
     });
   }
@@ -954,6 +953,11 @@ export class GameManager {
           appearance.hairColor,
           appearance.beltColor,
           appearance.shirtStyle,
+          appearance.hairStyle,
+          appearance.eyeStyle,
+          appearance.eyebrowStyle,
+          appearance.mouthStyle,
+          appearance.facialHairStyle,
         ));
         const oldStyle = this.localAppearance?.shirtStyle ?? 0;
         this.localAppearance = appearance;
@@ -974,9 +978,10 @@ export class GameManager {
       const x = x10 / 10;
       const z = z10 / 10;
 
-      const hasAppearance = v.length >= 11 && v[5] >= 0;
+      const hasAppearance = v.length >= 16 && v[5] >= 0;
       const syncAppearance: PlayerAppearance | null = hasAppearance ? {
         shirtColor: v[5], pantsColor: v[6], shoesColor: v[7], hairColor: v[8], beltColor: v[9], shirtStyle: v[10],
+        hairStyle: v[11], eyeStyle: v[12], eyebrowStyle: v[13], mouthStyle: v[14], facialHairStyle: v[15],
       } : null;
 
       if (entityId === this.localPlayerId) {

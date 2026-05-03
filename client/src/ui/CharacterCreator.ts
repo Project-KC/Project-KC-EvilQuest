@@ -7,6 +7,11 @@ import {
   HAIR_COLORS,
   BELT_COLORS,
   SHIRT_STYLES,
+  HAIR_STYLE_COUNT,
+  EYE_STYLE_COUNT,
+  EYEBROW_STYLE_COUNT,
+  MOUTH_STYLE_COUNT,
+  FACIAL_HAIR_STYLE_COUNT,
 } from '@projectrs/shared';
 import { Engine } from '@babylonjs/core/Engines/engine';
 import { Scene } from '@babylonjs/core/scene';
@@ -99,14 +104,16 @@ export class CharacterCreator {
 
     // Right: swatches + confirm
     const swatchCol = document.createElement('div');
-    swatchCol.style.cssText = `display: flex; flex-direction: column; min-width: 280px;`;
+    swatchCol.style.cssText = `display: flex; flex-direction: column; min-width: 280px; max-height: 420px; overflow-y: auto;`;
 
-    this.addStyleRow(swatchCol);
+    this.addIndexRow(swatchCol, 'Hair', 'hairStyle', HAIR_STYLE_COUNT, true);
+    this.addIndexRow(swatchCol, 'Eyes', 'eyeStyle', EYE_STYLE_COUNT, false);
+    this.addIndexRow(swatchCol, 'Eyebrows', 'eyebrowStyle', EYEBROW_STYLE_COUNT, false);
+    this.addIndexRow(swatchCol, 'Mouth', 'mouthStyle', MOUTH_STYLE_COUNT, false);
+    this.addIndexRow(swatchCol, 'Facial Hair', 'facialHairStyle', FACIAL_HAIR_STYLE_COUNT, true);
     this.addColorRow(swatchCol, 'Shirt', 'shirtColor', SHIRT_COLORS);
     this.addColorRow(swatchCol, 'Pants', 'pantsColor', PANTS_COLORS);
-    this.addColorRow(swatchCol, 'Belt', 'beltColor', BELT_COLORS);
     this.addColorRow(swatchCol, 'Shoes', 'shoesColor', SHOES_COLORS);
-    this.addColorRow(swatchCol, 'Hair', 'hairColor', HAIR_COLORS);
 
     const btn = document.createElement('button');
     btn.textContent = 'Confirm';
@@ -175,7 +182,7 @@ export class CharacterCreator {
       modelPath: this.getModelPath(),
       targetHeight: 1.53,
       additionalAnimations: [
-        { name: 'idle', path: '/Character models/animations/idle.glb' },
+        { name: 'idle', path: '/Character models/new animations/idle.glb' },
       ],
     });
     this.previewCharacter.whenReady().then(() => {
@@ -188,8 +195,7 @@ export class CharacterCreator {
   private getModelPath(): string {
     const override = getExperimentalCharacterPath();
     if (override) return override;
-    const style = SHIRT_STYLES[this.appearance.shirtStyle] ?? SHIRT_STYLES[0];
-    return `/Character models/main character${style.glbSuffix}.glb`;
+    return `/Character models/polysplit_male_modular.glb`;
   }
 
   private updatePreview(): void {
@@ -297,6 +303,59 @@ export class CharacterCreator {
       swatches.appendChild(swatch);
     });
     row.appendChild(swatches);
+    parent.appendChild(row);
+  }
+
+  private addIndexRow(parent: HTMLDivElement, label: string, slot: keyof PlayerAppearance, count: number, hasNone: boolean): void {
+    const row = document.createElement('div');
+    row.style.cssText = `margin-bottom: 14px;`;
+    const labelEl = document.createElement('div');
+    labelEl.textContent = label;
+    labelEl.style.cssText = `font-size: 12px; color: #ccc; margin-bottom: 6px; font-weight: bold;`;
+    row.appendChild(labelEl);
+
+    const btns = document.createElement('div');
+    btns.style.cssText = `display: flex; flex-wrap: wrap; gap: 4px;`;
+
+    const start = hasNone ? 0 : 0;
+    const end = hasNone ? count : count - 1;
+
+    for (let i = start; i <= end; i++) {
+      const btn = document.createElement('div');
+      btn.textContent = (hasNone && i === 0) ? '—' : String(i + (hasNone ? 0 : 1));
+      const isSelected = this.appearance[slot] === i;
+      btn.dataset.index = String(i);
+      btn.style.cssText = `
+        width: 26px; height: 26px; border-radius: 3px; cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 11px; font-family: monospace; font-weight: bold;
+        background: ${isSelected ? 'rgba(90,74,53,0.6)' : 'rgba(40,35,28,0.6)'};
+        color: ${isSelected ? '#fc0' : '#999'};
+        border: 2px solid ${isSelected ? '#fc0' : '#555'};
+        transition: all 0.15s;
+      `;
+      btn.addEventListener('mouseenter', () => {
+        if (this.appearance[slot] !== i) { btn.style.borderColor = '#aaa'; btn.style.color = '#ccc'; }
+      });
+      btn.addEventListener('mouseleave', () => {
+        const sel = this.appearance[slot] === i;
+        btn.style.borderColor = sel ? '#fc0' : '#555'; btn.style.color = sel ? '#fc0' : '#999';
+      });
+      btn.addEventListener('click', () => {
+        if (this.appearance[slot] === i) return;
+        this.appearance[slot] = i;
+        btns.querySelectorAll('div').forEach((b) => {
+          const el = b as HTMLDivElement;
+          const sel = el.dataset.index === String(i);
+          el.style.borderColor = sel ? '#fc0' : '#555';
+          el.style.color = sel ? '#fc0' : '#999';
+          el.style.background = sel ? 'rgba(90,74,53,0.6)' : 'rgba(40,35,28,0.6)';
+        });
+        this.updatePreview();
+      });
+      btns.appendChild(btn);
+    }
+    row.appendChild(btns);
     parent.appendChild(row);
   }
 

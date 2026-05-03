@@ -1816,6 +1816,8 @@ export class World {
           player.health, player.maxHealth,
           a ? a.shirtColor : -1, a ? a.pantsColor : -1, a ? a.shoesColor : -1,
           a ? a.hairColor  : -1, a ? a.beltColor  : -1, a ? a.shirtStyle : -1,
+          a ? a.hairStyle   : -1, a ? a.eyeStyle   : -1, a ? a.eyebrowStyle : -1,
+          a ? a.mouthStyle  : -1, a ? a.facialHairStyle : -1,
         ));
       }
     }
@@ -1907,6 +1909,11 @@ export class World {
       a ? a.hairColor  : -1,
       a ? a.beltColor  : -1,
       a ? a.shirtStyle : -1,
+      a ? a.hairStyle   : -1,
+      a ? a.eyeStyle   : -1,
+      a ? a.eyebrowStyle : -1,
+      a ? a.mouthStyle  : -1,
+      a ? a.facialHairStyle : -1,
     );
   }
 
