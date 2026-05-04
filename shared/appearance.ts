@@ -11,7 +11,6 @@ export interface PlayerAppearance {
   hairColor: number;
   beltColor: number;
   skinColor: number;
-  shirtStyle: number;
   hairStyle: number;
   gearColor: number;
 }
@@ -104,12 +103,6 @@ export const HAIR_COLORS: [number, number, number][] = [
   [0.250, 0.200, 0.080],  // 9  light blonde
 ];
 
-/** Shirt style variants — index maps to GLB filename suffix */
-export const SHIRT_STYLES: { name: string; glbSuffix: string }[] = [
-  { name: 'Short Sleeve', glbSuffix: '' },
-  { name: 'Long Sleeve',  glbSuffix: '_longsleeve' },
-];
-
 export const HAIR_STYLE_COUNT = 15;       // M_hair_1 … M_hair_15 (0 = bald)
 export const GEAR_COLOR_COUNT = 14;       // objectColor1 … objectColor14
 
@@ -120,7 +113,6 @@ export const DEFAULT_APPEARANCE: PlayerAppearance = {
   hairColor: 0,
   beltColor: 1,
   skinColor: 0,
-  shirtStyle: 0,
   hairStyle: 1,
   gearColor: 0,
 };
@@ -134,7 +126,6 @@ export function isValidAppearance(a: PlayerAppearance): boolean {
     Number.isInteger(a.hairColor)  && a.hairColor >= 0  && a.hairColor < HAIR_COLORS.length &&
     Number.isInteger(a.beltColor)  && a.beltColor >= 0  && a.beltColor < BELT_COLORS.length &&
     Number.isInteger(a.skinColor)  && a.skinColor >= 0  && a.skinColor < SKIN_COLORS.length &&
-    Number.isInteger(a.shirtStyle) && a.shirtStyle >= 0 && a.shirtStyle < SHIRT_STYLES.length &&
     Number.isInteger(a.hairStyle)  && a.hairStyle >= 0  && a.hairStyle <= HAIR_STYLE_COUNT &&
     Number.isInteger(a.gearColor) && a.gearColor >= 0 && a.gearColor < GEAR_COLOR_COUNT
   );
@@ -149,7 +140,6 @@ export function normalizeAppearance(a: Partial<PlayerAppearance>): PlayerAppeara
     hairColor:  a.hairColor ?? 0,
     beltColor:  a.beltColor ?? 0,
     skinColor:  a.skinColor ?? 0,
-    shirtStyle: a.shirtStyle ?? 0,
     hairStyle:  a.hairStyle ?? 1,
     gearColor: a.gearColor ?? 0,
   };
@@ -160,7 +150,7 @@ export function normalizeAppearance(a: Partial<PlayerAppearance>): PlayerAppeara
  * When a GLB is loaded, materials matching these names get recolored.
  * Names are matched case-insensitively, with optional .001 suffix stripped.
  */
-/** Color slots that map to GLB material names (excludes non-color fields like shirtStyle) */
+/** Color slots that map to GLB material names */
 export type AppearanceColorSlot = 'shirtColor' | 'pantsColor' | 'shoesColor' | 'hairColor' | 'beltColor' | 'skinColor';
 
 export const APPEARANCE_MATERIAL_MAP: Record<AppearanceColorSlot, string[]> = {

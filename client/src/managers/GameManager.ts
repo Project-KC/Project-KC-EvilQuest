@@ -32,10 +32,9 @@ import { ShopPanel, type ShopItem } from '../ui/ShopPanel';
 import { CharacterCreator } from '../ui/CharacterCreator';
 import { LoadingScreen } from '../ui/LoadingScreen';
 import { SmithingPanel } from '../ui/SmithingPanel';
-import { getExperimentalCharacterPath } from '../experimental';
 import { NPC_NAMES } from '../data/NpcConfig';
 import { EQUIP_SLOT_BONES, EQUIP_SLOT_NAMES, TOOL_TIER_METAL_COLOR, type GearOverride } from '../data/EquipmentConfig';
-import { ServerOpcode, ClientOpcode, encodePacket, ALL_SKILLS, SKILL_NAMES, ASSET_TO_OBJECT_DEF, WallEdge, decodeStringPacket, BIOME_CELL_SIZE, type WorldObjectDef, type ItemDef, type InventorySlot, type PlayerAppearance, type BiomesFile, type BiomeDef, SHIRT_STYLES } from '@projectrs/shared';
+import { ServerOpcode, ClientOpcode, encodePacket, ALL_SKILLS, SKILL_NAMES, ASSET_TO_OBJECT_DEF, WallEdge, decodeStringPacket, BIOME_CELL_SIZE, type WorldObjectDef, type ItemDef, type InventorySlot, type PlayerAppearance, type BiomesFile, type BiomeDef } from '@projectrs/shared';
 
 export class GameManager {
   private engine: Engine;
@@ -878,31 +877,10 @@ export class GameManager {
     if (node) { node.dispose(); this.armorPreviewNodes.delete(slot); }
   }
 
-  /** Get the character model GLB path for a given shirt style index */
-  private getCharacterModelPath(shirtStyle: number = 0): string {
-    const override = getExperimentalCharacterPath();
-    if (override) return override;
-    return `/Character models/main character.glb`;
-  }
-
-  /** Rebuild the local player's CharacterEntity with a different model (e.g. after shirt style change) */
-  private rebuildLocalPlayer(shirtStyle: number): void {
-    if (!this.localPlayer) return;
-    const pos = this.localPlayer.position.clone();
-    this.localPlayer.dispose();
-    this.localPlayer = this.createLocalCharacterEntity(shirtStyle);
-    this.localPlayer.setPositionXYZ(pos.x, pos.y, pos.z);
-    this.localPlayer.whenReady().then(() => {
-      if (this.localAppearance && this.localPlayer) {
-        this.localPlayer.applyAppearance(this.localAppearance);
-      }
-    });
-  }
-
-  private createLocalCharacterEntity(shirtStyle: number = 0): CharacterEntity {
+  private createLocalCharacterEntity(): CharacterEntity {
     return new CharacterEntity(this.scene, {
       name: 'localPlayer',
-      modelPath: this.getCharacterModelPath(shirtStyle),
+      modelPath: '/Character models/main character.glb',
       targetHeight: 1.53,
       label: this.username,
       labelColor: '#00ff00',
@@ -939,7 +917,7 @@ export class GameManager {
       this.loadingScreen.show();
       this.loadingScreen.setStatus('Loading character…');
 
-      this.localPlayer = this.createLocalCharacterEntity(this.localAppearance?.shirtStyle ?? 0);
+      this.localPlayer = this.createLocalCharacterEntity();
       const spawnH = this.getHeight(this.playerX, this.playerZ);
       this.localPlayer.setPositionXYZ(this.playerX, spawnH, this.playerZ);
       this.inputManager.setPlayerY(spawnH);
@@ -965,10 +943,10 @@ export class GameManager {
       const x = x10 / 10;
       const z = z10 / 10;
 
-      const hasAppearance = v.length >= 14 && v[5] >= 0;
+      const hasAppearance = v.length >= 13 && v[5] >= 0;
       const syncAppearance: PlayerAppearance | null = hasAppearance ? {
         shirtColor: v[5], pantsColor: v[6], shoesColor: v[7], hairColor: v[8], beltColor: v[9], skinColor: v[10],
-        shirtStyle: v[11], hairStyle: v[12], gearColor: v[13] ?? 0,
+        hairStyle: v[11], gearColor: v[12] ?? 0,
       } : null;
 
       if (entityId === this.localPlayerId) {
@@ -2126,15 +2104,11 @@ export class GameManager {
         appearance.hairColor,
         appearance.beltColor,
         appearance.skinColor,
-        appearance.shirtStyle,
         appearance.hairStyle,
         appearance.gearColor,
       ));
-      const oldStyle = this.localAppearance?.shirtStyle ?? 0;
       this.localAppearance = appearance;
-      if (appearance.shirtStyle !== oldStyle) {
-        this.rebuildLocalPlayer(appearance.shirtStyle);
-      } else if (this.localPlayer) {
+      if (this.localPlayer) {
         this.localPlayer.applyAppearance(appearance);
       }
       this.characterCreator!.destroy();

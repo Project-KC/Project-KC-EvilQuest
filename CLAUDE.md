@@ -263,7 +263,3 @@ For a legitimate "wipe everything" (e.g. flatten a map), delete the `tiles/` or 
 ## What's stable vs. in-flight
 
 This section moves fast — `git log --oneline` is more authoritative. Recent areas: appearance system (skin/hair color pickers + protocol), Polysplit retirement (skeleton kept, body code removed), character animations (Mixamo native), idle pose tweaks via `BONE_ROTATION_OFFSETS`, loading screen.
-
-**Known dead code worth a future pass:**
-- `shirtStyle` / `SHIRT_STYLES` — predates Polysplit, threaded through protocol but unused. Safe to remove with synchronized client/server change.
-- `experimental.ts` Quaternius `?char=quat` toggle — referenced GLB doesn't exist; harmless but unused.

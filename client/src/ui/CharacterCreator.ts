@@ -6,7 +6,6 @@ import {
   SHOES_COLORS,
   HAIR_COLORS,
   SKIN_COLORS,
-  SHIRT_STYLES,
   HAIR_STYLE_COUNT,
   GEAR_COLOR_COUNT,
 } from '@projectrs/shared';
@@ -17,7 +16,6 @@ import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight';
 import { DirectionalLight } from '@babylonjs/core/Lights/directionalLight';
 import { Vector3, Color3, Color4 } from '@babylonjs/core/Maths/math';
 import { CharacterEntity } from '../rendering/CharacterEntity';
-import { getExperimentalCharacterPath } from '../experimental';
 
 export type CharacterCreatorCallback = (appearance: PlayerAppearance) => void;
 
@@ -189,9 +187,7 @@ export class CharacterCreator {
   }
 
   private getModelPath(): string {
-    const override = getExperimentalCharacterPath();
-    if (override) return override;
-    return `/Character models/main character.glb`;
+    return '/Character models/main character.glb';
   }
 
   private updatePreview(): void {
@@ -206,52 +202,6 @@ export class CharacterCreator {
       this.previewCharacter = null;
     }
     this.loadPreviewCharacter();
-  }
-
-  private addStyleRow(parent: HTMLDivElement): void {
-    const row = document.createElement('div');
-    row.style.cssText = `margin-bottom: 14px;`;
-    const labelEl = document.createElement('div');
-    labelEl.textContent = 'Shirt Style';
-    labelEl.style.cssText = `font-size: 12px; color: #ccc; margin-bottom: 6px; font-weight: bold;`;
-    row.appendChild(labelEl);
-
-    const btns = document.createElement('div');
-    btns.style.cssText = `display: flex; gap: 6px;`;
-
-    SHIRT_STYLES.forEach((style, index) => {
-      const btn = document.createElement('div');
-      btn.textContent = style.name;
-      const isSelected = this.appearance.shirtStyle === index;
-      btn.style.cssText = `
-        padding: 6px 14px; border-radius: 3px; cursor: pointer;
-        font-size: 12px; font-family: monospace; font-weight: bold;
-        background: ${isSelected ? 'rgba(90,74,53,0.6)' : 'rgba(40,35,28,0.6)'};
-        color: ${isSelected ? '#fc0' : '#999'};
-        border: 2px solid ${isSelected ? '#fc0' : '#555'};
-        transition: all 0.15s;
-      `;
-      btn.addEventListener('mouseenter', () => {
-        if (this.appearance.shirtStyle !== index) { btn.style.borderColor = '#aaa'; btn.style.color = '#ccc'; }
-      });
-      btn.addEventListener('mouseleave', () => {
-        const sel = this.appearance.shirtStyle === index;
-        btn.style.borderColor = sel ? '#fc0' : '#555'; btn.style.color = sel ? '#fc0' : '#999';
-      });
-      btn.addEventListener('click', () => {
-        if (this.appearance.shirtStyle === index) return;
-        this.appearance.shirtStyle = index;
-        btns.querySelectorAll('div').forEach((b, i) => {
-          const el = b as HTMLDivElement; const sel = i === index;
-          el.style.borderColor = sel ? '#fc0' : '#555'; el.style.color = sel ? '#fc0' : '#999';
-          el.style.background = sel ? 'rgba(90,74,53,0.6)' : 'rgba(40,35,28,0.6)';
-        });
-        this.rebuildPreview();
-      });
-      btns.appendChild(btn);
-    });
-    row.appendChild(btns);
-    parent.appendChild(row);
   }
 
   private addColorRow(parent: HTMLDivElement, label: string, slot: keyof PlayerAppearance, palette: [number, number, number][]): void {
