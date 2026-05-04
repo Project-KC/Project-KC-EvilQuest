@@ -513,8 +513,6 @@ export class GameManager {
     }
   }
 
-  private thinkingBubble: HTMLDivElement | null = null;
-
   /**
    * Choose the correct attack animation name based on stance and weapon.
    * - Weapon equipped (slot 0) → 'sword'
@@ -1329,7 +1327,6 @@ export class GameManager {
     this.network.on(ServerOpcode.SKILLING_STOP, (_op, _v) => {
       this.isSkilling = false;
       this.skillingObjectId = -1;
-      this.hideThinkingBubble();
       this.localPlayer?.stopSkillAnimation();
     });
   }
@@ -2338,17 +2335,6 @@ export class GameManager {
     return this.chunkManager.isWallBlocked(fx, fz, tx, tz, playerY);
   };
 
-  /** Get the cardinal facing angle (N/E/S/W) toward a target from a source position. */
-  private cardinalFacingAngle(dx: number, dz: number): number {
-    // Pick the axis with the larger absolute component
-    // If equal, prefer X axis (east/west)
-    if (Math.abs(dx) >= Math.abs(dz)) {
-      return dx > 0 ? Math.PI / 2 : -Math.PI / 2; // East or West
-    } else {
-      return dz > 0 ? 0 : Math.PI; // South or North
-    }
-  }
-
   private startSkillingVisual(objectId: number, variant?: string): void {
     this.path = []; this.pathIndex = 0; this.tileProgress = 0; this.pendingPath = null;
     // Snap player to tile center
@@ -2511,50 +2497,6 @@ export class GameManager {
     this.sidePanel?.updateHP(this.playerHealth, this.playerMaxHealth);
   }
 
-  private showThinkingBubble(iconUrl: string): void {
-    this.hideThinkingBubble();
-    const bubble = document.createElement('div');
-    bubble.style.cssText = `
-      position: fixed; pointer-events: none; z-index: 200;
-      background: white; border: 2px solid #333; border-radius: 12px;
-      padding: 4px; width: 36px; height: 36px;
-      display: flex; align-items: center; justify-content: center;
-    `;
-    const img = document.createElement('img');
-    img.src = iconUrl;
-    img.style.cssText = 'width: 28px; height: 28px; image-rendering: pixelated;';
-    bubble.appendChild(img);
-    // Small tail triangle
-    const tail = document.createElement('div');
-    tail.style.cssText = `
-      position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%);
-      width: 0; height: 0;
-      border-left: 6px solid transparent; border-right: 6px solid transparent;
-      border-top: 8px solid #333;
-    `;
-    bubble.appendChild(tail);
-    document.body.appendChild(bubble);
-    this.thinkingBubble = bubble;
-  }
-
-  private hideThinkingBubble(): void {
-    if (this.thinkingBubble) {
-      this.thinkingBubble.remove();
-      this.thinkingBubble = null;
-    }
-  }
-
-  private updateThinkingBubble(): void {
-    if (!this.thinkingBubble || !this.localPlayer) return;
-    if (!this.ensureOverlayTransform()) return;
-    const wp = this._overlayWorldPos;
-    wp.copyFrom(this.localPlayer.position);
-    wp.y += 2.2;
-    Vector3.ProjectToRef(wp, GameManager.IDENTITY, this._overlayTransform, this._overlayVp, this._overlayScreenPos);
-    this.thinkingBubble.style.left = `${this._overlayScreenPos.x - 20}px`;
-    this.thinkingBubble.style.top = `${this._overlayScreenPos.y - 48}px`;
-  }
-
   private update(dt: number): void {
     this.updateCameraKeys(dt);
 
@@ -2594,7 +2536,6 @@ export class GameManager {
     this._overlayTransformReady = false;
     this.updateOverlayPositions();
     this.updateHitSplats(dt);
-    this.updateThinkingBubble();
     this.updateMinimap();
   }
 
