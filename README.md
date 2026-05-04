@@ -126,4 +126,4 @@ evilMUD/
 └── tools/           # Map generation script
 ```
 
-See [CLAUDE.md](CLAUDE.md) for detailed architecture documentation, [docs/contributing.md](docs/contributing.md) for a contributor onboarding guide, and [docs/animation-guide.md](docs/animation-guide.md) for the OSRS-style animation pipeline.
+See [CLAUDE.md](CLAUDE.md) for detailed architecture documentation, [docs/contributing.md](docs/contributing.md) for a contributor onboarding guide, [docs/animation-guide.md](docs/animation-guide.md) for the OSRS-style animation pipeline, and [docs/blender-gear-guide.md](docs/blender-gear-guide.md) for authoring RS2-style gear in Blender.

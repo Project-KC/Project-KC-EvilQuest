@@ -84,4 +84,5 @@ Run `bun run dev:editor` and open http://localhost:5174. Pick a map, edit, save.
 
 - [CLAUDE.md](../CLAUDE.md) — full architecture, asset pipeline, gotchas.
 - [animation-guide.md](animation-guide.md) — OSRS-style animation timing, retargeting offsets.
+- [blender-gear-guide.md](blender-gear-guide.md) — authoring rigid gear (weapons, helmets, shields) in Blender, RS2 style.
 - `git log --oneline` — recent context. The repo moves fast; commit messages tend to be detailed.
