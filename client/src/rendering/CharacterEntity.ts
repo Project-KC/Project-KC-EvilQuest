@@ -1185,10 +1185,13 @@ export class CharacterEntity {
     const cacheKey = `${this.scene.uid}_${colorIdx}`;
     let tex = CharacterEntity.gearColorTextures.get(cacheKey);
     if (!tex || !tex.getScene()) {
+      // invertY=false to match glTF texture convention (top-origin V).
+      // Babylon's Texture constructor default is invertY=true which would flip
+      // sampling upside-down vs the embedded palette in glTF-loaded gear meshes.
       tex = new Texture(
         `/Character models/gear-colors/objectColor${colorIdx}.png`,
         this.scene,
-        false, true, Texture.NEAREST_NEAREST,
+        false, false, Texture.NEAREST_NEAREST,
       );
       CharacterEntity.gearColorTextures.set(cacheKey, tex);
     }
