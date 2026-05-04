@@ -828,24 +828,32 @@ export class GameManager {
       const pbr = mesh.material as any;
       if (!pbr || !pbr.getClassName || pbr.getClassName() !== 'PBRMaterial') continue;
       const flat = new StandardMaterial(`${pbr.name}_flat`, this.scene);
-      if (pbr.albedoTexture) {
+      const hasTexture = !!pbr.albedoTexture;
+      const isPolysplitGear = pbr.name && pbr.name.startsWith('genericRGBMat_Objects');
+      if (hasTexture) {
         flat.diffuseTexture = pbr.albedoTexture;
         pbr.albedoTexture.updateSamplingMode(Texture.NEAREST_NEAREST_MIPLINEAR);
       }
-      if (pbr.albedoColor) {
+      if (pbr.albedoColor && !hasTexture) {
         const b = 1.3;
         flat.diffuseColor = new Color3(
           Math.min(1, pbr.albedoColor.r * b),
           Math.min(1, pbr.albedoColor.g * b),
           Math.min(1, pbr.albedoColor.b * b),
         );
+      } else if (isPolysplitGear) {
+        // Polysplit palette textures sample much brighter than RS-style gear;
+        // scale down so they sit at the same value range as the rest of the world.
+        flat.diffuseColor = new Color3(0.55, 0.55, 0.55);
       }
       flat.specularColor = Color3.Black();
-      const dc = flat.diffuseColor;
-      flat.emissiveColor = new Color3(dc.r * 0.55, dc.g * 0.55, dc.b * 0.55);
+      if (!hasTexture) {
+        const dc = flat.diffuseColor;
+        flat.emissiveColor = new Color3(dc.r * 0.55, dc.g * 0.55, dc.b * 0.55);
+      }
       flat.backFaceCulling = pbr.backFaceCulling ?? true;
       mesh.material = flat;
-      if (pbr.name && pbr.name.startsWith('genericRGBMat_Objects')) {
+      if (isPolysplitGear) {
         this.localPlayer?.registerObjectMaterial(flat);
       }
     }

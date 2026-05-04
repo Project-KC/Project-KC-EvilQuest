@@ -68,6 +68,15 @@ function sampleAnimationAt(keys: any[], frame: number): any {
   return v?.clone ? v.clone() : v;
 }
 
+/**
+ * If true, each pose is held flat until just before the next pose, producing
+ * a staircase / RS2-style stepped motion. Achieved by inserting a duplicate
+ * key at frame N - epsilon carrying the previous value; Babylon then lerps
+ * across the tiny epsilon range, which reads as a snap.
+ */
+const STEP_INTERPOLATE = false;
+const STEP_EPSILON = 0.05;
+
 export function quantizeAnimationGroup(
   group: AnimationGroup,
   animName: string,
@@ -88,14 +97,22 @@ export function quantizeAnimationGroup(
     const srcRange = srcTo - srcFrom;
     if (srcRange <= 0) continue;
 
-    const newKeys: any[] = [];
+    const sampledValues: any[] = [];
     for (let i = 0; i < frames; i++) {
       const t = sampleCurve
         ? (sampleCurve[i] ?? i / (frames - 1))
         : i / (frames - 1);
       const srcFrame = srcFrom + t * srcRange;
-      const value = sampleAnimationAt(keys, srcFrame);
-      newKeys.push({ frame: i, value });
+      sampledValues.push(sampleAnimationAt(keys, srcFrame));
+    }
+
+    const newKeys: any[] = [];
+    for (let i = 0; i < frames; i++) {
+      if (STEP_INTERPOLATE && i > 0) {
+        const prev = sampledValues[i - 1];
+        newKeys.push({ frame: i - STEP_EPSILON, value: prev?.clone ? prev.clone() : prev });
+      }
+      newKeys.push({ frame: i, value: sampledValues[i] });
     }
 
     anim.setKeys(newKeys);

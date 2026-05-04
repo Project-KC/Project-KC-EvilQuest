@@ -1,5 +1,11 @@
+import { Animation } from '@babylonjs/core/Animations/animation';
 import { GameManager } from './managers/GameManager';
 import { LoginScreen } from './ui/LoginScreen';
+
+// RS2-style stepped skeletal animation: skip matrix interpolation between
+// keyframes so the already-quantized 8-keyframe anims play discrete instead
+// of lerping smoothly between poses.
+Animation.AllowMatricesInterpolation = false;
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 const gameFrame = document.getElementById('game-frame') as HTMLDivElement;

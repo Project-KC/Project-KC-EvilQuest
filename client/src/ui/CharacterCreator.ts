@@ -7,7 +7,6 @@ import {
   HAIR_COLORS,
   SKIN_COLORS,
   HAIR_STYLE_COUNT,
-  GEAR_COLOR_COUNT,
 } from '@projectrs/shared';
 import { Engine } from '@babylonjs/core/Engines/engine';
 import { Scene } from '@babylonjs/core/scene';
@@ -104,7 +103,6 @@ export class CharacterCreator {
     this.addIndexRow(swatchCol, 'Hair', 'hairStyle', HAIR_STYLE_COUNT, true);
     this.addColorRow(swatchCol, 'Hair Color', 'hairColor', HAIR_COLORS);
     this.addColorRow(swatchCol, 'Skin', 'skinColor', SKIN_COLORS);
-    if (GEAR_COLOR_COUNT > 0) this.addGearColorRow(swatchCol);
     this.addColorRow(swatchCol, 'Shirt', 'shirtColor', SHIRT_COLORS);
     this.addColorRow(swatchCol, 'Pants', 'pantsColor', PANTS_COLORS);
     this.addColorRow(swatchCol, 'Shoes', 'shoesColor', SHOES_COLORS);
@@ -302,65 +300,6 @@ export class CharacterCreator {
       btns.appendChild(btn);
     }
     row.appendChild(btns);
-    parent.appendChild(row);
-  }
-
-  private addGearColorRow(parent: HTMLDivElement): void {
-    const GEAR_SWATCH_COLORS = [
-      [60, 100, 220],   // 0  Blue
-      [200, 40, 40],    // 1  Red
-      [220, 180, 40],   // 2  Gold
-      [50, 160, 50],    // 3  Green
-      [120, 60, 180],   // 4  Purple
-      [50, 55, 65],     // 5  Charcoal
-      [200, 200, 210],  // 6  Silver
-      [30, 50, 140],    // 7  Dark Blue
-      [140, 25, 25],    // 8  Dark Red
-      [160, 130, 20],   // 9  Dark Gold
-      [30, 110, 30],    // 10 Dark Green
-      [80, 40, 130],    // 11 Dark Purple
-      [25, 30, 45],     // 12 Navy
-      [170, 170, 180],  // 13 Light Grey
-    ];
-
-    const row = document.createElement('div');
-    row.style.cssText = `margin-bottom: 14px;`;
-    const labelEl = document.createElement('div');
-    labelEl.textContent = 'Gear Color';
-    labelEl.style.cssText = `font-size: 12px; color: #ccc; margin-bottom: 6px; font-weight: bold;`;
-    row.appendChild(labelEl);
-
-    const swatches = document.createElement('div');
-    swatches.style.cssText = `display: flex; flex-wrap: wrap; gap: 6px;`;
-
-    for (let i = 0; i < GEAR_COLOR_COUNT; i++) {
-      const swatch = document.createElement('div');
-      const rgb = GEAR_SWATCH_COLORS[i] ?? [128, 128, 128];
-      const isSelected = this.appearance.gearColor === i;
-      swatch.style.cssText = `
-        width: 28px; height: 28px; border-radius: 3px; cursor: pointer;
-        background: rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]});
-        border: 2px solid ${isSelected ? '#fc0' : '#555'};
-        transition: border-color 0.15s, transform 0.1s;
-      `;
-      swatch.dataset.index = String(i);
-      swatch.addEventListener('mouseenter', () => {
-        if (this.appearance.gearColor !== i) { swatch.style.borderColor = '#aaa'; swatch.style.transform = 'scale(1.1)'; }
-      });
-      swatch.addEventListener('mouseleave', () => {
-        swatch.style.borderColor = this.appearance.gearColor === i ? '#fc0' : '#555'; swatch.style.transform = 'scale(1)';
-      });
-      swatch.addEventListener('click', () => {
-        this.appearance.gearColor = i;
-        swatches.querySelectorAll('div').forEach((s) => {
-          const el = s as HTMLDivElement;
-          el.style.borderColor = el.dataset.index === String(i) ? '#fc0' : '#555';
-        });
-        this.updatePreview();
-      });
-      swatches.appendChild(swatch);
-    }
-    row.appendChild(swatches);
     parent.appendChild(row);
   }
 
