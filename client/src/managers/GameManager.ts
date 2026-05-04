@@ -674,6 +674,7 @@ export class GameManager {
     // Unequip
     if (itemId <= 0) {
       this.localPlayer.detachGear(slotName);
+      this.localPlayer.detachSkinnedArmor(slotName);
       this.disposeArmorSlot(slotName);
       return;
     }
@@ -906,13 +907,14 @@ export class GameManager {
       label: this.username,
       labelColor: '#00ff00',
       additionalAnimations: [
-        { name: 'idle', path: '/Character models/new animations/idle.glb', animName: 'idle' },
-        { name: 'walk', path: '/Character models/new animations/standard_walk_new.glb' },
-        { name: 'attack', path: '/Character models/new animations/attack.glb', animName: 'attack' },
-        { name: 'attack_slash', path: '/Character models/new animations/attack_slash.glb', animName: 'attack_slash' },
-        { name: 'attack_punch', path: '/Character models/new animations/attack_punch.glb', animName: 'attack_punch' },
-        { name: 'chop', path: '/Character models/new animations/attack.glb', animName: 'attack' },
-        { name: 'mine', path: '/Character models/new animations/attack.glb', animName: 'attack' },
+        { name: 'idle',         path: '/Character models/new animations/idle.glb',                          animName: 'idle' },
+        { name: 'walk',         path: '/Character models/new animations/standard_walk_new.glb' },
+        // Armed attack — getPlayerAttackAnimName returns 'attack_slash' when a weapon is equipped
+        { name: 'attack_slash', path: '/Character models/new animations/standing_melee_attack_downward.glb' },
+        // Unarmed attack — getPlayerAttackAnimName returns 'attack_punch' when no weapon
+        { name: 'attack_punch', path: '/Character models/new animations/attack_punch.glb',                  animName: 'attack_punch' },
+        { name: 'chop',         path: '/Character models/new animations/attack_slash.glb',                  animName: 'attack_slash' },
+        { name: 'mine',         path: '/Character models/new animations/great_sword_slash.glb' },
       ],
     });
   }

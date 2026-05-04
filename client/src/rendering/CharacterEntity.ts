@@ -226,9 +226,11 @@ export class CharacterEntity {
         }
       }
 
-      // Find the Armature TransformNode — skinned armor meshes are parented here
+      // Find the Armature TransformNode — skinned armor meshes are parented here.
+      // Match 'Armature' or any 'Armature.NNN' suffix that Blender's GLB exporter
+      // uses when the armature was renamed (e.g. our character has 'Armature.001').
       for (const child of this.root.getChildren()) {
-        if (child.name === 'Armature' && child instanceof TransformNode) {
+        if (child instanceof TransformNode && /^Armature(\.\d+)?$/.test(child.name)) {
           this.armatureNode = child;
           break;
         }
@@ -1148,10 +1150,16 @@ export class CharacterEntity {
       }
     }
 
-    // Modular mesh show/hide — hair only (0 = bald, 1+ = M_hair_1 … M_hair_N)
+    // Modular mesh show/hide — hair only (0 = bald, 1+ = M_hair_1 … M_hair_N).
+    // If a head gear (bone-attached or skinned) is equipped, suppress hair so it
+    // doesn't poke through the helmet on refresh / appearance update.
+    const headGearEquipped =
+      this.gearAttachments.has('head') || this.skinnedArmorMeshes.has('head');
     if (this.modularMeshes.size > 0) {
       for (let i = 1; i <= HAIR_STYLE_COUNT; i++) {
-        this.modularMeshes.get(`M_hair_${i}`)?.setEnabled(appearance.hairStyle === i);
+        this.modularMeshes.get(`M_hair_${i}`)?.setEnabled(
+          !headGearEquipped && appearance.hairStyle === i,
+        );
       }
     }
 
