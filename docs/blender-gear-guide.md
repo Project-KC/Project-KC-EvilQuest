@@ -228,7 +228,16 @@ pkill -f "bun.*server/src/main.ts"; bun run dev:server &
 
 3. In-game: `/give 220` then equip.
 
-4. If the item sits visually wrong (rotated 90° off, or slightly off-center), don't re-export — add an entry to `server/data/gear-overrides.json`:
+### 7a. Fit it with `/geardebug` — don't re-export from Blender
+
+If the item sits visually wrong (rotated 90° off, slightly off-center, too big, hovering above the hand), **do not** re-export from Blender to fix placement. Use the in-game `/geardebug` panel instead:
+
+1. With the item equipped, type `/geardebug` in chat. A sidebar with sliders appears.
+2. Drag **position X/Y/Z**, **rotation X/Y/Z**, and **scale** sliders. The gear updates live as you drag.
+3. Use the animation buttons (idle / walk / attack / chop / mine) to verify the gear stays sensible across motion.
+4. Click **Save**. The dialed-in values are written to `server/data/gear-overrides.json` keyed by item ID. The runtime hot-reloads overrides on next equip.
+
+A typical override entry the panel writes looks like:
 
 ```json
 "220": {
@@ -238,7 +247,18 @@ pkill -f "bun.*server/src/main.ts"; bun run dev:server &
 }
 ```
 
-Tweak numbers, save, the runtime hot-reloads the override on next equip.
+You can hand-edit this file too, but `/geardebug` is faster — slider drag = ~1s feedback loop, vs Blender re-export = ~30–60s.
+
+### When you DO still need to re-export from Blender
+
+`/geardebug` only adjusts a single global transform. Re-export is needed when:
+
+- The **mesh origin** is in the wrong place at the model level (you want the helmet origin at the bottom rim, but it's at the helmet's geometric center). Origin moves are best baked into the mesh.
+- The **geometry itself** is wrong (sword too long, helmet shape wrong).
+- **Materials** are wrong (missing texture, wrong color, multi-texture shader graph).
+- **Normals or weights** are broken.
+
+Rule of thumb: if a single item is fine on its own but doesn't fit *this character*, use `/geardebug`. If the issue would persist on any character, fix in Blender.
 
 ---
 
