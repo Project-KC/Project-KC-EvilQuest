@@ -1,7 +1,6 @@
 // Client → Server opcodes
 export enum ClientOpcode {
   LOGIN = 1,
-  LOGOUT = 2,
   PLAYER_MOVE = 10,
   PLAYER_ATTACK_NPC = 20,
   PLAYER_TALK_NPC = 21,
@@ -21,7 +20,6 @@ export enum ClientOpcode {
 // Server → Client opcodes
 export enum ServerOpcode {
   LOGIN_OK = 1,
-  LOGIN_FAIL = 2,
   PLAYER_SYNC = 10,
   NPC_SYNC = 11,
   GROUND_ITEM_SYNC = 12,
@@ -37,11 +35,8 @@ export enum ServerOpcode {
   ENTITY_DEATH = 31,
   XP_GAIN = 32,
   LEVEL_UP = 33,
-  CHAT_LOCAL = 40,
-  CHAT_PRIVATE = 41,
   CHAT_SYSTEM = 42,
   SHOP_OPEN = 50,
-  SHOP_ITEM = 51,
   WORLD_OBJECT_SYNC = 55,
   WORLD_OBJECT_DEPLETED = 56,
   SKILLING_START = 57,
