@@ -12,7 +12,7 @@ import { Matrix } from '@babylonjs/core/Maths/math.vector';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
 import { Color3 } from '@babylonjs/core/Maths/math.color';
 import { Texture } from '@babylonjs/core/Materials/Textures/texture';
-import { type PlayerAppearance, type AppearanceColorSlot, APPEARANCE_MATERIAL_MAP, getPalette, BELT_NO_BELT, SHIRT_COLORS, HAIR_STYLE_COUNT, EYE_STYLE_COUNT, EYEBROW_STYLE_COUNT, MOUTH_STYLE_COUNT, FACIAL_HAIR_STYLE_COUNT, TOP_STYLE_COUNT, BOTTOM_STYLE_COUNT, GEAR_COLOR_COUNT } from '@projectrs/shared';
+import { type PlayerAppearance, type AppearanceColorSlot, APPEARANCE_MATERIAL_MAP, getPalette, BELT_NO_BELT, SHIRT_COLORS, HAIR_STYLE_COUNT, GEAR_COLOR_COUNT } from '@projectrs/shared';
 import '@babylonjs/loaders/glTF';
 import { quantizeAnimationGroup, rs2Rotation, ANIM_DURATIONS, DEFAULT_QUANTIZE_FRAMES } from './AnimationQuantizer';
 
@@ -238,16 +238,10 @@ export class CharacterEntity {
         }
       }
 
-      // Index modular meshes by name for show/hide (must happen before bounds calc)
+      // Index modular hair meshes by name for show/hide (must happen before bounds calc)
       for (const mesh of this.meshes) {
-        const n = mesh.name;
-        if (n.startsWith('M_') || n.startsWith('facialHair_')) {
-          this.modularMeshes.set(n, mesh);
-        }
-      }
-      if (this.modularMeshes.size > 0) {
-        for (const [name, mesh] of this.modularMeshes) {
-          if (name === 'M_Head' || name === 'M_TopBody' || name === 'M_BottomBody') continue;
+        if (mesh.name.startsWith('M_hair_')) {
+          this.modularMeshes.set(mesh.name, mesh);
           mesh.setEnabled(false);
         }
       }
@@ -287,16 +281,16 @@ export class CharacterEntity {
         }
         if (pbrMat.albedoColor && !hasTexture) {
           flat.diffuseColor = new Color3(
-            Math.min(1, pbrMat.albedoColor.r),
-            Math.min(1, pbrMat.albedoColor.g),
-            Math.min(1, pbrMat.albedoColor.b),
+            Math.min(1, pbrMat.albedoColor.r * 1.3),
+            Math.min(1, pbrMat.albedoColor.g * 1.3),
+            Math.min(1, pbrMat.albedoColor.b * 1.3),
           );
         }
 
         flat.specularColor = Color3.Black();
         if (!hasTexture) {
           const dc = flat.diffuseColor;
-          flat.emissiveColor = new Color3(dc.r * 0.12, dc.g * 0.12, dc.b * 0.12);
+          flat.emissiveColor = new Color3(dc.r * 0.55, dc.g * 0.55, dc.b * 0.55);
         }
 
         flat.backFaceCulling = pbrMat.backFaceCulling ?? true;
@@ -1133,65 +1127,21 @@ export class CharacterEntity {
           if (baseName.toLowerCase() === target.toLowerCase()) {
             const rgb = palette[colorIdx];
             const c = new Color3(
-              Math.min(1, rgb[0]),
-              Math.min(1, rgb[1]),
-              Math.min(1, rgb[2]),
+              Math.min(1, rgb[0] * 1.3),
+              Math.min(1, rgb[1] * 1.3),
+              Math.min(1, rgb[2] * 1.3),
             );
             (mat as StandardMaterial).diffuseColor = c;
-            (mat as StandardMaterial).emissiveColor = new Color3(c.r * 0.12, c.g * 0.12, c.b * 0.12);
+            (mat as StandardMaterial).emissiveColor = new Color3(c.r * 0.55, c.g * 0.55, c.b * 0.55);
           }
         }
       }
     }
 
-    // Modular mesh show/hide
-    if (this.modularMeshes.size === 0) return;
-
-    // Hair: 0 = bald, 1-14 = M_hair_1 … M_hair_14
-    for (let i = 1; i <= HAIR_STYLE_COUNT; i++) {
-      this.modularMeshes.get(`M_hair_${i}`)?.setEnabled(appearance.hairStyle === i);
-    }
-
-    // Eyes
-    for (let i = 0; i < EYE_STYLE_COUNT; i++) {
-      this.modularMeshes.get(`M_eyes${i}`)?.setEnabled(appearance.eyeStyle === i);
-    }
-
-    // Eyebrows
-    for (let i = 0; i < EYEBROW_STYLE_COUNT; i++) {
-      this.modularMeshes.get(`M_eyebrows${i}`)?.setEnabled(appearance.eyebrowStyle === i);
-    }
-
-    // Mouths
-    for (let i = 0; i < MOUTH_STYLE_COUNT; i++) {
-      this.modularMeshes.get(`M_mouth${i}`)?.setEnabled(appearance.mouthStyle === i);
-    }
-
-    // Facial hair: 0 = none, 1-8 = facialHair_1 … facialHair_8
-    for (let i = 1; i <= FACIAL_HAIR_STYLE_COUNT; i++) {
-      this.modularMeshes.get(`facialHair_${i}`)?.setEnabled(appearance.facialHairStyle === i);
-    }
-
-    // Top: 0 = bare body (M_TopBody), 1+ = M_top_1 … M_top_N
-    // Some meshes split into _primitiveN variants, so match by prefix
-    this.modularMeshes.get('M_TopBody')?.setEnabled(appearance.topStyle === 0);
-    for (let i = 1; i <= TOP_STYLE_COUNT; i++) {
-      const prefix = `M_top_${i}`;
-      for (const [name, mesh] of this.modularMeshes) {
-        if (name === prefix || name.startsWith(prefix + '_primitive')) {
-          mesh.setEnabled(appearance.topStyle === i);
-        }
-      }
-    }
-
-    // Bottom: 0 = bare body (M_BottomBody), 1+ = M_bottom_1 … M_bottom_N
-    this.modularMeshes.get('M_BottomBody')?.setEnabled(appearance.bottomStyle === 0);
-    for (let i = 1; i <= BOTTOM_STYLE_COUNT; i++) {
-      const prefix = `M_bottom_${i}`;
-      for (const [name, mesh] of this.modularMeshes) {
-        if (name === prefix || name.startsWith(prefix + '_primitive')) {
-          mesh.setEnabled(appearance.bottomStyle === i);
-        }
+    // Modular mesh show/hide — hair only (0 = bald, 1+ = M_hair_1 … M_hair_N)
+    if (this.modularMeshes.size > 0) {
+      for (let i = 1; i <= HAIR_STYLE_COUNT; i++) {
+        this.modularMeshes.get(`M_hair_${i}`)?.setEnabled(appearance.hairStyle === i);
       }
     }
 

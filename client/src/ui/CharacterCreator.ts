@@ -8,12 +8,6 @@ import {
   BELT_COLORS,
   SHIRT_STYLES,
   HAIR_STYLE_COUNT,
-  EYE_STYLE_COUNT,
-  EYEBROW_STYLE_COUNT,
-  MOUTH_STYLE_COUNT,
-  FACIAL_HAIR_STYLE_COUNT,
-  TOP_STYLE_COUNT,
-  BOTTOM_STYLE_COUNT,
   GEAR_COLOR_COUNT,
 } from '@projectrs/shared';
 import { Engine } from '@babylonjs/core/Engines/engine';
@@ -110,12 +104,6 @@ export class CharacterCreator {
     swatchCol.style.cssText = `display: flex; flex-direction: column; min-width: 280px; max-height: 420px; overflow-y: auto;`;
 
     this.addIndexRow(swatchCol, 'Hair', 'hairStyle', HAIR_STYLE_COUNT, true);
-    this.addIndexRow(swatchCol, 'Eyes', 'eyeStyle', EYE_STYLE_COUNT, false);
-    this.addIndexRow(swatchCol, 'Eyebrows', 'eyebrowStyle', EYEBROW_STYLE_COUNT, false);
-    this.addIndexRow(swatchCol, 'Mouth', 'mouthStyle', MOUTH_STYLE_COUNT, false);
-    this.addIndexRow(swatchCol, 'Facial Hair', 'facialHairStyle', FACIAL_HAIR_STYLE_COUNT, true);
-    if (TOP_STYLE_COUNT > 0) this.addIndexRow(swatchCol, 'Top', 'topStyle', TOP_STYLE_COUNT, true);
-    if (BOTTOM_STYLE_COUNT > 0) this.addIndexRow(swatchCol, 'Bottom', 'bottomStyle', BOTTOM_STYLE_COUNT, true);
     if (GEAR_COLOR_COUNT > 0) this.addGearColorRow(swatchCol);
     this.addColorRow(swatchCol, 'Shirt', 'shirtColor', SHIRT_COLORS);
     this.addColorRow(swatchCol, 'Pants', 'pantsColor', PANTS_COLORS);
@@ -201,7 +189,7 @@ export class CharacterCreator {
   private getModelPath(): string {
     const override = getExperimentalCharacterPath();
     if (override) return override;
-    return `/Character models/polysplit_male_modular.glb`;
+    return `/Character models/main character.glb`;
   }
 
   private updatePreview(): void {

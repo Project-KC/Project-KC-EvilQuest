@@ -12,12 +12,6 @@ export interface PlayerAppearance {
   beltColor: number;
   shirtStyle: number;
   hairStyle: number;
-  eyeStyle: number;
-  eyebrowStyle: number;
-  mouthStyle: number;
-  facialHairStyle: number;
-  topStyle: number;
-  bottomStyle: number;
   gearColor: number;
 }
 
@@ -104,13 +98,7 @@ export const SHIRT_STYLES: { name: string; glbSuffix: string }[] = [
   { name: 'Long Sleeve',  glbSuffix: '_longsleeve' },
 ];
 
-export const HAIR_STYLE_COUNT = 14;       // M_hair_1 … M_hair_14 (0 = bald)
-export const EYE_STYLE_COUNT = 5;         // M_eyes0 … M_eyes4
-export const EYEBROW_STYLE_COUNT = 5;     // M_eyebrows0 … M_eyebrows4
-export const MOUTH_STYLE_COUNT = 5;       // M_mouth0 … M_mouth4
-export const FACIAL_HAIR_STYLE_COUNT = 8; // facialHair_1 … facialHair_8 (0 = none)
-export const TOP_STYLE_COUNT = 8;         // M_top_1 … M_top_8 (0 = bare M_TopBody)
-export const BOTTOM_STYLE_COUNT = 8;      // M_bottom_1 … M_bottom_8 (0 = bare M_BottomBody)
+export const HAIR_STYLE_COUNT = 15;       // M_hair_1 … M_hair_15 (0 = bald)
 export const GEAR_COLOR_COUNT = 14;       // objectColor1 … objectColor14
 
 export const DEFAULT_APPEARANCE: PlayerAppearance = {
@@ -121,12 +109,6 @@ export const DEFAULT_APPEARANCE: PlayerAppearance = {
   beltColor: 1,
   shirtStyle: 0,
   hairStyle: 1,
-  eyeStyle: 0,
-  eyebrowStyle: 0,
-  mouthStyle: 0,
-  facialHairStyle: 0,
-  topStyle: 0,
-  bottomStyle: 0,
   gearColor: 0,
 };
 
@@ -140,12 +122,6 @@ export function isValidAppearance(a: PlayerAppearance): boolean {
     Number.isInteger(a.beltColor)  && a.beltColor >= 0  && a.beltColor < BELT_COLORS.length &&
     Number.isInteger(a.shirtStyle) && a.shirtStyle >= 0 && a.shirtStyle < SHIRT_STYLES.length &&
     Number.isInteger(a.hairStyle)  && a.hairStyle >= 0  && a.hairStyle <= HAIR_STYLE_COUNT &&
-    Number.isInteger(a.eyeStyle)   && a.eyeStyle >= 0   && a.eyeStyle < EYE_STYLE_COUNT &&
-    Number.isInteger(a.eyebrowStyle) && a.eyebrowStyle >= 0 && a.eyebrowStyle < EYEBROW_STYLE_COUNT &&
-    Number.isInteger(a.mouthStyle) && a.mouthStyle >= 0 && a.mouthStyle < MOUTH_STYLE_COUNT &&
-    Number.isInteger(a.facialHairStyle) && a.facialHairStyle >= 0 && a.facialHairStyle <= FACIAL_HAIR_STYLE_COUNT &&
-    Number.isInteger(a.topStyle) && a.topStyle >= 0 && a.topStyle <= TOP_STYLE_COUNT &&
-    Number.isInteger(a.bottomStyle) && a.bottomStyle >= 0 && a.bottomStyle <= BOTTOM_STYLE_COUNT &&
     Number.isInteger(a.gearColor) && a.gearColor >= 0 && a.gearColor < GEAR_COLOR_COUNT
   );
 }
@@ -160,12 +136,6 @@ export function normalizeAppearance(a: Partial<PlayerAppearance>): PlayerAppeara
     beltColor:  a.beltColor ?? 0,
     shirtStyle: a.shirtStyle ?? 0,
     hairStyle:  a.hairStyle ?? 1,
-    eyeStyle:   a.eyeStyle ?? 0,
-    eyebrowStyle: a.eyebrowStyle ?? 0,
-    mouthStyle: a.mouthStyle ?? 0,
-    facialHairStyle: a.facialHairStyle ?? 0,
-    topStyle: a.topStyle ?? 0,
-    bottomStyle: a.bottomStyle ?? 0,
     gearColor: a.gearColor ?? 0,
   };
 }

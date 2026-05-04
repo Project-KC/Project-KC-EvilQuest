@@ -879,7 +879,7 @@ export class GameManager {
   private getCharacterModelPath(shirtStyle: number = 0): string {
     const override = getExperimentalCharacterPath();
     if (override) return override;
-    return `/Character models/polysplit_male_modular.glb`;
+    return `/Character models/main character.glb`;
   }
 
   /** Rebuild the local player's CharacterEntity with a different model (e.g. after shirt style change) */
@@ -955,11 +955,10 @@ export class GameManager {
       const x = x10 / 10;
       const z = z10 / 10;
 
-      const hasAppearance = v.length >= 18 && v[5] >= 0;
+      const hasAppearance = v.length >= 13 && v[5] >= 0;
       const syncAppearance: PlayerAppearance | null = hasAppearance ? {
         shirtColor: v[5], pantsColor: v[6], shoesColor: v[7], hairColor: v[8], beltColor: v[9], shirtStyle: v[10],
-        hairStyle: v[11], eyeStyle: v[12], eyebrowStyle: v[13], mouthStyle: v[14], facialHairStyle: v[15],
-        topStyle: v[16], bottomStyle: v[17], gearColor: v[18] ?? 0,
+        hairStyle: v[11], gearColor: v[12] ?? 0,
       } : null;
 
       if (entityId === this.localPlayerId) {
@@ -2118,12 +2117,6 @@ export class GameManager {
         appearance.beltColor,
         appearance.shirtStyle,
         appearance.hairStyle,
-        appearance.eyeStyle,
-        appearance.eyebrowStyle,
-        appearance.mouthStyle,
-        appearance.facialHairStyle,
-        appearance.topStyle,
-        appearance.bottomStyle,
         appearance.gearColor,
       ));
       const oldStyle = this.localAppearance?.shirtStyle ?? 0;
